@@ -52,7 +52,8 @@ def _client_secret() -> str:
 
 
 def _get_server_url() -> str:
-    return os.environ.get("server_url", "http://localhost")
+    port = os.environ.get("HD_PORT", "8888")
+    return os.environ.get("server_url", "http://localhost:{port}")
 
 
 _ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -76,8 +77,7 @@ _CACHE_TTL_SECONDS = 5 * 60  # 5 minutes
 
 def get_redirect_uri() -> str:
     """Build the redirect URI using the configured HD_PORT (default 8888)."""
-    port = os.environ.get("HD_PORT", "8888")
-    return f"{_get_server_url()}:{port}/oauth/callback"
+    return f"{_get_server_url()}/oauth/callback"
 
 
 def get_authorization_url() -> str:
