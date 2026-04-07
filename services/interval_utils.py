@@ -13,10 +13,10 @@ Exported:
   wrap_parts(parts, sep, per_row)   → list of wrapped lines
   build_interval_lines(r)           → list of human-readable description lines
   interval_totals(work_m, rest_m)   → "Xm work  ·  Ym rest" footer string
-  compute_work_time_tenths(r)       → work-only time in tenths (= r["time"] for intervals)
   avg_work_pace_tenths(r)           → tenths/500m (r["time"]*500/r["distance"])
   avg_work_spm(r)                   → work-weighted average stroke rate
   interval_structure_label(r)       → canonical one-line structure string
+  interval_structure_key(r)         → structure label with leading "N × " stripped
 """
 
 from __future__ import annotations
@@ -205,21 +205,6 @@ def interval_totals(work_m: int, rest_m: int) -> str:
 # ---------------------------------------------------------------------------
 # Pace computation
 # ---------------------------------------------------------------------------
-
-def compute_work_time_tenths(r: dict) -> int | None:
-    """
-    Return the work time in tenths of seconds.
-
-    For interval workouts the Concept2 API stores **work-only** time in the
-    top-level ``time`` field (rest periods are excluded), so we simply return
-    that value directly.  This mirrors how ``distance`` on interval workouts
-    contains only work metres.
-
-    Returns None if ``r["time"]`` is absent or zero.
-    """
-    total = r.get("time")
-    return int(total) if total else None
-
 
 def avg_work_pace_tenths(r: dict) -> float | None:
     """

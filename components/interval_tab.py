@@ -11,9 +11,9 @@ dimensions of interval training are shown simultaneously:
   X axis (6 cols) — representative work-interval duration (median interval):
       ≤30"  ·  30"–2'  ·  2'–4'  ·  4'–8'  ·  8'–20'  ·  20'+
 
-  Y axis (5 rows) — rest:work time ratio (total rest / total work):
-      Continuous (<0.10)  ·  Short (0.10–0.50)  ·  Balanced (0.50–1.50)
-      Long (1.50–4.00)   ·  Very Long (>4.00)
+  Y axis (5 rows) — work:rest time ratio (total work / total rest):
+      Continuous (≥10:1)  ·  Short (3–10:1)  ·  Balanced (≈1:1)
+      Long (1:2–4)        ·  Very Long (<1:4)
 
 Grid is rendered column-first so all cells in a column share the same width,
 avoiding the misalignment that flex row-first causes. Each populated cell is
@@ -25,24 +25,24 @@ Button variant encodes average Z3 intensity of sessions in that cell:
     primary  → selected (overrides intensity colour)
 
 Empty cells show the stimulus label muted — a training coverage map.
-Multi-cell selection = OR union. Zone tabs (All / Z3 / Z2 / Z1) filter both
-the grid cell counts and the table rows simultaneously.
+Multi-cell selection = OR union. The pace-zone legend below the grid acts as
+a conjunctive (AND) filter on the table — select multiple zones to find
+workouts that touched all of them.
 
 Grid placement rules:
 - Work duration: median work-interval duration in seconds (all non-rest ivs)
-- Rest:work ratio: sum(rest_time fields + explicit rest-type iv times) / sum(work times)
-- Complex VariableInterval blocks follow the same rule; zone tabs then surface
-  the session under multiple intensity tabs as appropriate.
+- Work:rest ratio: sum(work times) / sum(rest_time fields + rest-type iv times)
+  (internally stored as rest/work; rows represent work:rest as displayed)
 
 Table
 -----
 Custom row renderer (hd.data_table lacks SVG cells). All sortable column
 headers show ▲/▼. Default sort: date descending.
-Columns: Date · Structure · Stimulus · Zones bar · Work dist · Avg Split
-         · Time · Reps · SPM · HR
+Columns: Date · Reps · Structure (rep-stripped) · Stimulus · Zones bar
+         · Work dist · Avg Split · Time · SPM · HR
 
-Zone membership thresholds (fraction of work metres):
-  Z1 ≥ 10%  ·  Z2 ≥ 20%  ·  Z3 ≥ 40%
+Pace-zone filter (legend below grid): conjunctive AND across selected bins.
+A workout appears only when it has > 0 metres in every selected pace zone.
 """
 
 from __future__ import annotations
@@ -56,14 +56,11 @@ from services.rowing_utils import INTERVAL_WORKOUT_TYPES
 from services.interval_utils import (
     avg_work_pace_tenths,
     avg_work_spm,
-    interval_structure_label,
     interval_structure_key,
 )
 from services.volume_bins import (
     BIN_NAMES,
     BIN_COLORS,
-    Z1_BINS,
-    Z2_BINS,
     Z3_BINS,
     get_reference_sbs,
     compute_bin_thresholds,
@@ -94,13 +91,13 @@ _DUR_COLS = [
 ]
 _N_COLS = len(_DUR_COLS)
 
-# Rest:work ratio row boundaries + display label
+# Work:rest ratio row boundaries + display label (ratio = rest/work internally)
 _RATIO_ROWS = [
-    ("Continuous", "<1:10", 0.0, 0.10),
-    ("Short", "~1:3", 0.10, 0.50),
-    ("Balanced", "~1:1", 0.50, 1.50),
-    ("Long", "~2–4:1", 1.50, 4.00),
-    ("Very Long", ">4:1", 4.00, float("inf")),
+    ("Continuous", "≥ 10 : 1", 0.0, 0.10),
+    ("Short", "3–10 : 1", 0.10, 0.50),
+    ("Balanced", "≈ 1 : 1", 0.50, 1.50),
+    ("Long", "1 : 2–4", 1.50, 4.00),
+    ("Very Long", "< 1 : 4", 4.00, float("inf")),
 ]
 _N_ROWS = len(_RATIO_ROWS)
 
@@ -132,131 +129,108 @@ _STIMULI = [
 # Aim: enough physiological context to be useful, plus a note on classification
 # fuzziness where applicable.
 _TOOLTIPS = [
-    # Continuous (<0.10 rest:work)
+    # Continuous (work:rest ≥ 10:1)
     [
-        "",  # ≤30" — n/a
+        "",  # ≤30" continuous — n/a
         "Fartlek: Continuous aerobic effort with internal pace variations. "
         "Pace changes are brief enough that lactate never significantly accumulates. "
-        "Develops aerobic efficiency and running economy without hard recovery demands.",
-        "Sustained: 2–4 min continuous work blocks. "
-        "Likely low-intensity aerobic rowing or a complex session with very brief transitions. "
-        "Primary adaptation: mitochondrial density and fat oxidation.",
+        "Develops aerobic efficiency without hard recovery demands.  "
+        "E.g. 10× 1' easy / 1' mod with no stop.",
+        "Sustained: 2–4 min continuous work blocks with minimal transition time. "
+        "Primarily mitochondrial and fat-oxidation adaptation.  "
+        "E.g. 3× 3' at aerobic pace.",
         "Steady state: Classic moderate-duration continuous aerobic work. "
-        "Develops cardiac stroke volume and capillary density. "
-        "Typically performed below the first ventilatory threshold.",
+        "Develops cardiac stroke volume and capillary density; "
+        "typically below the first ventilatory threshold.  "
+        "E.g. 4× 5' at rate 18–20.",
         "Aerobic base: Long continuous aerobic effort at conversational intensity. "
-        "The cornerstone of base-building phases. "
-        "Develops fat-burning capacity and aerobic enzyme density.",
+        "The cornerstone of base-building phases.  "
+        "E.g. 2× 15' / 1' rest, or a single 20'.",
         "LSD (Long Slow Distance): Extended low-intensity rowing. "
-        "The foundation of the aerobic pyramid. "
-        "Develops economy, mental endurance, and fat utilisation.",
+        "Develops economy, mental endurance, and fat utilisation.  "
+        "E.g. single 60' or 2× 30'.",
     ],
-    # Short (0.10–0.50 rest:work)
+    # Short (work:rest 3–10:1)
     [
         "",  # ≤30" — n/a
         "Lactic capacity: Short high-intensity intervals with brief recovery. "
-        "Lactate accumulates rep-to-rep as rest is insufficient for clearance. "
-        "Builds lactate tolerance and buffer capacity. "
-        "Classic 2k race-middle simulation.",
-        "VO₂max stress: 2–4 min intervals with short rest keeps heart rate continuously "
-        "elevated near VO₂max. "
-        "Very demanding — total VO₂max stress per session is high. "
-        "A cornerstone of 2k preparation.",
-        "Threshold+: Work near or slightly above lactate threshold with incomplete recovery. "
-        "Lactate accumulates gradually across reps, raising the training stimulus. "
-        "Excellent for 5k–10k preparation.",
+        "Lactate accumulates rep-to-rep; builds lactate tolerance and buffer capacity.  "
+        'E.g. 10× 1\'/30"r, 12× 30"/20"r.',
+        "VO₂max stress: 2–4 min intervals with short rest keeps heart rate "
+        "continuously elevated near VO₂max — high total VO₂max stimulus per session.  "
+        "E.g. 6× 3'/1'r, 8× 2'/1'r.",
+        "Threshold+: Work near or slightly above LT2 with incomplete recovery. "
+        "Lactate accumulates gradually across reps.  "
+        "E.g. 4× 6'/2'r, 5× 5'/90\"r.",
         "Threshold accumulation: Extended work near threshold with short rest. "
-        "Accumulates substantial time at threshold pace per session. "
-        "Note: late-rep quality may decline as fatigue builds.",
+        "Accumulates substantial threshold time per session; "
+        "late-rep quality may decline.  "
+        "E.g. 3× 12'/4'r, 4× 10'/3'r.",
         "Tempo: Long work intervals with brief recovery at moderate-to-threshold intensity. "
-        "Essentially fractioned tempo work. "
-        "Develops aerobic endurance and lactate clearance capacity.",
+        "Essentially fractioned tempo work.  "
+        "E.g. 2× 20'/5'r.",
     ],
-    # Balanced (0.50–1.50 rest:work)
+    # Balanced (work:rest ≈ 1:1)
     [
         "Sprint repeats: Very short efforts with roughly equal recovery. "
-        "Too short for significant aerobic engagement; develops repeated power output "
-        "and ATP-PCr resynthesis under partial recovery. "
-        "Uncommon in programmed rowing — often appears in sprint warmup sets.",
+        "Develops repeated power output and ATP-PCr resynthesis under partial recovery.  "
+        'E.g. 10× 20"/20"r at max power.',
         "Anaerobic endurance: Sub-2-minute efforts with near-equal rest. "
-        "Each rep begins before lactate from the previous rep has cleared, "
-        "training the body to buffer and tolerate accumulating lactic acid. "
-        "Develops capacity for repeated high-intensity efforts.",
-        "VO₂max (2k prep): THE canonical VO₂max interval format "
-        "(e.g. 6×2'/2'r, 8×2'/2'r). "
-        "Work is long enough to reach VO₂max; equal rest allows partial recovery "
-        "while keeping heart rate elevated. "
-        "The gold standard for 2k development.",
-        "VO₂max (5k prep): Longer VO₂max intervals with adequate recovery "
-        "(e.g. 4×4'/4'r — the 'Norwegian' format). "
-        "Extends time at VO₂max per rep while maintaining quality. "
-        "Excellent for 5k development and building maximal aerobic power.",
+        "Rep begins before lactate clears; trains lactic acid tolerance.  "
+        "E.g. 8× 1'/1'r, 10× 45\"/45\"r.",
+        "VO₂max (2k prep): THE canonical VO₂max interval. "
+        "Work reaches VO₂max; equal rest allows partial recovery while keeping HR elevated.  "
+        "E.g. 6× 2'/2'r, 8× 2'/2'r.",
+        "VO₂max (5k prep): Longer VO₂max intervals with adequate recovery. "
+        "Extends time at VO₂max per rep while maintaining quality — the 'Norwegian' format.  "
+        "E.g. 4× 4'/4'r, 5× 1000m/4'r.",
         "Lactate threshold: Long intervals with roughly equal recovery at controlled intensity. "
-        "Develops lactate threshold by accumulating extended time at threshold pace "
-        "with manageable fatigue across reps.",
+        "Accumulates extended time at threshold pace with manageable fatigue.  "
+        "E.g. 3× 10'/10'r, 2× 15'/15'r.",
         "Aerobic blocks: Extended aerobic intervals with substantial recovery. "
-        "Overlap with complex/Fletcher-style block training is common here. "
-        "Develops ability to sustain quality across multiple long efforts.",
+        "Fletcher/block training overlap is common.  "
+        "E.g. 2× 30'/30'r.",
     ],
-    # Long (1.50–4.00 rest:work)
+    # Long (work:rest 1:2–4)
     [
         "Speed power: Very short maximal efforts with generous recovery. "
-        "Targets the phosphocreatine (PCr) system and peak power output. "
-        "At the boundary of true alactic work. "
-        "Develops neuromuscular speed and stroke power.",
+        "Targets the PCr system and peak power output.  "
+        'E.g. 8× 15"/45"r, 6× 20"/1\'r.',
         "Speed endurance: Sub-2-minute high-intensity intervals with substantial recovery. "
-        "Beyond pure alactic territory — develops the ability to repeat near-maximal "
-        "efforts with partial PCr recovery. "
-        "Classic race-pace preparation.",
+        "Develops ability to repeat near-maximal efforts with partial PCr recovery.  "
+        "E.g. 5× 1'/3'r, 6× 500m/3'r.",
         "VO₂max quality: High-quality VO₂max intervals with full recovery. "
-        "Long enough rest to maintain power across all reps. "
-        "Prioritises peak power output per rep over total VO₂max stress. "
-        "Preferred for in-season maintenance.",
+        "Prioritises peak power per rep over total VO₂max stress; "
+        "preferred for in-season maintenance.  "
+        "E.g. 4× 2'/8'r, 4× 500m/6'r.",
         "5k quality: Extended race-pace efforts with generous recovery. "
-        "Develops race-pace efficiency and neuromuscular patterns for 5k–10k competition. "
-        "High sustained power per rep thanks to full recovery.",
+        "Develops race-pace efficiency and neuromuscular patterns.  "
+        "E.g. 3× 5'/15'r, 4× 1000m/8'r.",
         "Extensive: Long work intervals with even longer rest. "
-        "This classification can be fuzzy — may represent coach-prescribed race pieces "
-        "with long recovery, or block training with extended recovery between blocks. "
-        "Not a common programmed category.",
+        "May represent coach-prescribed race pieces or block training with full recovery.  "
+        "E.g. 3× 10'/20'r.",
         "",  # 20'+ with long rest — n/a
     ],
-    # Very Long (>4.00 rest:work)
+    # Very Long (work:rest < 1:4)
     [
-        "Max sprint: True maximum-effort sprints with full phosphocreatine recovery "
-        "(>5:1 rest:work ratio). "
-        "Each rep should be maximally explosive. "
-        "Develops peak alactic power, stroke rate ceiling, and neuromuscular speed.",
-        "Alactic/PCr: Near-maximal efforts with full phosphocreatine recovery. "
-        "Rest is long enough for near-complete PCr resynthesis. "
-        "Develops repeated sprint capacity and peak neuromuscular power. "
-        "Common in power-focused training blocks.",
-        "Race pieces: 2–4 min race-pace or near-race-pace efforts with very long recovery. "
-        "Recovery is sufficient to maintain full quality on every rep. "
-        "Used for pace familiarisation and 1k–1500m race-pace development. "
-        "Note: the very long rest means total training volume is low.",
-        "Race simulation: 4–8 min race-pace efforts with very long recovery. "
-        "Develops race-specific fitness and pace judgement for 2k–5k events. "
-        "Full recovery ensures each piece can be rowed at or near competition intensity.",
+        "Max sprint: True maximum-effort sprints with full PCr recovery (work:rest < 1:4). "
+        "Each rep should be maximally explosive.  "
+        "E.g. 6× 10\"/2'r, 8× 15\"/3'r.",
+        "Alactic/PCr: Near-maximal efforts with near-complete PCr resynthesis between reps. "
+        "Develops repeated sprint capacity and peak neuromuscular power.  "
+        "E.g. 6× 1'/5'r, 8× 500m/4'r at near-max effort.",
+        "Race pieces: 2–4 min race-pace efforts with very long recovery. "
+        "Full quality on every rep; used for pace familiarisation.  "
+        "E.g. 3× 2000m/15'r, 5× 1'/10'r.",
+        "Race simulation: 4–8 min efforts at or near competition intensity with very long recovery. "
+        "Develops race-specific fitness and pace judgement.  "
+        "E.g. 2× 5k/20'r, 3× 2000m/20'r.",
         "",  # 8'–20' with very long rest — n/a
         "",  # 20'+ with very long rest — n/a
     ],
 ]
 
-# Zone threshold — fraction of work metres for a workout to appear in a zone tab
-_ZONE_THRESHOLD = {
-    "Z3 Hard": 0.40,
-    "Z2 Threshold": 0.20,
-    "Z1 Easy": 0.10,
-}
-
 _ROWS_PER_PAGE = 200
-
-# Sort column identifiers
-_SORT_COLS = ("date", "work", "split", "zones", "time", "spm", "hr")
-
-# Zone tabs
-_ZONE_TABS = ("All", "Z3 Hard", "Z2 Threshold", "Z1 Easy")
 
 # Grid cell sizing
 _CELL_H = 4.0  # HyperDiv units per data cell
@@ -320,19 +294,19 @@ def _compute_grid_placement(r: dict) -> tuple[int, int]:
 
 def _enrich_workouts(workouts: list[dict], thresholds) -> list[dict]:
     """
-    Filter to interval workout types and attach computed fields:
+    Filter to interval workout types (excluding single-rep sessions) and
+    attach computed fields:
 
-      _bin_meters   list[float]    Per-bin metre counts (index 0 = Rest)
-      _bar_uri      str            Data-URI SVG stacked pace-zone bar
-      _z1 / _z2 / _z3  float      Fraction of work metres in each zone
-      _structure    str            Full compact structure label (for table)
-      _structure_key str           Rep-stripped grouping key
-      _reps         int            Number of work intervals
-      _work_pace    float | None   Avg work pace (tenths/500m)
-      _work_spm     float | None   Work-weighted avg stroke rate
-      _grid_col     int            Column index in 2D grid
-      _grid_row     int            Row index in 2D grid
-      _stimulus     str            Physiological stimulus label from grid
+      _bin_meters    list[float]    Per-bin metre counts (index 0 = Rest)
+      _bar_uri       str            Data-URI SVG stacked pace-zone bar
+      _z3            float          Fraction of work metres in Z3 (bins 1–3)
+      _structure_key str            Rep-stripped structure label, e.g. "500m / 2'r"
+      _reps          int            Number of work intervals
+      _work_pace     float | None   Avg work pace (tenths/500m)
+      _work_spm      float | None   Work-weighted avg stroke rate
+      _grid_col      int            Column index in 2D grid
+      _grid_row      int            Row index in 2D grid
+      _stimulus      str            Physiological stimulus label from grid
     """
     result = []
     for r in workouts:
@@ -340,6 +314,14 @@ def _enrich_workouts(workouts: list[dict], thresholds) -> list[dict]:
             continue
         ivs = (r.get("workout") or {}).get("intervals") or []
         work_ivs = [iv for iv in ivs if (iv.get("type") or "").lower() != "rest"]
+
+        # Skip single-rep sessions (e.g. 1×500m / 3'r).  Keep workouts with
+        # multiple intervals that share no rest — they form legitimate multi-block
+        # sessions even though every rest_time == 0.
+        reps = len(work_ivs) or len(ivs)
+        if reps == 1:
+            continue
+
         r = dict(r)  # shallow copy
 
         bm = workout_bin_meters(r, thresholds)
@@ -348,11 +330,8 @@ def _enrich_workouts(workouts: list[dict], thresholds) -> list[dict]:
         r["_bin_meters"] = bm
         r["_bar_uri"] = bin_bar_svg(bm)
         r["_z3"] = sum(bm[i] for i in Z3_BINS) / work_total if work_total else 0.0
-        r["_z2"] = sum(bm[i] for i in Z2_BINS) / work_total if work_total else 0.0
-        r["_z1"] = sum(bm[i] for i in Z1_BINS) / work_total if work_total else 0.0
-        r["_structure"] = interval_structure_label(r, compact=True)
         r["_structure_key"] = interval_structure_key(r, compact=True)
-        r["_reps"] = len(work_ivs) or len(ivs)
+        r["_reps"] = reps
         r["_work_pace"] = avg_work_pace_tenths(r)
         r["_work_spm"] = avg_work_spm(r)
         col, row = _compute_grid_placement(r)
@@ -369,12 +348,66 @@ def _enrich_workouts(workouts: list[dict], thresholds) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def _filter_by_zone(workouts: list[dict], zone: str) -> list[dict]:
-    if zone == "All":
+def _bin_passes(bm: list, bin_idx: int) -> bool:
+    """
+    Return True if a workout's bin-meter vector passes the threshold for
+    the given bin index to count as an active zone in that workout.
+
+    Thresholds (fraction of total work metres, bins 1–6):
+      1 Fast        ≥ 5%  of work
+      2 2k          ≥ 10% of work
+      3 5k          ≥ 15% of work
+      4 Threshold   ≥ 25% of work
+      5 Fast Aero   (fast+slow aero) ≥ 50% of work
+      6 Slow Aero   slow aero > 30% of work  AND  (fast+slow aero) > 50% of work
+    """
+    work_total = sum(bm[1:])
+    if not work_total:
+        return False
+    if bin_idx == 1:
+        return bm[1] / work_total >= 0.05
+    if bin_idx == 2:
+        return bm[2] / work_total >= 0.10
+    if bin_idx == 3:
+        return bm[3] / work_total >= 0.15
+    if bin_idx == 4:
+        return bm[4] / work_total >= 0.25
+    if bin_idx == 5:
+        return (bm[5] + bm[6]) / work_total >= 0.50
+    if bin_idx == 6:
+        return (bm[6] / work_total > 0.30) and ((bm[5] + bm[6]) / work_total > 0.50)
+    return False
+
+
+def _filter_by_bins(workouts: list[dict], active_bins: set[int]) -> list[dict]:
+    """
+    Conjunctive (AND) filter: keep workouts that pass the threshold for EVERY
+    selected bin index.  Empty selection → all workouts returned.
+    """
+    if not active_bins:
         return workouts
-    z_key = {"Z3 Hard": "_z3", "Z2 Threshold": "_z2", "Z1 Easy": "_z1"}[zone]
-    threshold = _ZONE_THRESHOLD[zone]
-    return [r for r in workouts if r[z_key] >= threshold]
+    return [
+        r
+        for r in workouts
+        if all(_bin_passes(r["_bin_meters"], b) for b in active_bins)
+    ]
+
+
+def _zones_tooltip(bm: list) -> str:
+    """
+    Build a short breakdown string for the zones bar tooltip.
+    Shows each bin's percentage of total work metres; omits bins at 0%.
+    E.g. "Fast 8%  2k 15%  Threshold 22%  Fast Aero 55%"
+    """
+    work_total = sum(bm[1:])
+    if not work_total:
+        return "No work metres recorded"
+    parts = []
+    for i, name in enumerate(BIN_NAMES[1:], start=1):
+        pct = bm[i] / work_total
+        if pct >= 0.005:
+            parts.append(f"{name} {pct:.0%}")
+    return "  ".join(parts) if parts else "—"
 
 
 def _filter_by_cells(workouts: list[dict], cells: frozenset[str]) -> list[dict]:
@@ -386,6 +419,7 @@ def _filter_by_cells(workouts: list[dict], cells: frozenset[str]) -> list[dict]:
 def _sort_workouts(workouts: list[dict], col: str, asc: bool) -> list[dict]:
     key_fns = {
         "date": lambda r: r.get("date", ""),
+        "reps": lambda r: r.get("_reps") or 0,
         "work": lambda r: r.get("distance") or 0,
         "split": lambda r: r.get("_work_pace") or float("inf"),
         "zones": lambda r: r.get("_z3", 0.0),
@@ -419,26 +453,48 @@ def _cell_variant(avg_z3: float, is_sel: bool) -> str:
     return "neutral"
 
 
-def _zone_legend() -> None:
-    """Compact colour key for the pace-zone breakdown bars in the table.
+def _zone_filter_legend(state) -> None:
+    """
+    Clickable pace-zone legend that acts as a conjunctive (AND) filter.
 
-    Each swatch is a small SVG rendered via hd.image rather than a box with
-    background_color, so the raw rgba() values from BIN_COLORS stay out of
-    HyperDiv's colour prop system.
+    Each pace zone (Fast … Slow Aerobic) can be toggled on/off.  With one or
+    more zones active the table shows only workouts that have at least some
+    metres in EVERY selected zone simultaneously.
+
+    Thresholds (see _bin_passes): Fast ≥5%, 2k ≥10%, 5k ≥15%, Threshold ≥25%,
+    Fast Aero (fast+slow)≥50%, Slow Aero slow>30% AND combined>50%.
+    Swatches use hd.image (data-URI SVG) so raw rgba() values stay out of
+    HyperDiv's colour prop system.  Active state in state.active_bins (tuple[int]).
     """
     is_dark = hd.theme().mode == "dark"
-    with hd.hbox(gap=2, align="center", padding=(0.5, 0), wrap="wrap"):
-        hd.text("Pace zones:", font_size="small", font_color="neutral-500")
+    active_bins: set[int] = set(state.active_bins)
+
+    with hd.hbox(gap=1, align="center", padding=(0.5, 0), wrap="wrap"):
+        hd.text("Filter by pace zone:", font_size="small", font_color="neutral-500")
         for i, name in enumerate(BIN_NAMES[1:], start=1):
             with hd.scope(name):
                 color = BIN_COLORS[i][0 if is_dark else 1]
+                is_active = i in active_bins
                 with hd.hbox(gap=0.5, align="center"):
                     hd.image(
                         src=swatch_svg(color, size=12, radius=2),
                         width=0.75,
                         height=0.75,
                     )
-                    hd.text(name, font_size="small", font_color="neutral-600")
+                    btn = hd.button(
+                        name,
+                        variant="primary" if is_active else "neutral",
+                        size="small",
+                        outline=not is_active,
+                    )
+                if btn.clicked:
+                    sel = set(state.active_bins)
+                    if is_active:
+                        sel.discard(i)
+                    else:
+                        sel.add(i)
+                    state.active_bins = tuple(sorted(sel))
+                    state.page = 0
 
 
 def _grid_browser(zone_workouts: list[dict], state) -> None:
@@ -472,7 +528,7 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                 with hd.hbox(gap=0.4, align="center"):
                     hd.icon("arrow-down", font_size="small", font_color="neutral-400")
                     hd.text(
-                        "Rest:work ratio",
+                        "Work:rest",
                         font_size="x-small",
                         font_color="neutral-400",
                         font_style="italic",
@@ -554,32 +610,31 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                             )
 
                             with hd.scope(f"r{ri}"):
-                                with hd.box(
-                                    height=_CELL_H,
-                                    border_top="1px solid neutral-200",
-                                ):
-                                    display_label = (
-                                        stimulus if stimulus != "—" else "Other"
+                                display_label = stimulus if stimulus != "—" else "Other"
+                                if has_data:
+                                    tip = (
+                                        tooltip_text if tooltip_text else display_label
                                     )
-                                    if has_data:
-                                        tip = (
-                                            tooltip_text
-                                            if tooltip_text
-                                            else display_label
-                                        )
-                                        with hd.tooltip(tip):
+                                    # Thin border wrapper; button fills width+height.
+                                    with hd.box(
+                                        border_top="1px solid neutral-200",
+                                        padding=0,
+                                        line_height="normal"
+                                        # overflow="hidden",
+                                    ):
+                                        with hd.tooltip(tip, width="100%"):
                                             with hd.button(
                                                 variant=_cell_variant(avg_z3, is_sel),
                                                 outline=not is_sel,
-                                                # width="100%",
-                                                # height="100%",
-                                                padding=(0.4, 0.25),
+                                                width="100%",
+                                                height=_CELL_H,
+                                                # padding=(0, 0.2),
+                                                # # align="center",
                                             ) as cell_btn:
                                                 with hd.box(
-                                                    gap=0.2,
+                                                    gap=0.15,
                                                     align="center",
                                                     justify="center",
-                                                    width="100%",
                                                 ):
                                                     hd.text(
                                                         str(count),
@@ -591,40 +646,41 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                                                         font_size="x-small",
                                                         text_align="center",
                                                     )
-                                        if cell_btn.clicked:
-                                            sel = set(state.active_cells)
-                                            if is_sel:
-                                                sel.discard(k)
-                                            else:
-                                                sel.add(k)
-                                            state.active_cells = tuple(sorted(sel))
-                                            state.page = 0
-                                    else:
-                                        # Empty cell — muted coverage map
-                                        with hd.box(
-                                            # width="100%",
-                                            # height="100%",
-                                            padding=(0.4, 0.25),
-                                            align="center",
-                                            justify="center",
-                                            background_color="neutral-0",
-                                        ):
-                                            if stimulus != "—":
-                                                if tooltip_text:
-                                                    with hd.tooltip(tooltip_text):
-                                                        hd.text(
-                                                            display_label,
-                                                            font_size="x-small",
-                                                            font_color="neutral-200",
-                                                            text_align="center",
-                                                        )
-                                                else:
+                                    if cell_btn.clicked:
+                                        sel = set(state.active_cells)
+                                        if is_sel:
+                                            sel.discard(k)
+                                        else:
+                                            sel.add(k)
+                                        state.active_cells = tuple(sorted(sel))
+                                        state.page = 0
+                                else:
+                                    # Empty cell — muted coverage map, same
+                                    # size as data cells via explicit height.
+                                    with hd.box(
+                                        height=_CELL_H,
+                                        border_top="1px solid neutral-200",
+                                        padding=(0.25, 0.2),
+                                        align="center",
+                                        justify="center",
+                                        background_color="neutral-0",
+                                    ):
+                                        if stimulus != "—":
+                                            if tooltip_text:
+                                                with hd.tooltip(tooltip_text):
                                                     hd.text(
                                                         display_label,
                                                         font_size="x-small",
                                                         font_color="neutral-200",
                                                         text_align="center",
                                                     )
+                                            else:
+                                                hd.text(
+                                                    display_label,
+                                                    font_size="x-small",
+                                                    font_color="neutral-200",
+                                                    text_align="center",
+                                                )
 
     # Active-filter summary chips
     if active_cells:
@@ -695,9 +751,6 @@ def _interval_table(workouts: list[dict], state) -> tuple[int, int]:
             hd.text("No workouts match the selected filters.", font_color="neutral-500")
         return total, total_pages
 
-    # Zone legend (for the bar column)
-    _zone_legend()
-
     # Header row
     with hd.hbox(
         gap=1,
@@ -706,6 +759,7 @@ def _interval_table(workouts: list[dict], state) -> tuple[int, int]:
         align="center",
     ):
         _sort_header("Date", "date", 9, state)
+        _sort_header("Reps", "reps", 4, state)
         hd.text(
             "Structure",
             grow=True,
@@ -724,13 +778,6 @@ def _interval_table(workouts: list[dict], state) -> tuple[int, int]:
         _sort_header("Work", "work", 6, state)
         _sort_header("Avg Split", "split", 7, state)
         _sort_header("Time", "time", 7, state)
-        hd.text(
-            "Reps",
-            width=4,
-            font_size="small",
-            font_weight="bold",
-            font_color="neutral-500",
-        )
         _sort_header("SPM", "spm", 4, state)
         _sort_header("HR", "hr", 6, state)
 
@@ -749,8 +796,15 @@ def _interval_table(workouts: list[dict], state) -> tuple[int, int]:
                     font_size="small",
                     font_color="neutral-700",
                 )
+                hd.text(
+                    str(r["_reps"]) if r["_reps"] else "—",
+                    width=4,
+                    font_size="small",
+                    font_color="neutral-500",
+                )
                 with hd.box(grow=True):
-                    hd.text(r["_structure"], font_size="small")
+                    # _structure_key strips the leading "N × " rep count
+                    hd.text(r["_structure_key"], font_size="small")
                 # Stimulus label (from grid classification)
                 stimulus = r.get("_stimulus", "")
                 with hd.box(width=10):
@@ -762,7 +816,8 @@ def _interval_table(workouts: list[dict], state) -> tuple[int, int]:
                             font_style="italic",
                         )
                 with hd.box(width=10, align="start"):
-                    hd.image(src=r["_bar_uri"], width=10, height=0.75)
+                    with hd.tooltip(_zones_tooltip(r["_bin_meters"])):
+                        hd.image(src=r["_bar_uri"], width=10, height=0.75)
                 hd.text(
                     _fmt_distance(r.get("distance")),
                     width=6,
@@ -777,12 +832,6 @@ def _interval_table(workouts: list[dict], state) -> tuple[int, int]:
                 hd.text(
                     r.get("time_formatted", "—"),
                     width=7,
-                    font_size="small",
-                    font_color="neutral-500",
-                )
-                hd.text(
-                    str(r["_reps"]) if r["_reps"] else "—",
-                    width=4,
                     font_size="small",
                     font_color="neutral-500",
                 )
@@ -867,6 +916,7 @@ def interval_tab() -> None:
 
     state = hd.state(
         active_cells=tuple(),  # tuple[str] — "col,row" keys of selected cells
+        active_bins=tuple(),  # tuple[int] — pace bin indices (1–6) for AND filter
         sort_col="date",
         sort_asc=False,
         page=0,
@@ -875,19 +925,18 @@ def interval_tab() -> None:
     with hd.box(padding=(2, 2, 2, 2)):
         hd.h3(f"Interval Workouts  ({len(all_intervals)})")
 
-        # Zone tabs — filter both grid and table
-        zone_tabs = hd.tab_group(*_ZONE_TABS)
-        active_zone = zone_tabs.active or "All"
-        zone_filtered = _filter_by_zone(all_intervals, active_zone)
-
-        # 2D grid browser
-        _grid_browser(zone_filtered, state)
+        # 2D grid browser (always shows all intervals, unaffected by bin filter)
+        _grid_browser(all_intervals, state)
 
         hd.divider()
 
-        # Apply cell selection on top of zone filter
+        # Pace-zone legend / conjunctive filter
+        _zone_filter_legend(state)
+
+        # Apply grid-cell selection, then pace-bin filter
         active_cells = frozenset(state.active_cells)
-        filtered = _filter_by_cells(zone_filtered, active_cells)
+        cell_filtered = _filter_by_cells(all_intervals, active_cells)
+        filtered = _filter_by_bins(cell_filtered, set(state.active_bins))
 
         # Clamp page if filter changed total
         total_filtered = len(filtered)
@@ -901,9 +950,9 @@ def interval_tab() -> None:
                 font_size="small",
                 font_color="neutral-500",
             )
-            if active_cells:
+            if active_cells or state.active_bins:
                 hd.text(
-                    f"(filtered from {len(zone_filtered)} in this zone)",
+                    f"(filtered from {len(all_intervals)} total)",
                     font_size="small",
                     font_color="neutral-400",
                 )
