@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "rowing-metrics"
+version = "0.1.0"
+description = "Personal Concept2 rowing metrics dashboard"
+authors = []
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.11"
+hyperdiv = "*"
+httpx = "*"
+beautifulsoup4 = "^4.14.3"
+scipy = "^1.17.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[dependency-groups]
+dev = [
+    "watchfiles (>=1.1.1,<2.0.0)"
+]
