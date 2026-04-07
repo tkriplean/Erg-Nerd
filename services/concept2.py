@@ -40,13 +40,20 @@ SCOPES = "user:read,results:read"
 # Keeps us polite to the Concept2 API.
 _PAGE_DELAY = 1.0
 
+
 # Credentials are read lazily (inside functions) so that load_dotenv() in
 # app.py has always run before they are needed, regardless of import order.
 def _client_id() -> str:
     return os.environ.get("CONCEPT2_CLIENT_ID", "")
 
+
 def _client_secret() -> str:
     return os.environ.get("CONCEPT2_CLIENT_SECRET", "")
+
+
+def _get_server_url() -> str:
+    return os.environ.get("server_url", "http://localhost")
+
 
 _ROOT = os.path.join(os.path.dirname(__file__), "..")
 
@@ -66,10 +73,11 @@ _CACHE_TTL_SECONDS = 5 * 60  # 5 minutes
 # OAuth helpers
 # ---------------------------------------------------------------------------
 
+
 def get_redirect_uri() -> str:
     """Build the redirect URI using the configured HD_PORT (default 8888)."""
     port = os.environ.get("HD_PORT", "8888")
-    return f"http://localhost:{port}/oauth/callback"
+    return f"{_get_server_url()}:{port}/oauth/callback"
 
 
 def get_authorization_url() -> str:
@@ -109,6 +117,7 @@ def parse_callback_query(query_args: str) -> dict:
 # Token persistence
 # ---------------------------------------------------------------------------
 
+
 def load_token() -> Optional[dict]:
     """Load cached OAuth token from disk. Returns None if absent or corrupt."""
     try:
@@ -144,6 +153,7 @@ def is_token_expired(token_data: dict) -> bool:
 # ---------------------------------------------------------------------------
 # Token exchange / refresh
 # ---------------------------------------------------------------------------
+
 
 def exchange_code(code: str) -> dict:
     """
@@ -212,6 +222,7 @@ def get_valid_token() -> Optional[dict]:
 # Persistent workout history cache
 # ---------------------------------------------------------------------------
 
+
 def load_local_workouts() -> dict:
     """
     Load the persistent workout cache from disk.
@@ -242,6 +253,7 @@ def clear_local_workouts() -> None:
 # Short-lived response cache (for user profile and single-page fetches)
 # ---------------------------------------------------------------------------
 
+
 def _cache_path(key: str) -> str:
     os.makedirs(_CACHE_DIR, exist_ok=True)
     safe_key = key.replace("/", "_").replace("?", "_").replace("&", "_")
@@ -267,6 +279,7 @@ def _write_cache(key: str, data: dict) -> None:
 def clear_cache() -> None:
     """Delete all short-lived cached API responses."""
     import shutil
+
     if os.path.isdir(_CACHE_DIR):
         shutil.rmtree(_CACHE_DIR)
 
@@ -274,6 +287,7 @@ def clear_cache() -> None:
 # ---------------------------------------------------------------------------
 # API client
 # ---------------------------------------------------------------------------
+
 
 class Concept2Client:
     """
@@ -302,7 +316,13 @@ class Concept2Client:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _get(self, path: str, params: Optional[dict] = None, *, cache_key: Optional[str] = None) -> dict:
+    def _get(
+        self,
+        path: str,
+        params: Optional[dict] = None,
+        *,
+        cache_key: Optional[str] = None,
+    ) -> dict:
         """GET with optional short-lived disk cache."""
         if cache_key:
             cached = _read_cache(cache_key)
@@ -499,6 +519,7 @@ class Concept2Client:
 # ---------------------------------------------------------------------------
 # Convenience entry point
 # ---------------------------------------------------------------------------
+
 
 def get_client() -> Optional[Concept2Client]:
     """
