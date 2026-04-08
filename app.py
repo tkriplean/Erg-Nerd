@@ -159,10 +159,10 @@ _TAB_ROUTES: dict[str, str] = {
     "Volume": "/volume",
     "Sessions": "/sessions",
     "Intervals": "/intervals",
-    "Trials": "/trials",
+    "Performance": "/performance",
 }
 _ROUTE_TABS: dict[str, str] = {v: k for k, v in _TAB_ROUTES.items()}
-_DEFAULT_TAB = "Trials"
+_DEFAULT_TAB = "Performance"
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +228,7 @@ def _dashboard_view() -> None:
             sessions_tab()
         elif current_tab == "Intervals":
             interval_tab()
-        elif current_tab == "Trials":
+        elif current_tab == "Performance":
             ranked_tab()
         else:
             profile_tab()

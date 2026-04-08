@@ -139,20 +139,26 @@ def workout_cat_key(r: dict) -> Optional[tuple]:
     return None
 
 
-def apply_best_only(results: list) -> list:
-    """Keep only the lifetime best per ranked category, sorted by category order."""
+def apply_best_only(results: list, by_season: bool = False) -> list:
+    """
+    Keep the best result per ranked category, sorted by category order.
+
+    by_season=False (default) — lifetime best per category.
+    by_season=True            — season best per (season, category).
+    """
     best: dict = {}
     for r in results:
+        season = get_season(r.get("date", "")) if by_season else None
         dist, time = r.get("distance"), r.get("time")
         if dist in RANKED_DIST_SET:
-            key = ("dist", dist)
+            key = (season, "dist", dist) if by_season else ("dist", dist)
             prev = best.get(key)
             if prev is None or (r.get("time") or float("inf")) < (
                 prev.get("time") or float("inf")
             ):
                 best[key] = r
         elif time in RANKED_TIME_SET:
-            key = ("time", time)
+            key = (season, "time", time) if by_season else ("time", time)
             prev = best.get(key)
             if prev is None or (r.get("distance") or 0) > (prev.get("distance") or 0):
                 best[key] = r
@@ -162,43 +168,17 @@ def apply_best_only(results: list) -> list:
 
     def _sort_key(r):
         dist, time = r.get("distance"), r.get("time")
+        season = get_season(r.get("date", "")) if by_season else None
         if dist in RANKED_DIST_SET:
-            return (0, dist_order.get(dist, 99))
-        return (1, time_order.get(time, 99))
+            return (0, dist_order.get(dist, 99)) + ((season,) if by_season else ())
+        return (1, time_order.get(time, 99)) + ((season,) if by_season else ())
 
     return sorted(best.values(), key=_sort_key)
 
 
 def apply_season_best_only(results: list) -> list:
-    """Keep only the season best per (season, ranked category)."""
-    best: dict = {}
-    for r in results:
-        season = get_season(r.get("date", ""))
-        dist, time = r.get("distance"), r.get("time")
-        if dist in RANKED_DIST_SET:
-            key = (season, "dist", dist)
-            prev = best.get(key)
-            if prev is None or (r.get("time") or float("inf")) < (
-                prev.get("time") or float("inf")
-            ):
-                best[key] = r
-        elif time in RANKED_TIME_SET:
-            key = (season, "time", time)
-            prev = best.get(key)
-            if prev is None or (r.get("distance") or 0) > (prev.get("distance") or 0):
-                best[key] = r
-
-    dist_order = {d: i for i, (d, _) in enumerate(RANKED_DISTANCES)}
-    time_order = {t: i for i, (t, _) in enumerate(RANKED_TIMES)}
-
-    def _sort_key(r):
-        dist, time = r.get("distance"), r.get("time")
-        season = get_season(r.get("date", ""))
-        if dist in RANKED_DIST_SET:
-            return (0, dist_order.get(dist, 99), season)
-        return (1, time_order.get(time, 99), season)
-
-    return sorted(best.values(), key=_sort_key)
+    """Keep only the season best per (season, ranked category). Alias for apply_best_only(by_season=True)."""
+    return apply_best_only(results, by_season=True)
 
 
 def compute_duration_s(workout: dict) -> Optional[float]:

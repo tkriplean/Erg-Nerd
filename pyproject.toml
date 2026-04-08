@@ -12,6 +12,7 @@ hyperdiv = "*"
 httpx = "*"
 beautifulsoup4 = "^4.14.3"
 scipy = "^1.17.1"
+numpy = "*"
 
 [build-system]
 requires = ["poetry-core"]

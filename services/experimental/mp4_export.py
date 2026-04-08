@@ -37,7 +37,7 @@ from services.rowing_utils import (
     loglog_fit,
     loglog_predict_pace,
 )
-from components.ranked_filters import sim_workouts_at
+from services.ranked_filters import sim_workouts_at
 
 
 # ---------------------------------------------------------------------------

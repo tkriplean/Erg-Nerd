@@ -78,10 +78,7 @@ from components.ranked_formatters import (
     _fmt_hr,
     fmt_split,
 )
-
-
-class aligned_button(hd.button):
-    align = hd.Prop(hd.CSSField("align-items", hd.String))
+from components.hyperdiv_extensions import aligned_button
 
 
 # ---------------------------------------------------------------------------
