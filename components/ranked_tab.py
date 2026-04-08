@@ -131,9 +131,8 @@ from services.rowing_utils import (
     apply_best_only,
     apply_season_best_only,
     compute_duration_s,
-    compress_workouts,
-    decompress_workouts,
 )
+from components.workout_sync import workout_sync
 from services.critical_power_model import fit_critical_power
 from components.performance_chart import PerformanceChart
 from components.date_slider import DateSlider
@@ -918,17 +917,6 @@ def ranked_tab(client, user_id: str) -> None:
 
     is_dark = hd.theme().is_dark
 
-    # ---- one-time load from localStorage ----
-    sync_state = hd.state(written=False, initial_workouts=None, initial_loaded=False)
-    if not sync_state.initial_loaded:
-        ls_wkts = hd.local_storage.get_item("workouts")
-        if not ls_wkts.done:
-            with hd.box(align="center", padding=4):
-                hd.spinner()
-            return
-        sync_state.initial_workouts = decompress_workouts(ls_wkts.result) if ls_wkts.result else {}
-        sync_state.initial_loaded = True
-
     # ---- profile from localStorage ----
     ls_profile = hd.local_storage.get_item("profile")
     if not ls_profile.done:
@@ -942,25 +930,12 @@ def ranked_tab(client, user_id: str) -> None:
         except Exception:
             pass
 
-    # ---- fetch ----
-    progress = hd.state(pages=0, total=0)
-    results_task = hd.task()
+    # ---- fetch (shared sync component) ----
+    sync_result = workout_sync(client)
 
-    def fetch_all(client, initial, progress):
-        def on_progress(pages_fetched, workouts_cached):
-            progress.pages = pages_fetched
-            progress.total = workouts_cached
-        return client.get_all_results(initial, on_progress=on_progress)
-
-    results_task.run(fetch_all, client, sync_state.initial_workouts, progress)
-
-    # ---- base set + quality filters ----
-    if results_task.done and not results_task.error:
-        workouts_dict, sorted_workouts = results_task.result
-        # Write updated workouts to localStorage (once per sync)
-        if not sync_state.written:
-            hd.local_storage.set_item("workouts", compress_workouts(workouts_dict))
-            sync_state.written = True
+    # ---- base set + quality filters (empty while loading) ----
+    if sync_result is not None:
+        _workouts_dict, sorted_workouts = sync_result
         all_ranked = [r for r in sorted_workouts if is_ranked_noninterval(r)]
         all_ranked = apply_quality_filters(all_ranked, selected_dists=set(), selected_times=set(), excluded_seasons=set())
         all_ranked_raw = list(all_ranked)
@@ -974,20 +949,7 @@ def ranked_tab(client, user_id: str) -> None:
     _filter_bar(state, all_seasons)
 
     # ---- loading / error gate ----
-    if results_task.running:
-        with hd.box(align="center", padding=4, gap=1):
-            hd.spinner()
-            if progress.pages == 0:
-                hd.text("Loading workout history…", font_color="neutral-500")
-            else:
-                hd.text(
-                    f"Page {progress.pages} fetched — {progress.total:,} workouts loaded so far…",
-                    font_color="neutral-500",
-                )
-        return
-
-    if results_task.error:
-        hd.alert(f"Error: {results_task.error}", variant="danger", opened=True)
+    if sync_result is None:
         return
 
     # ---- apply event / season / best filters ----

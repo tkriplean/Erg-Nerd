@@ -30,7 +30,7 @@ import hyperdiv as hd
 
 import json
 
-from services.rowing_utils import compress_workouts, decompress_workouts
+from components.workout_sync import workout_sync
 from services.volume_bins import (
     get_reference_sbs,
     compute_bin_thresholds,
@@ -386,19 +386,12 @@ def _volume_section(all_workouts: list, profile: dict) -> None:
 def volume_tab(client, user_id: str) -> None:
     """Top-level component for the Volume tab."""
 
-    sync_state = hd.state(written=False, initial_workouts=None, initial_loaded=False)
+    result = workout_sync(client)
+    if result is None:
+        return
+    _workouts_dict, all_workouts = result
 
-    # Step 1: one-time load of workouts from localStorage
-    if not sync_state.initial_loaded:
-        ls_wkts = hd.local_storage.get_item("workouts")
-        if not ls_wkts.done:
-            with hd.box(align="center", padding=4):
-                hd.spinner()
-            return
-        sync_state.initial_workouts = decompress_workouts(ls_wkts.result) if ls_wkts.result else {}
-        sync_state.initial_loaded = True
-
-    # Step 2: load profile from localStorage
+    # Load profile from localStorage
     ls_profile = hd.local_storage.get_item("profile")
     if not ls_profile.done:
         with hd.box(align="center", padding=4):
@@ -410,30 +403,6 @@ def volume_tab(client, user_id: str) -> None:
             profile = {**_PROFILE_DEFAULTS, **json.loads(ls_profile.result)}
         except Exception:
             pass
-
-    # Step 3: background sync with API
-    task = hd.task()
-
-    def _fetch(client, initial):
-        return client.get_all_results(initial)
-
-    task.run(_fetch, client, sync_state.initial_workouts)
-
-    if task.running:
-        with hd.box(align="center", padding=4):
-            hd.spinner()
-        return
-
-    if task.error:
-        hd.alert(f"Error loading workouts: {task.error}", variant="danger", opened=True)
-        return
-
-    workouts_dict, all_workouts = task.result
-
-    # Step 4: write updated workouts back to localStorage (once per sync)
-    if not sync_state.written:
-        hd.local_storage.set_item("workouts", compress_workouts(workouts_dict))
-        sync_state.written = True
 
     if not all_workouts:
         with hd.box(padding=4, align="center"):

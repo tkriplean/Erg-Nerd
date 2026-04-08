@@ -55,7 +55,8 @@ import statistics
 
 import hyperdiv as hd
 
-from services.rowing_utils import compress_workouts, decompress_workouts, format_time, INTERVAL_WORKOUT_TYPES
+from services.rowing_utils import format_time, INTERVAL_WORKOUT_TYPES
+from components.workout_sync import workout_sync
 from services.interval_utils import (
     avg_work_pace_tenths,
     avg_work_spm,
@@ -942,45 +943,10 @@ def _pagination(state, total: int, total_pages: int) -> None:
 def interval_tab(client, user_id: str) -> None:
     """Top-level HyperDiv component for the Interval Workouts tab."""
 
-    sync_state = hd.state(written=False, initial_workouts=None, initial_loaded=False)
-
-    # Step 1: one-time load of workouts from localStorage
-    if not sync_state.initial_loaded:
-        ls_wkts = hd.local_storage.get_item("workouts")
-        if not ls_wkts.done:
-            with hd.box(align="center", padding=4):
-                hd.spinner()
-            return
-        sync_state.initial_workouts = decompress_workouts(ls_wkts.result) if ls_wkts.result else {}
-        sync_state.initial_loaded = True
-
-    # Step 2: background sync with API
-    task = hd.task()
-
-    def _fetch(client, initial):
-        return client.get_all_results(initial)
-
-    task.run(_fetch, client, sync_state.initial_workouts)
-
-    if task.running:
-        with hd.box(align="center", padding=4):
-            hd.spinner()
+    result = workout_sync(client)
+    if result is None:
         return
-
-    if task.error:
-        hd.alert(
-            f"Error loading workouts: {task.error}",
-            variant="danger",
-            opened=True,
-        )
-        return
-
-    workouts_dict, all_workouts = task.result
-
-    # Step 3: write updated workouts back to localStorage (once per sync)
-    if not sync_state.written:
-        hd.local_storage.set_item("workouts", compress_workouts(workouts_dict))
-        sync_state.written = True
+    _workouts_dict, all_workouts = result
 
     ref_sbs = get_reference_sbs(all_workouts)
     thresholds = compute_bin_thresholds(ref_sbs, all_workouts)
