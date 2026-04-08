@@ -43,6 +43,10 @@ Columns: Date · Reps · Structure (rep-stripped) · Stimulus · Zones bar
 
 Pace-zone filter (legend below grid): conjunctive AND across selected bins.
 A workout appears only when it has > 0 metres in every selected pace zone.
+
+Structure filter: clicking any Structure cell in the table sets a filter
+restricting the table to workouts with that same structure key.  Clicking
+the same cell again, or the ×-chip above the table, clears it.
 """
 
 from __future__ import annotations
@@ -74,6 +78,28 @@ from components.ranked_formatters import (
     _fmt_hr,
     fmt_split,
 )
+
+
+class aligned_button(hd.button):
+    align = hd.Prop(hd.CSSField("align-items", hd.String))
+
+
+# ---------------------------------------------------------------------------
+# Colour helpers
+# ---------------------------------------------------------------------------
+
+
+def _parse_rgba(rgba_str: str) -> tuple:
+    """
+    Parse an 'rgba(r,g,b,a)' string → (r, g, b, a) tuple for use with
+    HyperDiv's background_color / border_color props (which accept raw tuples).
+    """
+    try:
+        inner = rgba_str.strip()[5:-1]  # strip "rgba(" and ")"
+        parts = [p.strip() for p in inner.split(",")]
+        return (int(parts[0]), int(parts[1]), int(parts[2]), float(parts[3]))
+    except Exception:
+        return (128, 128, 128, 0.8)
 
 
 # ---------------------------------------------------------------------------
@@ -160,15 +186,15 @@ _TOOLTIPS = [
     # Short (work:rest 3–10:1)
     [
         "",  # ≤30" — n/a
-        "Lactic capacity: Short high-intensity intervals with brief recovery. "
+        "Lactic capacity: Short high-intensity intervals with very brief recovery. "
         "Lactate accumulates rep-to-rep; builds lactate tolerance and buffer capacity.  "
-        'E.g. 10× 1\'/30"r, 12× 30"/20"r.',
+        'E.g. 10× 1\'/12"r, 15× 30"/8"r.',
         "VO₂max stress: 2–4 min intervals with short rest keeps heart rate "
         "continuously elevated near VO₂max — high total VO₂max stimulus per session.  "
-        "E.g. 6× 3'/1'r, 8× 2'/1'r.",
+        "E.g. 6× 3'/1'r, 8× 2'/40\"r.",
         "Threshold+: Work near or slightly above LT2 with incomplete recovery. "
         "Lactate accumulates gradually across reps.  "
-        "E.g. 4× 6'/2'r, 5× 5'/90\"r.",
+        "E.g. 4× 6'/2'r, 4× 8'/2'r.",
         "Threshold accumulation: Extended work near threshold with short rest. "
         "Accumulates substantial threshold time per session; "
         "late-rep quality may decline.  "
@@ -194,9 +220,9 @@ _TOOLTIPS = [
         "Lactate threshold: Long intervals with roughly equal recovery at controlled intensity. "
         "Accumulates extended time at threshold pace with manageable fatigue.  "
         "E.g. 3× 10'/10'r, 2× 15'/15'r.",
-        "Aerobic blocks: Extended aerobic intervals with substantial recovery. "
-        "Fletcher/block training overlap is common.  "
-        "E.g. 2× 30'/30'r.",
+        "Aerobic blocks: Very long aerobic intervals with roughly equal recovery. "
+        "Uncommon in periodized programs; may arise in low-intensity adaptation phases.  "
+        "E.g. 2× 30'/30'r, 3× 20'/20'r.",
     ],
     # Long (work:rest 1:2–4)
     [
@@ -226,12 +252,12 @@ _TOOLTIPS = [
         "Alactic/PCr: Near-maximal efforts with near-complete PCr resynthesis between reps. "
         "Develops repeated sprint capacity and peak neuromuscular power.  "
         "E.g. 6× 1'/5'r, 8× 500m/4'r at near-max effort.",
-        "Race pieces: 2–4 min race-pace efforts with very long recovery. "
-        "Full quality on every rep; used for pace familiarisation.  "
-        "E.g. 3× 2000m/15'r, 5× 1'/10'r.",
-        "Race simulation: 4–8 min efforts at or near competition intensity with very long recovery. "
-        "Develops race-specific fitness and pace judgement.  "
-        "E.g. 2× 5k/20'r, 3× 2000m/20'r.",
+        "Race pieces: 2–4 min near-maximal efforts with very long recovery (>4× work time). "
+        "Full quality on every rep; used for race-pace familiarisation and power development.  "
+        "E.g. 4× 2'/16'r, 3× 3'/15'r at race pace.",
+        "Race simulation: 4–8 min efforts at race intensity with very long recovery (>4× work time). "
+        "Full recovery ensures each rep is maximally race-representative; develops pace confidence.  "
+        "E.g. 3× 5'/25'r, 2× 6'/30'r at 2k race pace.",
         "",  # 8'–20' with very long rest — n/a
         "",  # 20'+ with very long rest — n/a
     ],
@@ -450,9 +476,12 @@ def _cell_key(col: int, row: int) -> str:
     return f"{col},{row}"
 
 
-def _cell_variant(avg_z3: float, is_sel: bool) -> str:
-    if is_sel:
-        return "primary"
+def _cell_variant(avg_z3: float) -> str:
+    """
+    Return a Shoelace button variant based on Z3 intensity fraction.
+    Selection state is communicated via outline=True/False rather than
+    a colour change, so the border always reflects intensity.
+    """
     if avg_z3 >= 0.50:
         return "danger"
     if avg_z3 >= 0.25:
@@ -470,30 +499,66 @@ def _zone_filter_legend(state) -> None:
 
     Thresholds (see _bin_passes): Fast ≥5%, 2k ≥10%, 5k ≥15%, Threshold ≥25%,
     Fast Aero (fast+slow)≥50%, Slow Aero slow>30% AND combined>50%.
-    Swatches use hd.image (data-URI SVG) so raw rgba() values stay out of
-    HyperDiv's colour prop system.  Active state in state.active_bins (tuple[int]).
+
+    Active buttons fill with the zone's own colour (via base_style override on
+    ::part(base)); inactive buttons show a subtle outline with the swatch inside.
+    Active state in state.active_bins (tuple[int]).
     """
     is_dark = hd.theme().is_dark
     active_bins: set[int] = set(state.active_bins)
 
-    with hd.hbox(gap=1, align="center", padding=(0.5, 0), wrap="wrap"):
-        hd.text("Filter by pace zone:", font_size="small", font_color="neutral-500")
+    with hd.hbox(
+        gap=0.75, align="center", padding=(2.5, 0), wrap="wrap", justify="center"
+    ):
+        # hd.text("Filter by pace zone:", font_size="small", font_color="neutral-500")
         for i, name in enumerate(BIN_NAMES[1:], start=1):
             with hd.scope(name):
-                color = BIN_COLORS[i][0 if is_dark else 1]
+                color_str = BIN_COLORS[i][0 if is_dark else 1]
+                color_rgba = _parse_rgba(color_str)
                 is_active = i in active_bins
-                with hd.hbox(gap=0.5, align="center"):
-                    hd.image(
-                        src=swatch_svg(color, size=12, radius=2),
-                        width=0.75,
-                        height=0.75,
-                    )
-                    btn = hd.button(
-                        name,
-                        variant="primary" if is_active else "neutral",
+
+                if is_active:
+                    # Filled button using the zone colour as background.
+                    with hd.button(
                         size="small",
-                        outline=not is_active,
-                    )
+                        padding=(0.2, 0.6, 0.2, 0.6),
+                        border="none",
+                        base_style=hd.style(
+                            background_color=color_rgba,
+                        ),
+                    ) as btn:
+                        with hd.hbox(gap=0.4, align="center", justify="center"):
+                            hd.image(
+                                src=swatch_svg(color_str, size=10, radius=2),
+                                width=0.65,
+                                height=0.65,
+                            )
+                            hd.text(
+                                name,
+                                font_size="small",
+                                font_color="neutral-900",
+                            )
+                else:
+                    # Outline button — subtle border so inactive filters recede.
+                    with hd.button(
+                        variant="neutral",
+                        size="small",
+                        border="none",
+                        background_color="neutral-50",
+                        padding=(0.2, 0.6, 0.2, 0.6),
+                    ) as btn:
+                        with hd.hbox(gap=0.4, align="center", justify="center"):
+                            hd.image(
+                                src=swatch_svg(color_str, size=10, radius=2),
+                                width=0.65,
+                                height=0.65,
+                            )
+                            hd.text(
+                                name,
+                                font_size="small",
+                                font_color="neutral-600",
+                            )
+
                 if btn.clicked:
                     sel = set(state.active_bins)
                     if is_active:
@@ -632,34 +697,33 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                                     with hd.box(
                                         border_top="1px solid neutral-200",
                                         padding=0,
-                                        line_height="normal"
+                                        line_height="normal",
+                                        align="center",
+                                        justify="center",
+                                        height="100%",
+                                        width="100%",
                                         # overflow="hidden",
                                     ):
-                                        with hd.tooltip(tip, width="100%"):
-                                            with hd.button(
-                                                variant=_cell_variant(avg_z3, is_sel),
+                                        with hd.tooltip(tip, width="100%", distance=20):
+                                            with aligned_button(
+                                                variant=_cell_variant(avg_z3),
                                                 outline=not is_sel,
                                                 width="100%",
                                                 height=_CELL_H,
                                                 padding=(0, 0.2),
-                                                line_height="normal"
-                                                # # align="center",
+                                                line_height="normal",
+                                                align="center",
                                             ) as cell_btn:
-                                                with hd.box(
-                                                    gap=0.15,
-                                                    align="center",
-                                                    justify="center",
-                                                ):
-                                                    hd.text(
-                                                        str(count),
-                                                        font_size="medium",
-                                                        font_weight="bold",
-                                                    )
-                                                    hd.text(
-                                                        display_label,
-                                                        font_size="x-small",
-                                                        text_align="center",
-                                                    )
+                                                hd.text(
+                                                    str(count),
+                                                    font_size="medium",
+                                                    font_weight="bold",
+                                                )
+                                                hd.text(
+                                                    display_label,
+                                                    font_size="x-small",
+                                                    text_align="center",
+                                                )
                                     if cell_btn.clicked:
                                         sel = set(state.active_cells)
                                         if is_sel:
@@ -672,53 +736,29 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                                     # Empty cell — muted coverage map, same
                                     # size as data cells via explicit height.
                                     with hd.box(
-                                        height=_CELL_H,
                                         border_top="1px solid neutral-200",
-                                        padding=(0.25, 0.2),
+                                        padding=(0, 0.2),
                                         align="center",
                                         justify="center",
                                         background_color="neutral-0",
+                                        height="100%",
+                                        width="100%",
                                     ):
-                                        if stimulus != "—":
-                                            if tooltip_text:
-                                                with hd.tooltip(tooltip_text):
-                                                    hd.text(
-                                                        display_label,
-                                                        font_size="x-small",
-                                                        font_color="neutral-200",
-                                                        text_align="center",
-                                                    )
-                                            else:
+                                        if tooltip_text:
+                                            with hd.tooltip(tooltip_text, distance=20):
                                                 hd.text(
                                                     display_label,
                                                     font_size="x-small",
                                                     font_color="neutral-200",
                                                     text_align="center",
                                                 )
-
-    # Active-filter summary chips
-    if active_cells:
-        with hd.hbox(gap=0.75, wrap="wrap", align="center", padding=(0.75, 0, 0, 0)):
-            n = len(active_cells)
-            hd.text(
-                f"Filtered to {n} cell{'s' if n != 1 else ''}:",
-                font_size="small",
-                font_color="neutral-500",
-            )
-            for k in sorted(active_cells):
-                ci, ri = (int(x) for x in k.split(","))
-                label = f"{_DUR_COLS[ci][0]} / {_RATIO_ROWS[ri][0]}"
-                with hd.scope(f"rm_{k}"):
-                    if hd.button(
-                        f"{label}  ×", variant="primary", size="small"
-                    ).clicked:
-                        state.active_cells = tuple(
-                            c for c in state.active_cells if c != k
-                        )
-                        state.page = 0
-            if hd.button("Clear all", variant="neutral", size="small").clicked:
-                state.active_cells = tuple()
-                state.page = 0
+                                        else:
+                                            hd.text(
+                                                display_label,
+                                                font_size="x-small",
+                                                font_color="neutral-200",
+                                                text_align="center",
+                                            )
 
 
 # ---------------------------------------------------------------------------
@@ -817,8 +857,23 @@ def _interval_table(workouts: list[dict], state) -> tuple[int, int]:
                     font_color="neutral-500",
                 )
                 with hd.box(grow=True):
-                    # _structure_key strips the leading "N × " rep count
-                    hd.text(r["_structure_key"], font_size="small")
+                    # _structure_key strips the leading "N × " rep count.
+                    # Clicking it sets a structure filter; click again to clear.
+                    is_struct_active = state.structure_filter == r["_structure_key"]
+                    struct_btn = hd.button(
+                        r["_structure_key"],
+                        variant="text",
+                        size="small",
+                        padding=(0, 0),
+                        font_weight="semibold" if is_struct_active else "normal",
+                        font_color="primary-500" if is_struct_active else "neutral-700",
+                    )
+                    if struct_btn.clicked:
+                        if is_struct_active:
+                            state.structure_filter = None
+                        else:
+                            state.structure_filter = r["_structure_key"]
+                        state.page = 0
                 # Stimulus label (from grid classification)
                 stimulus = r.get("_stimulus", "")
                 with hd.box(width=10):
@@ -934,29 +989,47 @@ def interval_tab() -> None:
         sort_col="date",
         sort_asc=False,
         page=0,
+        structure_filter=None,  # str | None — filter table to this structure key
     )
 
     with hd.box(padding=(2, 2, 2, 2)):
-        # hd.h3(f"Interval Workouts  ({len(all_intervals)})")
+        # Pre-compute non-cell filters so the grid counts stay in sync with
+        # the active pace-zone and structure filters.
+        pre_filtered = _filter_by_bins(all_intervals, set(state.active_bins))
+        if state.structure_filter:
+            pre_filtered = [
+                r for r in pre_filtered if r["_structure_key"] == state.structure_filter
+            ]
 
-        # 2D grid browser (always shows all intervals, unaffected by bin filter)
-        _grid_browser(all_intervals, state)
+        # 2D grid browser — counts reflect pace-zone + structure filters
+        _grid_browser(pre_filtered, state)
 
         hd.divider()
 
         # Pace-zone legend / conjunctive filter
         _zone_filter_legend(state)
 
-        # Apply grid-cell selection, then pace-bin filter
+        # Apply cell filter on top of already pace/structure filtered workouts
         active_cells = frozenset(state.active_cells)
-        cell_filtered = _filter_by_cells(all_intervals, active_cells)
-        filtered = _filter_by_bins(cell_filtered, set(state.active_bins))
+        filtered = _filter_by_cells(pre_filtered, active_cells)
 
         # Clamp page if filter changed total
         total_filtered = len(filtered)
         total_pages = max(1, (total_filtered + _ROWS_PER_PAGE - 1) // _ROWS_PER_PAGE)
         if state.page >= total_pages:
             state.page = max(0, total_pages - 1)
+
+        # Structure filter chip
+        if state.structure_filter:
+            with hd.hbox(gap=0.75, wrap="wrap", align="center", padding=(0.5, 0, 0, 0)):
+                hd.text("Structure:", font_size="small", font_color="neutral-500")
+                if hd.button(
+                    f"{state.structure_filter}  ×",
+                    variant="primary",
+                    size="small",
+                ).clicked:
+                    state.structure_filter = None
+                    state.page = 0
 
         with hd.hbox(align="center", justify="space-between", padding=(0.5, 0)):
             hd.text(
