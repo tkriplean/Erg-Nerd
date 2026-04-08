@@ -379,21 +379,28 @@ def swatch_svg(color: str, size: int = 12, radius: int = 2) -> str:
 
 def aggregate_workouts(
     all_workouts: list,
-    thresholds: Optional[dict],
+    thresholds: Optional[dict] = None,
     machine_filter: Optional[set] = None,
+    *,
+    bin_fn=None,
 ) -> dict:
     """
-    Aggregate meter counts per (week / month / season) × pace bin.
+    Aggregate meter counts per (week / month / season) × bin.
 
     Parameters
     ----------
     all_workouts:
         Full workout list from concept2.get_all_results().
     thresholds:
-        Output of compute_bin_thresholds(); if None, all meters are binned
-        into Slow Aerobic (useful for totals-only display).
+        Output of compute_bin_thresholds(); if None and bin_fn is also None,
+        all meters are binned into Slow Aerobic (useful for totals-only display).
+        Ignored when bin_fn is provided.
     machine_filter:
         If not None, only include workouts whose 'type' field is in this set.
+    bin_fn:
+        Optional callable(workout) → list[float].  When provided, replaces the
+        default ``workout_bin_meters(w, thresholds)`` call, allowing callers to
+        supply an alternate binning strategy (e.g. HR-zone binning).
 
     Returns
     -------
@@ -406,6 +413,10 @@ def aggregate_workouts(
     weeks:   dict = {}
     months:  dict = {}
     seasons: dict = {}
+
+    _effective_bin_fn = bin_fn if bin_fn is not None else (
+        lambda w: workout_bin_meters(w, thresholds)
+    )
 
     def _add(bucket: dict, key: str, bin_idx: int, meters: float) -> None:
         if key not in bucket:
@@ -429,7 +440,7 @@ def aggregate_workouts(
         mo  = _month_key(dt)
         sea = get_season(date_str)
 
-        for bin_idx, meters in enumerate(workout_bin_meters(w, thresholds)):
+        for bin_idx, meters in enumerate(_effective_bin_fn(w)):
             if meters > 0:
                 _add(weeks,   wk,  bin_idx, meters)
                 _add(months,  mo,  bin_idx, meters)

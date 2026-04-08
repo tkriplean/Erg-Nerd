@@ -82,11 +82,11 @@ from components.ranked_formatters import (
 
 # Work duration column boundaries (seconds)
 _DUR_COLS = [
-    ('≤30"', 0, 30),
-    ("30\"–2'", 30, 120),
-    ("2'–4'", 120, 240),
-    ("4'–8'", 240, 480),
-    ("8'–20'", 480, 1200),
+    ('≤ 30"', 0, 30),
+    ("30\" – 2'", 30, 120),
+    ("2' – 4'", 120, 240),
+    ("4' – 8'", 240, 480),
+    ("8' – 20'", 480, 1200),
     ("20'+", 1200, float("inf")),
 ]
 _N_COLS = len(_DUR_COLS)
@@ -94,9 +94,9 @@ _N_COLS = len(_DUR_COLS)
 # Work:rest ratio row boundaries + display label (ratio = rest/work internally)
 _RATIO_ROWS = [
     ("Continuous", "≥ 10 : 1", 0.0, 0.10),
-    ("Short", "3–10 : 1", 0.10, 0.50),
+    ("Short rest", "3–10 : 1", 0.10, 0.50),
     ("Balanced", "≈ 1 : 1", 0.50, 1.50),
-    ("Long", "1 : 2–4", 1.50, 4.00),
+    ("Long rest", "1 : 2–4", 1.50, 4.00),
     ("Very Long", "< 1 : 4", 4.00, float("inf")),
 ]
 _N_ROWS = len(_RATIO_ROWS)
@@ -109,11 +109,18 @@ _STIMULI = [
     # Continuous (<0.10)
     ["—", "Fartlek", "Sustained", "Steady state", "Aerobic base", "LSD"],
     # Short (0.10–0.50)
-    ["—", "Lactic cap.", "VO₂max stress", "Threshold+", "Threshold accum.", "Tempo"],
+    [
+        "—",
+        "Lactic capacity",
+        "VO₂max stress",
+        "Threshold+",
+        "Threshold accum.",
+        "Tempo",
+    ],
     # Balanced (0.50–1.50)
     [
         "Sprint reps",
-        "Anaerobic end.",
+        "Anaerobic endur.",
         "VO₂max (2k)",
         "VO₂max (5k)",
         "Lact. threshold",
@@ -466,7 +473,7 @@ def _zone_filter_legend(state) -> None:
     Swatches use hd.image (data-URI SVG) so raw rgba() values stay out of
     HyperDiv's colour prop system.  Active state in state.active_bins (tuple[int]).
     """
-    is_dark = hd.theme().mode == "dark"
+    is_dark = hd.theme().is_dark
     active_bins: set[int] = set(state.active_bins)
 
     with hd.hbox(gap=1, align="center", padding=(0.5, 0), wrap="wrap"):
@@ -525,19 +532,12 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                 justify="end",
                 padding=(0, 0.5, 0, 0),
             ):
-                with hd.hbox(gap=0.4, align="center"):
-                    hd.icon("arrow-down", font_size="small", font_color="neutral-400")
-                    hd.text(
-                        "Work:rest",
-                        font_size="x-small",
-                        font_color="neutral-400",
-                        font_style="italic",
-                    )
+                pass
             # Horizontal axis label pointing right — spans the 6 data columns
             with hd.hbox(gap=0.4, align="center", grow=True):
                 hd.text(
                     "Work duration",
-                    font_size="x-small",
+                    font_size="small",
                     font_color="neutral-400",
                     font_style="italic",
                 )
@@ -547,8 +547,21 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
         with hd.hbox(gap=0, align="stretch"):
             # Row-labels column
             with hd.box(width=_ROW_LABEL_W, border_right="1px solid neutral-200"):
-                # Spacer aligning with column headers
-                hd.box(height=_HEADER_H)
+                with hd.hbox(
+                    gap=0.4,
+                    align="center",
+                    justify="end",
+                    height=_HEADER_H,
+                    padding=(0.4, 0.6),
+                ):
+                    hd.text(
+                        "Work : rest",
+                        font_size="small",
+                        font_color="neutral-400",
+                        font_style="italic",
+                    )
+                    hd.icon("arrow-down", font_size="small", font_color="neutral-400")
+
                 for ri, (row_label, ratio_range, _, _) in enumerate(_RATIO_ROWS):
                     with hd.scope(f"rl_{ri}"):
                         with hd.box(
@@ -589,7 +602,7 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                                 col_label,
                                 font_size="x-small",
                                 font_weight="bold",
-                                font_color="neutral-500",
+                                font_color="neutral-600",
                                 text_align="center",
                             )
 
@@ -628,7 +641,8 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                                                 outline=not is_sel,
                                                 width="100%",
                                                 height=_CELL_H,
-                                                # padding=(0, 0.2),
+                                                padding=(0, 0.2),
+                                                line_height="normal"
                                                 # # align="center",
                                             ) as cell_btn:
                                                 with hd.box(
@@ -923,7 +937,7 @@ def interval_tab() -> None:
     )
 
     with hd.box(padding=(2, 2, 2, 2)):
-        hd.h3(f"Interval Workouts  ({len(all_intervals)})")
+        # hd.h3(f"Interval Workouts  ({len(all_intervals)})")
 
         # 2D grid browser (always shows all intervals, unaffected by bin filter)
         _grid_browser(all_intervals, state)
@@ -950,12 +964,6 @@ def interval_tab() -> None:
                 font_size="small",
                 font_color="neutral-500",
             )
-            if active_cells or state.active_bins:
-                hd.text(
-                    f"(filtered from {len(all_intervals)} total)",
-                    font_size="small",
-                    font_color="neutral-400",
-                )
 
         total, total_pages = _interval_table(filtered, state)
         _pagination(state, total, total_pages)

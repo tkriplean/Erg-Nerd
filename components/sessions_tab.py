@@ -12,6 +12,7 @@ from components.sessions_chart_builder import sessions_chart
 # Tab entry point
 # ---------------------------------------------------------------------------
 
+
 def sessions_tab() -> None:
     """Top-level component for the Sessions tab."""
 
@@ -46,5 +47,5 @@ def sessions_tab() -> None:
 
     # ── Pace-vs-date scatter + windowed workouts table ────────────────────────
     with hd.box(padding=(2, 2, 2, 2)):
-        hd.h3("Sessions")
+        # hd.h3("Sessions")
         sessions_chart(all_workouts)

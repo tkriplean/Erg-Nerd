@@ -1,5 +1,9 @@
 """
-Chart.js stacked-bar config builder for the volume (meters × pace zone) chart.
+Chart.js stacked-bar config builder for the volume (meters × intensity zone) chart.
+
+Supports both pace-zone mode (default) and HR-zone mode via optional parameters.
+All bin_names / bin_colors / draw_order / z*_bins arguments default to the pace-zone
+values so existing callers require no changes.
 
 Exported:
     build_volume_chart_config() — returns a Chart.js config dict for VolumeChart.
@@ -11,9 +15,16 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Optional
 
-from services.volume_bins import BIN_NAMES, BIN_COLORS, N_BINS
+from services.volume_bins import (
+    BIN_NAMES,
+    BIN_COLORS,
+    N_BINS,
+    Z1_BINS,
+    Z2_BINS,
+    Z3_BINS,
+)
 from services.rowing_utils import get_season
-
+import hyperdiv as hd
 
 # ---------------------------------------------------------------------------
 # Scope → date-range helpers
@@ -145,8 +156,10 @@ def build_volume_chart_config(
     *,
     view: str = "weekly",
     scope: str = "past_year",
-    is_dark: bool = False,
     today: Optional[date] = None,
+    bin_names: Optional[list] = None,
+    bin_colors: Optional[list] = None,
+    draw_order: Optional[list] = None,
 ) -> dict:
     """
     Build a Chart.js stacked bar chart config dict for the volume view.
@@ -159,16 +172,26 @@ def build_volume_chart_config(
         "weekly" | "monthly" | "seasonal"
     scope:
         "this_season" | "past_year" | "past_2_years" | "past_5_years" | "all_time"
-    is_dark:
-        True = dark theme colours.
     today:
         Reference date; defaults to date.today().
+    bin_names:
+        7-element list of bin display names.  Defaults to BIN_NAMES (pace zones).
+    bin_colors:
+        7-element list of (dark_rgba, light_rgba) pairs.  Defaults to BIN_COLORS.
+    draw_order:
+        List of bin indices controlling bottom→top stack order.
+        Defaults to [6, 5, 4, 3, 2, 1, 0].
 
     Returns
     -------
     Chart.js config dict, or {} if there is no data to display.
     """
+    is_dark = hd.theme().is_dark
+
     today = today or date.today()
+    _bin_names = bin_names if bin_names is not None else BIN_NAMES
+    _bin_colors = bin_colors if bin_colors is not None else BIN_COLORS
+    _draw_order = draw_order if draw_order is not None else [6, 5, 4, 3, 2, 1, 0]
 
     if view == "weekly":
         raw_data = aggregated.get("weeks", {})
@@ -194,21 +217,16 @@ def build_volume_chart_config(
 
     # ── Datasets ─────────────────────────────────────────────────────────────
     # Chart.js stacks datasets in array order: first → bottom, last → top.
-    # Desired visual stack (bottom → top):
-    #   Slow Aerobic, Fast Aerobic, Threshold, 5k, 2k, Fast, Rest
-    # That corresponds to bin indices: 6, 5, 4, 3, 2, 1, 0
-    _BIN_DRAW_ORDER = [6, 5, 4, 3, 2, 1, 0]
-
     color_dark_or_light = 0 if is_dark else 1
     datasets = []
-    for bin_i in _BIN_DRAW_ORDER:
+    for bin_i in _draw_order:
         bin_data = [raw_data[k]["bins"][bin_i] for k in keys]
         if sum(bin_data) < 1.0:
             continue
-        color = BIN_COLORS[bin_i][color_dark_or_light]
+        color = _bin_colors[bin_i][color_dark_or_light]
         datasets.append(
             {
-                "label": BIN_NAMES[bin_i],
+                "label": _bin_names[bin_i],
                 "data": [round(v) for v in bin_data],
                 "backgroundColor": color,
                 "borderColor": "rgba(0,0,0,0.12)",
@@ -282,38 +300,33 @@ def build_volume_chart_config(
 # ---------------------------------------------------------------------------
 
 
-def _classify_distribution(bins: list) -> str:
+def _classify_distribution(
+    z1_pct: float,
+    z2_pct: float,
+    z3_pct: float,
+) -> str:
     """
-    Classify a period's training distribution using a 3-zone model:
-      Z1 Easy       = Fast Aerobic (bin 5) + Slow Aerobic (bin 6)
-      Z2 Threshold  = Threshold (bin 4)
-      Z3 Hard       = 5k (bin 3) + 2k (bin 2) + Fast (bin 1)
+    Classify a period's training distribution using precomputed zone percentages.
+
+    Expects z1/z2/z3 as 0–100 floats (percentage of work metres).
 
     Reference literature thresholds (generous for real-world data):
-      Polarized   : Z1 ≥ 65 %, Z3 ≥ 15 %, Z3 > Z2
-      Pyramidal   : Z1 ≥ 65 %, Z2 > Z3,   Z2 ≥ 10 %
-      Threshold   : Z2 ≥ 20 %  (Z1 < 75 %)
+      Polarized     : Z1 ≥ 65 %, Z3 ≥ 15 %, Z3 > Z2
+      Pyramidal     : Z1 ≥ 65 %, Z2 > Z3,   Z2 ≥ 10 %
+      Threshold     : Z2 ≥ 20 %  (Z1 < 75 %)
       High Intensity: Z3 ≥ 35 %
-      Easy / LSD  : Z1 ≥ 90 %, Z2 < 5 %,  Z3 < 5 %
-      Mixed       : does not fit any pattern above
+      Easy / LSD    : Z1 ≥ 90 %, Z2 < 5 %,  Z3 < 5 %
+      Mixed         : does not fit any pattern above
     """
-    work = sum(bins[1:])  # exclude rest (bin 0)
-    if work < 500:
-        return "—"
-
-    z1 = (bins[5] + bins[6]) / work * 100.0
-    z2 = bins[4] / work * 100.0
-    z3 = (bins[1] + bins[2] + bins[3]) / work * 100.0
-
-    if z1 >= 90 and z2 < 5 and z3 < 5:
+    if z1_pct >= 90 and z2_pct < 5 and z3_pct < 5:
         return "Easy / LSD"
-    if z1 >= 65 and z3 >= 15 and z3 > z2:
+    if z1_pct >= 65 and z3_pct >= 15 and z3_pct > z2_pct:
         return "Polarized"
-    if z1 >= 65 and z2 > z3 and z2 >= 10:
+    if z1_pct >= 65 and z2_pct > z3_pct and z2_pct >= 10:
         return "Pyramidal"
-    if z2 >= 20:
+    if z2_pct >= 20:
         return "Threshold"
-    if z3 >= 35:
+    if z3_pct >= 35:
         return "High Intensity"
     return "Mixed"
 
@@ -339,23 +352,55 @@ def get_period_rows(
     view: str,
     scope: str,
     today: Optional[date] = None,
+    *,
+    bin_names: Optional[list] = None,
+    z1_bins: Optional[frozenset] = None,
+    z2_bins: Optional[frozenset] = None,
+    z3_bins: Optional[frozenset] = None,
+    z3a_bins: Optional[frozenset] = None,
+    z3b_bins: Optional[frozenset] = None,
+    no_data_bins: Optional[frozenset] = None,
 ) -> list:
     """
     Return a list of row dicts (newest first) for the distribution table.
 
-    Each dict has:
+    Parameters
+    ----------
+    aggregated, view, scope, today:
+        Same as build_volume_chart_config().
+    bin_names:
+        7-element list of bin display names.  Defaults to BIN_NAMES (pace zones).
+        Currently unused in row output but kept for symmetry / future column headers.
+    z1_bins, z2_bins, z3_bins:
+        frozensets of bin indices that constitute the easy / moderate / hard zones.
+        Default to the pace-zone Z1_BINS, Z2_BINS, Z3_BINS from volume_bins.
+    z3a_bins, z3b_bins:
+        Optional frozensets splitting Z3 into two sub-zones (e.g. Threshold vs Max in
+        HR mode).  When provided, the returned rows include z3a_m/z3a_pct and
+        z3b_m/z3b_pct alongside z3_m/z3_pct.
+    no_data_bins:
+        frozenset of bin indices to exclude from the work denominator when computing
+        zone percentages for the distribution classification.  Use frozenset({6}) in
+        HR mode so "No HR" metres don't dilute the classification fractions.
+
+    Each returned dict has:
         label        — human-readable period (e.g. "Jan 6", "Jan '25", "2025-26")
         total        — formatted total meters (work + rest)
         rest         — formatted rest meters
-        z1_pct       — Z1 easy aerobic % of work meters  (formatted "42%")
-        z2_pct       — Z2 threshold % of work meters
-        z3_pct       — Z3 hard % of work meters
+        z1_pct       — Z1 easy % of classified work meters  (formatted "42%")
+        z2_pct       — Z2 moderate % of classified work meters
+        z3_pct       — Z3 hard % of classified work meters
         z1_m         — formatted Z1 absolute meters
         z2_m         — formatted Z2 absolute meters
         z3_m         — formatted Z3 absolute meters
+        z3a_m/z3a_pct, z3b_m/z3b_pct  — (present only when z3a_bins/z3b_bins given)
         distribution — classification string
     """
     today = today or date.today()
+    _z1 = z1_bins if z1_bins is not None else Z1_BINS
+    _z2 = z2_bins if z2_bins is not None else Z2_BINS
+    _z3 = z3_bins if z3_bins is not None else Z3_BINS
+    _no_data = no_data_bins if no_data_bins is not None else frozenset()
 
     if view == "weekly":
         raw_data = aggregated.get("weeks", {})
@@ -384,22 +429,43 @@ def get_period_rows(
         work = sum(b[1:])
         total = rest + work
 
-        z1 = b[5] + b[6]
-        z2 = b[4]
-        z3 = b[1] + b[2] + b[3]
+        z1_m = sum(b[i] for i in _z1)
+        z2_m = sum(b[i] for i in _z2)
+        z3_m = sum(b[i] for i in _z3)
 
-        rows.append(
-            {
-                "label": label,
-                "total": _fmt_meters(total),
-                "rest": _fmt_meters(rest),
-                "z1_m": _fmt_meters(z1),
-                "z2_m": _fmt_meters(z2),
-                "z3_m": _fmt_meters(z3),
-                "z1_pct": _pct(z1, work),
-                "z2_pct": _pct(z2, work),
-                "z3_pct": _pct(z3, work),
-                "distribution": _classify_distribution(b),
-            }
-        )
+        # For classification: exclude no_data bins (e.g. "No HR") from denominator
+        # so the zone fractions reflect only classified metres.
+        classified_work = sum(b[i] for i in range(1, len(b)) if i not in _no_data)
+        denom = classified_work if classified_work >= 1 else 1.0
+        z1_pct_f = z1_m / denom * 100.0
+        z2_pct_f = z2_m / denom * 100.0
+        z3_pct_f = z3_m / denom * 100.0
+
+        if classified_work < 500:
+            dist = "—"
+        else:
+            dist = _classify_distribution(z1_pct_f, z2_pct_f, z3_pct_f)
+
+        row = {
+            "label": label,
+            "total": _fmt_meters(total),
+            "rest": _fmt_meters(rest),
+            "z1_m": _fmt_meters(z1_m),
+            "z2_m": _fmt_meters(z2_m),
+            "z3_m": _fmt_meters(z3_m),
+            "z1_pct": _pct(z1_m, work),
+            "z2_pct": _pct(z2_m, work),
+            "z3_pct": _pct(z3_m, work),
+            "distribution": dist,
+        }
+
+        if z3a_bins is not None and z3b_bins is not None:
+            z3a_m = sum(b[i] for i in z3a_bins)
+            z3b_m = sum(b[i] for i in z3b_bins)
+            row["z3a_m"] = _fmt_meters(z3a_m)
+            row["z3a_pct"] = _pct(z3a_m, work)
+            row["z3b_m"] = _fmt_meters(z3b_m)
+            row["z3b_pct"] = _pct(z3b_m, work)
+
+        rows.append(row)
     return rows

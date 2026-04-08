@@ -174,7 +174,7 @@ def _dashboard_view() -> None:
                 hd.tab("Volume", font_size="medium")
                 hd.tab("Sessions", font_size="medium")
                 hd.tab("Intervals", font_size="medium")
-                hd.tab("Ranking Events", font_size="medium", active=True)
+                hd.tab("Trials", font_size="medium", active=True)
 
             with hd.box(grow=True):
                 pass
@@ -198,7 +198,7 @@ def _dashboard_view() -> None:
             sessions_tab()
         elif tabs.active == "Intervals":
             interval_tab()
-        elif tabs.active == "Ranking Events":
+        elif tabs.active == "Trials":
             ranked_tab()
         else:
             profile_tab()

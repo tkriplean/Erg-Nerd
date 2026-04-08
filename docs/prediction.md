@@ -1,6 +1,6 @@
 # Performance Prediction — Design & UI Reference
 
-This document covers how performance prediction works in the Ranking Events tab:
+This document covers how performance prediction works in the Trials tab:
 the four prediction models, how they are fit and evaluated, the chart presentation,
 and the prediction table.
 

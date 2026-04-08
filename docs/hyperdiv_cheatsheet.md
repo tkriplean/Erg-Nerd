@@ -158,8 +158,7 @@ hd.image(src="url", width=20, height=15, border_radius="large")
 
 ```python
 theme = hd.theme()
-theme.mode = "dark"                          # or "light"
-theme.set_and_remember_theme_mode("dark")   # persists across sessions
+theme.is_dark # true if we're in dark mode, light if false
 
 # Color tokens: primary, success, warning, danger, neutral, + shades -50 to -900
 # neutral-0 = white, neutral-1000 = black — do NOT use "white" or "black" directly

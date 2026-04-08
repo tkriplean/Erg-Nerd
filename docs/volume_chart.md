@@ -2,7 +2,14 @@
 
 ## Overview
 
-The Volume Chart on the Sessions tab shows how many meters were rowed across time, broken down by the physiological intensity zone each meter was performed at. The goal is to make it easy to understand training load distribution at a glance: how much was easy aerobic base, how much was threshold or race-pace work, and how much was rest between intervals.
+The Volume Chart on the Volume tab shows how many meters were rowed across time, broken down by the physiological intensity zone each meter was performed at. The goal is to make it easy to understand training load distribution at a glance: how much was easy aerobic base, how much was threshold or race-pace work, and how much was rest between intervals.
+
+The chart supports two **zone modes**:
+
+- **Pace mode** (default) — zones derived from personal-best pace thresholds, relative to the user's recent performances.
+- **HR mode** — zones derived from percentage of HRmax, using per-split or per-interval HR data where available.
+
+A **Pace / HR toggle** in the controls row switches between the two modes. Both modes share the same visual language (7-bin stacked bar, same draw order, same distribution table structure).
 
 ---
 
@@ -148,25 +155,25 @@ Distribution badge colours:
 
 ---
 
-## Architecture
+## Architecture (Pace Mode)
 
 ### Service layer (`services/volume_bins.py`)
 
 Pure Python — no HyperDiv, no I/O.
 
-| Function                  | Purpose                                                      |
-|---------------------------|--------------------------------------------------------------|
-| `get_reference_sbs()`     | Best pace at key events within ±365 days                     |
-| `compute_bin_thresholds()`| Build pace cutoffs from ref SBs + log-log fallback            |
-| `classify_pace()`         | Map a pace value → bin index 1–6                             |
-| `aggregate_workouts()`    | Accumulate meters by week/month/season × bin                 |
+| Function                  | Purpose                                                              |
+|---------------------------|----------------------------------------------------------------------|
+| `get_reference_sbs()`     | Best pace at key events within ±365 days                             |
+| `compute_bin_thresholds()`| Build pace cutoffs from ref SBs + log-log fallback                   |
+| `classify_pace()`         | Map a pace value → bin index 1–6                                     |
+| `aggregate_workouts(bin_fn=)` | Accumulate meters by week/month/season × bin; `bin_fn` overrides default binning |
 
 ### Chart builder (`components/volume_chart_builder.py`)
 
 | Function                   | Purpose                                                     |
 |----------------------------|-------------------------------------------------------------|
-| `build_volume_chart_config()`| Chart.js stacked bar config dict                          |
-| `get_period_rows()`         | List of row dicts for the distribution table               |
+| `build_volume_chart_config()`| Chart.js stacked bar config dict (accepts `bin_names`, `bin_colors`, `draw_order`) |
+| `get_period_rows()`         | List of row dicts for the distribution table (accepts `z1/z2/z3_bins`) |
 | `_classify_distribution()` | 3-zone distribution classification (private)               |
 
 ### JS plugin (`components/rowing_chart_assets/volume_chart.js`)
@@ -179,9 +186,121 @@ Registered as `VolumeChart` in the HyperDiv plugin system. Injects:
 
 `VolumeChart(hd.Plugin)` loads the same Chart.js CDN URL as `RowingChart` (deduplicated by HyperDiv) plus the `volume_chart.js` plugin.
 
-### UI entry point (`components/sessions_tab.py`)
+### UI entry point (`components/volume_tab.py`)
 
-`sessions_tab()` orchestrates data loading (full `get_all_results()` with local cache fallback), the volume chart section, the distribution table, and the recent workouts table.
+`volume_tab()` orchestrates data loading, the volume chart section (with zone-mode toggle, optional HR callout), and the distribution table.
+
+---
+
+## HR Mode
+
+> For full HR data handling details (validation, zone model, binning algorithm) see `docs/heartrate.md`.
+> For UI controls and data flow see `docs/volume_tab.md`.
+
+### Enabling HR Mode
+
+Toggle the **Pace / HR** radio buttons in the controls row. The mode is stored in `state.zone_mode` ("pace" | "hr").
+
+### Zone Definitions (% of HRmax)
+
+| Bin | Name          | HRmax %      | Colour         |
+|-----|---------------|--------------|----------------|
+| 0   | Rest          | (rest metres)| Grey           |
+| 1   | Z5 Max        | > 90 %       | Red            |
+| 2   | Z4 Threshold  | 80–90 %      | Orange         |
+| 3   | Z3 Tempo      | 70–80 %      | Yellow/green   |
+| 4   | Z2 Aerobic    | 60–70 %      | Blue           |
+| 5   | Z1 Recovery   | < 60 %       | Light blue     |
+| 6   | No HR         | (no valid HR) | Neutral grey  |
+
+Draw order (bottom → top): `[6, 5, 4, 3, 2, 1, 0]` — No HR at the visual bottom, Z5 near the top, Rest as a thin cap.
+
+### Resolution Priority
+
+For each workout, bin assignment uses the highest-resolution HR data available:
+
+1. **Per-split HR** (`workout.splits[].heart_rate.average`) — each split's metres are classified by its own average HR. Splits without valid HR → bin 6 (No HR).
+2. **Per-interval HR** (`workout.intervals[].heart_rate.average`) — each work interval classified by its HR; explicit rest intervals (`type == "rest"`) → bin 0 (Rest). Intervals without valid HR → bin 6.
+3. **Top-level HR** (`workout.heart_rate.average`) — all work metres go into one HR zone bin.
+4. **No HR anywhere** → all metres → bin 6 (No HR).
+
+Interval rest metres always go to bin 0 regardless of HR data.
+
+### Max HR
+
+Max HR is required to compute zone percentages. Resolution order:
+
+1. **Explicit profile value** (`max_heart_rate` in `.profile.json`) — wins over any estimate.
+2. **Estimated from data** — 98th percentile of all valid HR readings across all workouts (top-level + per-split + per-interval). Requires at least 10 valid readings; returns `None` otherwise.
+
+The HR mode callout (shown below the controls row when HR mode is active) displays the current max HR with its source note and an inline edit field that saves to `.profile.json` via `save_profile()`.
+
+If no max HR can be determined, the chart and table are suppressed and only the edit prompt is shown.
+
+### Outlier / Validation Rules (`is_valid_hr`)
+
+| Rule | Condition | Result |
+|---|---|---|
+| Missing / zero | `hr is None` or `hr ≤ 0` | Invalid |
+| Physiologically impossible | `hr < 40` or `hr > 220` | Invalid |
+| Artifact above max | `hr > max_hr × 1.05` | Invalid |
+
+Invalid readings are treated as No HR (bin 6) rather than causing errors.
+
+### HR Coverage
+
+The callout line shows "HR data in N of M workouts." A workout is counted as having HR if its top-level `heart_rate.average` is valid. Per-split / per-interval HR is not checked here — top-level presence is the cheapest reliable signal.
+
+### Distribution Table in HR Mode
+
+HR mode uses a 5-zone model exposed as 4 data columns (Z3 is split into two):
+
+| Column header | HR bins | Description |
+|---|---|---|
+| Easy (<70%) | bins 4, 5 | Z2 Aerobic + Z1 Recovery |
+| Tempo (70–80%) | bin 3 | Z3 Tempo |
+| Threshold (80–90%) | bin 2 | Z4 Threshold |
+| Max (90%+) | bin 1 | Z5 Max |
+
+A **Distribution** column is included. Classification uses the same thresholds as pace mode (Polarized, Pyramidal, etc.) but the percentages are computed over HR-classified metres only — the "No HR" bin (bin 6) is excluded from the denominator so that unmonitored sessions don't dilute zone fractions. Periods with fewer than 500 HR-classified metres receive "—".
+
+---
+
+## Architecture
+
+### Service layer
+
+| File | Key functions |
+|---|---|
+| `services/volume_bins.py` | `get_reference_sbs()`, `compute_bin_thresholds()`, `aggregate_workouts(bin_fn=)` |
+| `services/heartrate_utils.py` | `is_valid_hr()`, `resolve_max_hr()`, `hr_zone_idx()`, `workout_hr_meters()`, `hr_coverage()` |
+
+`aggregate_workouts()` accepts a `bin_fn` keyword argument. When provided, it replaces the default `workout_bin_meters(w, thresholds)` call, allowing HR-mode binning without any other code changes. The call from the volume tab in HR mode is:
+
+```python
+aggregate_workouts(
+    all_workouts,
+    machine_filter=machine_filter,
+    bin_fn=lambda w: workout_hr_meters(w, max_hr),
+)
+```
+
+### Chart builder (`components/volume_chart_builder.py`)
+
+Both exported functions accept optional override arguments so the same code serves pace and HR modes:
+
+```python
+build_volume_chart_config(aggregated, ..., bin_names=None, bin_colors=None, draw_order=None)
+
+get_period_rows(
+    aggregated, ...,
+    z1_bins=None, z2_bins=None, z3_bins=None,
+    z3a_bins=None, z3b_bins=None,   # split Z3 into two sub-columns
+    no_data_bins=None,               # exclude from classification denominator
+)
+```
+
+All defaults preserve pace-mode behavior — no existing callers need to change.
 
 ---
 
@@ -192,3 +311,4 @@ Registered as `VolumeChart` in the HyperDiv plugin system. Injects:
 - **Per-sport breakdown** — show rower vs. skierg bars side by side rather than merged.
 - **Acute:Chronic Workload Ratio (ACWR)** — 7-day rolling / 28-day rolling total meters ratio as an injury-risk indicator.
 - **Export** — CSV export of the distribution table.
+- **HR mode refinements** — intra-workout HR dropout detection; pace–HR mismatch flagging; per-split HR visualisation.
