@@ -250,7 +250,16 @@ def main() -> None:
         _login_view()
 
 
+_PORT = int(os.environ.get("HD_PORT", 8888))
+
 hd.run(
     main,
-    index_page=hd.index_page(title="Erg Nerd", favicon="/assets/nerdemoji.png"),
+    index_page=hd.index_page(
+        title="Erg Nerd",
+        description="Personal Concept2 rowing analytics — performance charts, fitness level predictions, and workout history.",
+        keywords=["rowing", "Concept2", "erg", "performance", "analytics", "training"],
+        url=f"http://localhost:{_PORT}",
+        image=f"http://localhost:{_PORT}/assets/static_logo.png",
+        favicon="/assets/nerdemoji.png",
+    ),
 )
