@@ -150,6 +150,22 @@ def _login_view() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Tab routing
+# ---------------------------------------------------------------------------
+
+# Maps tab name → URL path and back.  "/" falls back to the default tab.
+_TAB_ROUTES: dict[str, str] = {
+    "Profile": "/profile",
+    "Volume": "/volume",
+    "Sessions": "/sessions",
+    "Intervals": "/intervals",
+    "Trials": "/trials",
+}
+_ROUTE_TABS: dict[str, str] = {v: k for k, v in _TAB_ROUTES.items()}
+_DEFAULT_TAB = "Trials"
+
+
+# ---------------------------------------------------------------------------
 # Dashboard view
 # ---------------------------------------------------------------------------
 
@@ -164,17 +180,22 @@ def _dashboard_view() -> None:
     user_task.run(fetch_user)
 
     _theme = hd.theme()
+    loc = hd.location()
 
-    # Tabs
+    # Derive active tab from the current URL; unknown paths fall back to default.
+    current_tab = _ROUTE_TABS.get(loc.path, _DEFAULT_TAB)
+
     with hd.box(padding=2, gap=1, padding_top=0):
         with hd.hbox(gap=2, align="end"):
             rowing_animation(width=10, theme="dark" if _theme.is_dark else "light")
             with hd.tab_group() as tabs:
-                hd.tab("Profile", font_size="medium")
-                hd.tab("Volume", font_size="medium")
-                hd.tab("Sessions", font_size="medium")
-                hd.tab("Intervals", font_size="medium")
-                hd.tab("Trials", font_size="medium", active=True)
+                for tab_name in _TAB_ROUTES:
+                    with hd.scope(tab_name):
+                        hd.tab(
+                            tab_name,
+                            font_size="medium",
+                            active=(tab_name == current_tab),
+                        )
 
             with hd.box(grow=True):
                 pass
@@ -183,22 +204,31 @@ def _dashboard_view() -> None:
                 with hd.hbox(gap=1, align="center"):
                     if user_task.done and user_task.result:
                         user = user_task.result
-                        name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or user.get(
+                        display_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or user.get(
                             "username", ""
                         )
-                        hd.text(name, font_color="neutral-400", font_size="small")
+                        hd.text(
+                            display_name, font_color="neutral-400", font_size="small"
+                        )
 
                     if hd.button("Disconnect", variant="neutral", size="small").clicked:
                         clear_token()
-                        hd.location().go(path="/")
+                        loc.go(path="/")
 
-        if tabs.active == "Volume":
+        # When the user clicks a tab, push its URL and render the new content
+        # immediately in the same pass (avoids a one-frame flicker).
+        proper_loc = _TAB_ROUTES.get(tabs.active, f"/{tabs.active.lower()}")
+        if proper_loc != loc.path:
+            current_tab = tabs.active
+            loc.go(proper_loc)
+
+        if current_tab == "Volume":
             volume_tab()
-        elif tabs.active == "Sessions":
+        elif current_tab == "Sessions":
             sessions_tab()
-        elif tabs.active == "Intervals":
+        elif current_tab == "Intervals":
             interval_tab()
-        elif tabs.active == "Trials":
+        elif current_tab == "Trials":
             ranked_tab()
         else:
             profile_tab()
