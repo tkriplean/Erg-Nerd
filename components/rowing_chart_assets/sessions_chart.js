@@ -538,8 +538,6 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
               label(context) {
                 const raw = context.raw;
 
-                console.log("tooltip!", raw)
-
                 if (raw.is_ivl) {
                   const lines = [];
 

@@ -18,7 +18,7 @@ HR mode details:
   - Max HR is read from .profile.json (explicit) or estimated at the 98th
     percentile of all valid HR readings (is_estimated=True).
   - An inline callout below the controls row shows the active max HR and
-    allows in-situ editing which persists to .profile.json via save_profile().
+    allows in-situ editing which persists to browser localStorage via profile key.
   - If no max HR can be determined, the chart is replaced by a prompt to
     enter max HR manually.
   - Coverage line shows how many workouts have HR data.
@@ -28,7 +28,9 @@ from datetime import date
 
 import hyperdiv as hd
 
-from services.concept2 import get_client, load_local_workouts
+import json
+
+from services.rowing_utils import compress_workouts, decompress_workouts
 from services.volume_bins import (
     get_reference_sbs,
     compute_bin_thresholds,
@@ -46,7 +48,7 @@ from services.heartrate_utils import (
     HR_Z3_BINS,
     is_valid_hr,
 )
-from services.rowinglevel import load_profile, save_profile
+from services.rowinglevel import _PROFILE_DEFAULTS
 from components.volume_chart_builder import build_volume_chart_config, get_period_rows
 from components.volume_chart import VolumeChart
 
@@ -176,7 +178,7 @@ def _distribution_table(rows: list, view: str, zone_mode: str = "pace") -> None:
 # ---------------------------------------------------------------------------
 
 
-def _hr_callout(all_workouts: list) -> tuple:
+def _hr_callout(all_workouts: list, profile: dict) -> tuple:
     """
     Render the HR mode info bar.  Returns (max_hr, ok) where ok=False means
     there is no usable max HR and the chart should be suppressed.
@@ -187,7 +189,6 @@ def _hr_callout(all_workouts: list) -> tuple:
         differs from the stored max HR.
       • HR coverage: "HR data in N of M workouts."
     """
-    profile = load_profile()
     max_hr, is_estimated = resolve_max_hr(profile, all_workouts)
     with_hr, total = hr_coverage(all_workouts)
 
@@ -219,7 +220,10 @@ def _hr_callout(all_workouts: list) -> tuple:
                     try:
                         new_val = int(hr_input.value)
                         if is_valid_hr(new_val):
-                            save_profile({**profile, "max_heart_rate": new_val})
+                            hd.local_storage.set_item(
+                                "profile",
+                                json.dumps({**profile, "max_heart_rate": new_val}),
+                            )
                             max_hr = new_val
                             is_estimated = False
                     except ValueError:
@@ -235,7 +239,7 @@ def _hr_callout(all_workouts: list) -> tuple:
     return max_hr, max_hr is not None
 
 
-def _volume_section(all_workouts: list) -> None:
+def _volume_section(all_workouts: list, profile: dict) -> None:
     """Render the volume controls + stacked bar chart."""
 
     # Per-view scope state so switching views doesn't reset each other's scope.
@@ -310,7 +314,7 @@ def _volume_section(all_workouts: list) -> None:
     max_hr = None
     hr_ok = True
     if state.zone_mode == "hr":
-        max_hr, hr_ok = _hr_callout(all_workouts)
+        max_hr, hr_ok = _hr_callout(all_workouts, profile)
 
     # ── Compute chart data ────────────────────────────────────────────────────
     machine_filter = None if state.machine == "All" else {state.machine}
@@ -379,21 +383,41 @@ def _volume_section(all_workouts: list) -> None:
 # ---------------------------------------------------------------------------
 
 
-def volume_tab() -> None:
+def volume_tab(client, user_id: str) -> None:
     """Top-level component for the Volume tab."""
 
+    sync_state = hd.state(written=False, initial_workouts=None, initial_loaded=False)
+
+    # Step 1: one-time load of workouts from localStorage
+    if not sync_state.initial_loaded:
+        ls_wkts = hd.local_storage.get_item("workouts")
+        if not ls_wkts.done:
+            with hd.box(align="center", padding=4):
+                hd.spinner()
+            return
+        sync_state.initial_workouts = decompress_workouts(ls_wkts.result) if ls_wkts.result else {}
+        sync_state.initial_loaded = True
+
+    # Step 2: load profile from localStorage
+    ls_profile = hd.local_storage.get_item("profile")
+    if not ls_profile.done:
+        with hd.box(align="center", padding=4):
+            hd.spinner()
+        return
+    profile = {**_PROFILE_DEFAULTS}
+    if ls_profile.result:
+        try:
+            profile = {**_PROFILE_DEFAULTS, **json.loads(ls_profile.result)}
+        except Exception:
+            pass
+
+    # Step 3: background sync with API
     task = hd.task()
 
-    def _fetch():
-        client = get_client()
-        if client is None:
-            local = load_local_workouts()
-            workouts = list(local.values())
-            workouts.sort(key=lambda r: r.get("date", ""), reverse=True)
-            return workouts
-        return client.get_all_results()
+    def _fetch(client, initial):
+        return client.get_all_results(initial)
 
-    task.run(_fetch)
+    task.run(_fetch, client, sync_state.initial_workouts)
 
     if task.running:
         with hd.box(align="center", padding=4):
@@ -404,7 +428,12 @@ def volume_tab() -> None:
         hd.alert(f"Error loading workouts: {task.error}", variant="danger", opened=True)
         return
 
-    all_workouts = task.result or []
+    workouts_dict, all_workouts = task.result
+
+    # Step 4: write updated workouts back to localStorage (once per sync)
+    if not sync_state.written:
+        hd.local_storage.set_item("workouts", compress_workouts(workouts_dict))
+        sync_state.written = True
 
     if not all_workouts:
         with hd.box(padding=4, align="center"):
@@ -412,4 +441,4 @@ def volume_tab() -> None:
         return
 
     with hd.box(padding=(2, 2, 2, 2)):
-        _volume_section(all_workouts)
+        _volume_section(all_workouts, profile)

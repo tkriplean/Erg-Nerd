@@ -112,10 +112,10 @@ import time
 from datetime import date, timedelta
 import hyperdiv as hd
 
-from services.concept2 import get_client
 from services.rowinglevel import (
+    _PROFILE_DEFAULTS,
+    age_from_dob,
     fetch_all_pb_predictions,
-    load_profile,
     profile_complete,
 )
 from services.rowing_utils import (
@@ -131,6 +131,8 @@ from services.rowing_utils import (
     apply_best_only,
     apply_season_best_only,
     compute_duration_s,
+    compress_workouts,
+    decompress_workouts,
 )
 from services.critical_power_model import fit_critical_power
 from components.performance_chart import PerformanceChart
@@ -177,7 +179,7 @@ def _profile_hash(profile: dict) -> str:
     """Short hash of profile fields that affect RowingLevel predictions."""
     key = (
         profile.get("gender", ""),
-        profile.get("age", 0),
+        age_from_dob(profile.get("dob", "")),
         profile.get("weight", 0.0),
         profile.get("weight_unit", "kg"),
     )
@@ -585,7 +587,7 @@ def _chart_section(
             else:
                 wt_str = f"{profile['weight']} {profile['weight_unit']}"
                 hd.text(
-                    f"Profile: {profile['gender']}, age {profile['age']}, {wt_str}"
+                    f"Profile: {profile['gender']}, age {age_from_dob(profile.get('dob', ''))}, {wt_str}"
                     " — edit in the Profile tab",
                     font_color="neutral-500",
                     font_size="small",
@@ -881,7 +883,7 @@ def _prediction_table(state, pred_rows: list, selected_dists: set, selected_time
 # ---------------------------------------------------------------------------
 
 
-def ranked_tab() -> None:
+def ranked_tab(client, user_id: str) -> None:
     """
     Top-level entry point for the Performance tab.
     Fetches data, computes all derived state, then calls sub-components.
@@ -916,24 +918,50 @@ def ranked_tab() -> None:
 
     is_dark = hd.theme().is_dark
 
+    # ---- one-time load from localStorage ----
+    sync_state = hd.state(written=False, initial_workouts=None, initial_loaded=False)
+    if not sync_state.initial_loaded:
+        ls_wkts = hd.local_storage.get_item("workouts")
+        if not ls_wkts.done:
+            with hd.box(align="center", padding=4):
+                hd.spinner()
+            return
+        sync_state.initial_workouts = decompress_workouts(ls_wkts.result) if ls_wkts.result else {}
+        sync_state.initial_loaded = True
+
+    # ---- profile from localStorage ----
+    ls_profile = hd.local_storage.get_item("profile")
+    if not ls_profile.done:
+        with hd.box(align="center", padding=4):
+            hd.spinner()
+        return
+    profile = {**_PROFILE_DEFAULTS}
+    if ls_profile.result:
+        try:
+            profile = {**_PROFILE_DEFAULTS, **json.loads(ls_profile.result)}
+        except Exception:
+            pass
+
     # ---- fetch ----
     progress = hd.state(pages=0, total=0)
     results_task = hd.task()
 
-    def fetch_all(progress):
-        client = get_client()
-        if not client:
-            return []
+    def fetch_all(client, initial, progress):
         def on_progress(pages_fetched, workouts_cached):
             progress.pages = pages_fetched
             progress.total = workouts_cached
-        return client.get_all_results(on_progress=on_progress)
+        return client.get_all_results(initial, on_progress=on_progress)
 
-    results_task.run(fetch_all, progress)
+    results_task.run(fetch_all, client, sync_state.initial_workouts, progress)
 
     # ---- base set + quality filters ----
     if results_task.done and not results_task.error:
-        all_ranked = [r for r in (results_task.result or []) if is_ranked_noninterval(r)]
+        workouts_dict, sorted_workouts = results_task.result
+        # Write updated workouts to localStorage (once per sync)
+        if not sync_state.written:
+            hd.local_storage.set_item("workouts", compress_workouts(workouts_dict))
+            sync_state.written = True
+        all_ranked = [r for r in sorted_workouts if is_ranked_noninterval(r)]
         all_ranked = apply_quality_filters(all_ranked, selected_dists=set(), selected_times=set(), excluded_seasons=set())
         all_ranked_raw = list(all_ranked)
         all_seasons = seasons_from(all_ranked)
@@ -1051,7 +1079,6 @@ def ranked_tab() -> None:
     _cp_params = state.cp_fit_result
 
     # ---- RowingLevel scrape (runs at ranked_tab scope, result passed down) ----
-    profile = load_profile()
     rl_task = None
     rl_predictions: dict = {}
     if _at_today and profile_complete(profile):
@@ -1077,7 +1104,7 @@ def ranked_tab() -> None:
             rl_task = hd.task()
             def _do_scrape(gender, current_age, wkg, lbest, lbest_anchor, lbest_dates):
                 return fetch_all_pb_predictions([], lbest, lbest_anchor, gender, current_age, wkg, lbest_dates=lbest_dates)
-            rl_task.run(_do_scrape, profile["gender"], profile["age"], weight_kg, _lbest, _lbest_anchor, _lbest_dates)
+            rl_task.run(_do_scrape, profile["gender"], age_from_dob(profile.get("dob", "")), weight_kg, _lbest, _lbest_anchor, _lbest_dates)
         if rl_task.done and rl_task.result:
             rl_predictions = rl_task.result
 

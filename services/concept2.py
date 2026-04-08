@@ -4,14 +4,22 @@ Concept2 Logbook API — auth and client module.
 OAuth flow:
   1. Call get_authorization_url() to get the Concept2 auth page URL.
   2. User authorizes → Concept2 redirects to localhost/oauth/callback?code=...
-  3. Call exchange_code(code) to swap the code for tokens; tokens are saved to disk.
-  4. Call get_client() to get a ready-to-use Concept2Client (handles refresh automatically).
+  3. Call exchange_code(code) to get the token dict (no disk save).
+  4. Call client.get_user() to get the Concept2 numeric user ID.
+  5. Call save_token(token_data, user_id) to persist the token server-side.
+  6. Call get_client(user_id) on subsequent visits for a ready-to-use client.
 
-Workout history caching:
-  get_all_results() uses a local JSON file (.workouts.json) keyed by workout ID.
-  It fetches API pages from newest to oldest, stops as soon as an overlap with the
-  local cache is found, and rate-limits requests between pages. This means the
-  initial run fetches everything, and subsequent runs only fetch the new pages.
+Token storage:
+  Each user's token is stored in a separate file keyed by Concept2 user ID:
+    .concept2_token_{user_id}.json
+  Token refresh is handled automatically and saves back to the same user file.
+
+Workout caching:
+  Workouts are stored in the browser's localStorage (not on disk).
+  get_all_results(initial_workouts) accepts the pre-loaded workouts dict
+  (provided by the caller from localStorage), syncs new pages from the API,
+  and returns (updated_workouts_dict, sorted_list). The caller writes the
+  dict back to localStorage.
 
 Register your app at: https://log.concept2.com/developers
 Set CONCEPT2_CLIENT_ID and CONCEPT2_CLIENT_SECRET in your .env file.
@@ -53,17 +61,10 @@ def _client_secret() -> str:
 
 def _get_server_url() -> str:
     port = os.environ.get("HD_PORT", "8888")
-    return os.environ.get("server_url", "http://localhost:{port}")
+    return os.environ.get("server_url", f"http://localhost:{port}")
 
 
 _ROOT = os.path.join(os.path.dirname(__file__), "..")
-
-# OAuth token — contains access + refresh tokens.
-_TOKEN_FILE = os.path.join(_ROOT, ".concept2_token.json")
-
-# Persistent workout history cache — dict of {str(id): result_dict}.
-# All workouts are stored here (including intervals). Dashboards filter as needed.
-_WORKOUTS_FILE = os.path.join(_ROOT, ".workouts.json")
 
 # Short-lived response cache for lightweight calls (user profile, single pages).
 _CACHE_DIR = os.path.join(_ROOT, ".cache")
@@ -114,31 +115,36 @@ def parse_callback_query(query_args: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Token persistence
+# Token persistence — server-side, keyed by Concept2 user ID
 # ---------------------------------------------------------------------------
 
 
-def load_token() -> Optional[dict]:
-    """Load cached OAuth token from disk. Returns None if absent or corrupt."""
+def _token_path(user_id: str) -> str:
+    """Return the path to the token file for the given user ID."""
+    return os.path.join(_ROOT, f".concept2_token_{user_id}.json")
+
+
+def load_token(user_id: str) -> Optional[dict]:
+    """Load cached OAuth token from disk for the given user. Returns None if absent or corrupt."""
     try:
-        with open(_TOKEN_FILE) as f:
+        with open(_token_path(user_id)) as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return None
 
 
-def save_token(token_data: dict) -> None:
-    """Persist token (with a saved_at timestamp) to disk."""
+def save_token(token_data: dict, user_id: str) -> None:
+    """Persist token (with a saved_at timestamp) to the user-specific file on disk."""
     token_data = dict(token_data)
     token_data["saved_at"] = time.time()
-    with open(_TOKEN_FILE, "w") as f:
+    with open(_token_path(user_id), "w") as f:
         json.dump(token_data, f, indent=2)
 
 
-def clear_token() -> None:
-    """Delete the saved token (triggers re-authentication on next run)."""
+def clear_token(user_id: str) -> None:
+    """Delete the saved token for this user (triggers re-authentication on next run)."""
     try:
-        os.remove(_TOKEN_FILE)
+        os.remove(_token_path(user_id))
     except FileNotFoundError:
         pass
 
@@ -158,7 +164,8 @@ def is_token_expired(token_data: dict) -> bool:
 def exchange_code(code: str) -> dict:
     """
     Exchange an authorization code for access + refresh tokens.
-    Saves the token to disk and returns the token dict.
+    Returns the token dict without saving to disk — the caller must call
+    save_token(token_data, user_id) after obtaining the user ID.
     """
     response = httpx.post(
         _TOKEN_URL,
@@ -171,14 +178,13 @@ def exchange_code(code: str) -> dict:
         },
     )
     response.raise_for_status()
-    token_data = response.json()
-    save_token(token_data)
-    return token_data
+    return response.json()
 
 
-def _refresh_token(token_data: dict) -> Optional[dict]:
+def _refresh_token(token_data: dict, user_id: str) -> Optional[dict]:
     """
     Use the stored refresh token to obtain a new access token.
+    Saves the refreshed token to the user-specific file on success.
     Returns None (and clears stored token) if the refresh is rejected,
     so the caller can fall back to showing the login screen.
     """
@@ -198,55 +204,24 @@ def _refresh_token(token_data: dict) -> Optional[dict]:
             f"[concept2] Token refresh failed ({exc.response.status_code}) — "
             "clearing stored token, re-authentication required."
         )
-        clear_token()
+        clear_token(user_id)
         return None
     new_token = response.json()
-    save_token(new_token)
+    save_token(new_token, user_id)
     return new_token
 
 
-def get_valid_token() -> Optional[dict]:
+def get_valid_token(user_id: str) -> Optional[dict]:
     """
-    Return a valid token dict, refreshing automatically if expired.
+    Return a valid token dict for the given user, refreshing automatically if expired.
     Returns None if no token is stored or the refresh fails.
     """
-    token_data = load_token()
+    token_data = load_token(user_id)
     if token_data is None:
         return None
     if is_token_expired(token_data):
-        token_data = _refresh_token(token_data)
+        token_data = _refresh_token(token_data, user_id)
     return token_data
-
-
-# ---------------------------------------------------------------------------
-# Persistent workout history cache
-# ---------------------------------------------------------------------------
-
-
-def load_local_workouts() -> dict:
-    """
-    Load the persistent workout cache from disk.
-    Returns a dict of {str(workout_id): result_dict}.
-    """
-    try:
-        with open(_WORKOUTS_FILE) as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-
-
-def save_local_workouts(workouts: dict) -> None:
-    """Write the workout dict to disk."""
-    with open(_WORKOUTS_FILE, "w") as f:
-        json.dump(workouts, f)
-
-
-def clear_local_workouts() -> None:
-    """Delete the local workout cache (forces a full re-fetch on next call)."""
-    try:
-        os.remove(_WORKOUTS_FILE)
-    except FileNotFoundError:
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -294,15 +269,16 @@ class Concept2Client:
     Authenticated client for the Concept2 Logbook REST API.
 
     Usage:
-        client = get_client()
+        client = get_client(user_id)
         if client is None:
             # user needs to authenticate
             ...
         user = client.get_user()
-        results = client.get_all_results()
+        workouts_dict, sorted_list = client.get_all_results(initial_workouts)
     """
 
-    def __init__(self, access_token: str):
+    def __init__(self, access_token: str, user_id: str = ""):
+        self._user_id = user_id
         self._http = httpx.Client(
             base_url=API_BASE,
             headers={
@@ -345,6 +321,9 @@ class Concept2Client:
         """
         Return the authenticated user's profile (cached for 5 minutes).
 
+        The cache is keyed per user so simultaneous sessions stay isolated.
+        Email is scrubbed before writing to disk.
+
         Response shape:
             {
               "data": {
@@ -352,16 +331,29 @@ class Concept2Client:
                 "username": "...",
                 "first_name": "...",
                 "last_name": "...",
-                "email": "...",
                 "gender": "M" | "F",
                 "dob": "YYYY-MM-DD",
-                "weight": <decigrams>,
-                "weight_class": "H" | "L",
+                "weight": <decagrams — divide by 100 for kg>,
+                "max_heart_rate": <bpm or None>,
                 ...
               }
             }
         """
-        return self._get("/users/me", cache_key="users_me")
+        cache_key = f"users_me_{self._user_id}" if self._user_id else "users_me"
+        cached = _read_cache(cache_key)
+        if cached is not None:
+            return cached
+
+        response = self._http.get("/users/me")
+        response.raise_for_status()
+        data = response.json()
+
+        # Scrub email before persisting to disk
+        if isinstance(data.get("data"), dict) and "email" in data["data"]:
+            data = {**data, "data": {k: v for k, v in data["data"].items() if k != "email"}}
+
+        _write_cache(cache_key, data)
+        return data
 
     # ------------------------------------------------------------------
     # Results — single page
@@ -396,39 +388,43 @@ class Concept2Client:
         return self._get("/users/me/results", params=params, cache_key=cache_key)
 
     # ------------------------------------------------------------------
-    # Results — full history with smart local cache
+    # Results — full history with incremental sync
     # ------------------------------------------------------------------
 
-    def get_all_results(self, on_progress=None) -> list:
+    def get_all_results(
+        self,
+        initial_workouts: dict,
+        on_progress=None,
+    ) -> tuple:
         """
-        Load the full workout history using a persistent local cache and
-        a smart incremental API sync.
+        Sync the full workout history against the Concept2 API.
+
+        Takes the caller-provided initial workout dict (loaded from browser
+        localStorage) and fetches any new pages from the API. Returns a
+        (updated_workouts_dict, sorted_list) tuple. The caller is responsible
+        for writing the dict back to localStorage.
 
         Algorithm:
-          1. Load all locally cached workouts (keyed by workout ID).
+          1. Start from the provided initial_workouts dict.
           2. Fetch the first API page to learn the total number of results.
              If the cache already holds that many workouts, return immediately.
           3. Fetch pages from newest to oldest, waiting _PAGE_DELAY seconds
              between each page after the first (rate limiting).
-          4. For each page, add every unseen workout to the local cache.
-          5. Stop fetching once an overlap is found AND the local cache size
-             matches the reported total — everything older is already stored.
-             (Overlap alone is not enough: a previous partial run may have
-             cached only the first page, causing a false early-stop.)
-          6. Save the updated cache to disk after each page (so a mid-run
-             interruption doesn't lose progress).
-          7. Return all cached workouts sorted newest-first.
+          4. For each page, add every unseen workout to the local dict.
+          5. Stop fetching once an overlap is found AND the dict size matches
+             the reported total — everything older is already stored.
+          6. Return (updated_dict, sorted_list).
 
         On the first run this fetches the entire history page by page.
         On subsequent runs it typically fetches only 1–2 pages.
-        Interval workouts are stored — dashboards filter them as needed.
 
         Args:
+            initial_workouts: dict of {str(id): result_dict} from localStorage.
             on_progress: optional callable(pages_fetched, workouts_cached)
-                         called after each page is processed. Safe to call
-                         from a background thread (e.g. mutate an hd.state).
+                         called after each page. Safe to call from a background
+                         thread (e.g. mutate an hd.state).
         """
-        local = load_local_workouts()  # {str(id): result_dict}
+        local = dict(initial_workouts)  # work on a copy
         print(f"[concept2] Starting sync. Local cache: {len(local)} workouts.")
 
         api_total: Optional[int] = None  # learned from first page's meta
@@ -470,16 +466,10 @@ class Concept2Client:
                 else:
                     local[rid] = result
 
-            # Persist after every page so partial progress is never lost.
-            save_local_workouts(local)
-
             if on_progress:
                 on_progress(page, len(local))
 
             # Only stop on overlap once the cache is complete.
-            # A previous partial run could have cached only page 1, which
-            # would cause every subsequent fetch to overlap immediately and
-            # stop early — leaving the rest of history unfetched.
             cache_complete = api_total is None or len(local) >= api_total
             print(
                 f"[concept2] overlap={overlap_found} | "
@@ -500,7 +490,7 @@ class Concept2Client:
 
         workouts = list(local.values())
         workouts.sort(key=lambda r: r.get("date", ""), reverse=True)
-        return workouts
+        return local, workouts
 
     # ------------------------------------------------------------------
     # Context manager support
@@ -521,13 +511,49 @@ class Concept2Client:
 # ---------------------------------------------------------------------------
 
 
-def get_client() -> Optional[Concept2Client]:
+def get_client(user_id: str) -> Optional[Concept2Client]:
     """
-    Return an authenticated Concept2Client using the stored token,
-    refreshing it automatically if expired.
-    Returns None if the user has not authenticated yet.
+    Return an authenticated Concept2Client for the given user ID, loading
+    their token from .concept2_token_{user_id}.json and refreshing if expired.
+    Returns None if no token file exists for this user.
     """
-    token_data = get_valid_token()
+    token_data = get_valid_token(user_id)
     if token_data is None:
         return None
-    return Concept2Client(token_data["access_token"])
+    return Concept2Client(token_data["access_token"], user_id=user_id)
+
+
+def extract_c2_profile(user_data: dict) -> dict:
+    """
+    Convert a Concept2 /users/me 'data' sub-dict to an Erg Nerd profile dict.
+
+    Weight from Concept2 is stored in decagrams (10 g each); dividing by 100
+    gives kilograms.  The 'email' field is intentionally ignored here.
+
+    weight_class is derived from weight + gender using the standard open/elite
+    lightweight limits (men ≤ 72.5 kg, women ≤ 59.0 kg).
+    """
+    from services.rowinglevel import _LW_LIMIT_KG  # avoid top-level circular import
+
+    gender_map = {"M": "Male", "F": "Female"}
+    weight_raw = user_data.get("weight") or 0
+    weight_kg = round(weight_raw / 100, 1) if weight_raw else 0.0
+    max_hr = user_data.get("max_heart_rate") or None
+    if max_hr is not None and not (50 <= int(max_hr) <= 220):
+        max_hr = None
+
+    gender = gender_map.get(user_data.get("gender", ""), "")
+    limit = _LW_LIMIT_KG.get(gender)
+    if limit is not None and weight_kg > 0:
+        weight_class = "Lightweight" if weight_kg <= limit else "Heavyweight"
+    else:
+        weight_class = ""
+
+    return {
+        "gender": gender,
+        "dob": user_data.get("dob", ""),
+        "weight": weight_kg,
+        "weight_unit": "kg",
+        "weight_class": weight_class,
+        "max_heart_rate": max_hr,
+    }

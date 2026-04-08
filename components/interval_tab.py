@@ -55,8 +55,7 @@ import statistics
 
 import hyperdiv as hd
 
-from services.concept2 import get_client, load_local_workouts
-from services.rowing_utils import INTERVAL_WORKOUT_TYPES
+from services.rowing_utils import compress_workouts, decompress_workouts, INTERVAL_WORKOUT_TYPES
 from services.interval_utils import (
     avg_work_pace_tenths,
     avg_work_spm,
@@ -940,21 +939,28 @@ def _pagination(state, total: int, total_pages: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-def interval_tab() -> None:
+def interval_tab(client, user_id: str) -> None:
     """Top-level HyperDiv component for the Interval Workouts tab."""
 
+    sync_state = hd.state(written=False, initial_workouts=None, initial_loaded=False)
+
+    # Step 1: one-time load of workouts from localStorage
+    if not sync_state.initial_loaded:
+        ls_wkts = hd.local_storage.get_item("workouts")
+        if not ls_wkts.done:
+            with hd.box(align="center", padding=4):
+                hd.spinner()
+            return
+        sync_state.initial_workouts = decompress_workouts(ls_wkts.result) if ls_wkts.result else {}
+        sync_state.initial_loaded = True
+
+    # Step 2: background sync with API
     task = hd.task()
 
-    def _fetch():
-        client = get_client()
-        if client is None:
-            local = load_local_workouts()
-            workouts = list(local.values())
-            workouts.sort(key=lambda r: r.get("date", ""), reverse=True)
-            return workouts
-        return client.get_all_results()
+    def _fetch(client, initial):
+        return client.get_all_results(initial)
 
-    task.run(_fetch)
+    task.run(_fetch, client, sync_state.initial_workouts)
 
     if task.running:
         with hd.box(align="center", padding=4):
@@ -969,7 +975,12 @@ def interval_tab() -> None:
         )
         return
 
-    all_workouts = task.result or []
+    workouts_dict, all_workouts = task.result
+
+    # Step 3: write updated workouts back to localStorage (once per sync)
+    if not sync_state.written:
+        hd.local_storage.set_item("workouts", compress_workouts(workouts_dict))
+        sync_state.written = True
 
     ref_sbs = get_reference_sbs(all_workouts)
     thresholds = compute_bin_thresholds(ref_sbs, all_workouts)
