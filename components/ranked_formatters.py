@@ -17,7 +17,7 @@ from datetime import datetime
 
 import hyperdiv as hd
 
-from services.rowing_utils import compute_pace, compute_watts
+from services.rowing_utils import compute_pace, compute_watts, format_time
 
 # ---------------------------------------------------------------------------
 # Machine type labels
@@ -107,7 +107,7 @@ def result_table(results: list, *, paginate: bool = True) -> None:
     if len(types) > 1:
         cols["Type"] = tuple(_machine_label(r.get("type", "")) for r in results)
     cols["Distance"] = tuple(_fmt_distance(r.get("distance")) for r in results)
-    cols["Time"] = tuple(r.get("time_formatted", "—") for r in results)
+    cols["Time"] = tuple(r.get("time_formatted") or (format_time(r["time"]) if r.get("time") else "—") for r in results)
     cols["Pace /500m"] = tuple(fmt_split(_pace_tenths(r)) for r in results)
     cols["Watts"] = tuple(_fmt_watts(r) for r in results)
     cols["Drag Factor"] = tuple(str(r.get("drag_factor") or "—") for r in results)

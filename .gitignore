@@ -186,6 +186,7 @@ references/
 # Concept2 local data (contain secrets / personal data, never commit)
 .concept2_token*
 .rowinglevel_cache.json
+workouts_example.json
 
 .cache/
 

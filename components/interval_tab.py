@@ -55,7 +55,7 @@ import statistics
 
 import hyperdiv as hd
 
-from services.rowing_utils import compress_workouts, decompress_workouts, INTERVAL_WORKOUT_TYPES
+from services.rowing_utils import compress_workouts, decompress_workouts, format_time, INTERVAL_WORKOUT_TYPES
 from services.interval_utils import (
     avg_work_pace_tenths,
     avg_work_spm,
@@ -895,7 +895,7 @@ def _interval_table(workouts: list[dict], state) -> tuple[int, int]:
                     font_size="small",
                 )
                 hd.text(
-                    r.get("time_formatted", "—"),
+                    r.get("time_formatted") or (format_time(r["time"]) if r.get("time") else "—"),
                     width=7,
                     font_size="small",
                     font_color="neutral-500",
