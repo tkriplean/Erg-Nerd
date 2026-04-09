@@ -3,7 +3,6 @@ Ranked Events tab — UI and orchestration for the ranked-events view.
 
 Exported:
   ranked_tab()   — top-level HyperDiv component; call from app.py
-  result_table() — re-exported from ranked_formatters for legacy callers
 
 Helper logic is split across:
   components/ranked_formatters.py    — formatting helpers + result_table
@@ -153,9 +152,6 @@ from components.ranked_chart_builder import (
 )
 from services.ranked_predictions import build_prediction_table_data
 from components.hyperdiv_extensions import radio_group, shadowed_box
-
-# Re-export result_table for any callers that import it from ranked_tab
-__all__ = ["ranked_tab", "result_table"]
 
 
 # ---------------------------------------------------------------------------
@@ -1486,4 +1482,5 @@ def ranked_tab(client, user_id: str) -> None:
     if not display:
         hd.text("No workouts match the selected filters.", font_color="neutral-500")
         return
+
     result_table(display, paginate=False)

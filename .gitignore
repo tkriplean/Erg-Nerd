@@ -189,5 +189,7 @@ references/
 workouts_example.json
 
 .cache/
+.claude/
 
 CLAUDE.md
+

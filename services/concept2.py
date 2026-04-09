@@ -350,7 +350,10 @@ class Concept2Client:
 
         # Scrub email before persisting to disk
         if isinstance(data.get("data"), dict) and "email" in data["data"]:
-            data = {**data, "data": {k: v for k, v in data["data"].items() if k != "email"}}
+            data = {
+                **data,
+                "data": {k: v for k, v in data["data"].items() if k != "email"},
+            }
 
         _write_cache(cache_key, data)
         return data
@@ -491,6 +494,30 @@ class Concept2Client:
         workouts = list(local.values())
         workouts.sort(key=lambda r: r.get("date", ""), reverse=True)
         return local, workouts
+
+    # ------------------------------------------------------------------
+    # Per-workout stroke data
+    # ------------------------------------------------------------------
+
+    def get_strokes(self, user_id: int, result_id: int) -> list:
+        """
+        Fetch the stroke-by-stroke data for a single workout.
+
+        Calls ``GET /api/users/{user_id}/results/{result_id}/strokes``.
+        Returns the ``data`` list directly (one dict per stroke):
+
+            t   — elapsed time (tenths of a second)
+            d   — elapsed distance (decimeters)
+            p   — pace (tenths of sec/500m)
+            spm — strokes per minute
+            hr  — heart rate in bpm (0 when no HR monitor was worn)
+
+        Returns an empty list when the response contains no data.
+        Not cached — fetched on demand each time a session detail view opens.
+        """
+        path = f"/users/{user_id}/results/{result_id}/strokes"
+        results = self._get(path)
+        return results.get("data") or []
 
     # ------------------------------------------------------------------
     # Context manager support

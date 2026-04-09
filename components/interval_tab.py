@@ -831,6 +831,7 @@ def _interval_table(workouts: list[dict], state) -> tuple[int, int]:
         _sort_header("Time", "time", 7, state)
         _sort_header("SPM", "spm", 4, state)
         _sort_header("HR", "hr", 6, state)
+        hd.box(width=2.5)  # view link column
 
     # Data rows
     for i, r in enumerate(page_rows):
@@ -913,6 +914,15 @@ def _interval_table(workouts: list[dict], state) -> tuple[int, int]:
                     width=6,
                     font_size="small",
                     font_color="neutral-500",
+                )
+                hd.link(
+                    "↗",
+                    href=f"/session/{r.get('id')}",
+                    font_size="small",
+                    font_color="neutral-400",
+                    underline=False,
+                    width=2.5,
+                    text_align="center",
                 )
 
     return total, total_pages

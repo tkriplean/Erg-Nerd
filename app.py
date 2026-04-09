@@ -41,8 +41,10 @@ from components.interval_tab import interval_tab
 from components.profile_tab import profile_tab
 from components.ranked_tab import ranked_tab
 from components.rowing_animation import rowing_animation
+from components.session_detail import session_detail
 from components.sessions_tab import sessions_tab
 from components.volume_tab import volume_tab
+from components.workout_sync import workout_sync
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +188,7 @@ _DEFAULT_TAB = "Performance"
 # ---------------------------------------------------------------------------
 
 
-def _dashboard_view(client, user_id: str) -> None:
+def _dashboard_view(client, user_id: str, app_state) -> None:
     user_task = hd.task()
 
     def fetch_user():
@@ -197,50 +199,66 @@ def _dashboard_view(client, user_id: str) -> None:
     _theme = hd.theme()
     loc = hd.location()
 
-    # Derive active tab from the current URL; unknown paths fall back to default.
-    current_tab = _ROUTE_TABS.get(loc.path, _DEFAULT_TAB)
+    # Derive active tab from URL; unknown/session paths fall back to default.
+    in_session = loc.path.startswith("/session/")
+    current_tab = _ROUTE_TABS.get(loc.path, None if in_session else _DEFAULT_TAB)
 
     with hd.box(padding=2, gap=1, padding_top=0):
         with hd.hbox(gap=2, align="end"):
             rowing_animation(width=10, theme="dark" if _theme.is_dark else "light")
-            with hd.tab_group() as tabs:
-                for tab_name in _TAB_ROUTES:
-                    with hd.scope(tab_name):
-                        hd.tab(
+            with hd.nav(direction="horizontal", gap=0, align="end"):
+                for tab_name, path in _TAB_ROUTES.items():
+                    with hd.scope(f"{tab_name, loc.path}"):
+                        is_active = tab_name == current_tab
+                        hd.link(
                             tab_name,
+                            href=path,
+                            target="_self",
+                            underline=False,
                             font_size="medium",
-                            active=(tab_name == current_tab),
+                            font_color="primary" if is_active else "neutral-600",
+                            # font_weight="semibold" if is_active else "normal",
+                            border_bottom=(
+                                "2px solid primary"
+                                if is_active
+                                else "2px solid neutral-200"
+                            ),
+                            padding=(1, 1.25, 1, 1.25),
+                            hover_background_color="neutral-50",
                         )
 
             with hd.box(grow=True):
                 pass
 
-            with hd.box(padding_bottom=3, align="start"):
-                with hd.hbox(gap=1, align="center"):
-                    if user_task.done and user_task.result:
-                        user = user_task.result
-                        display_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or user.get(
-                            "username", ""
-                        )
-                        hd.text(
-                            display_name, font_color="neutral-400", font_size="small"
-                        )
+            with hd.hbox(gap=1, align="center", padding_bottom=1):
+                if user_task.done and user_task.result:
+                    user = user_task.result
+                    display_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or user.get(
+                        "username", ""
+                    )
+                    hd.text(display_name, font_color="neutral-400", font_size="small")
 
-                    if hd.button("Disconnect", variant="neutral", size="small").clicked:
-                        clear_token(user_id)
-                        hd.local_storage.remove_item("c2_user_id")
-                        hd.local_storage.remove_item("workouts")
-                        hd.local_storage.remove_item("profile")
-                        loc.go(path="/")
+                if hd.button("Disconnect", variant="neutral", size="small").clicked:
+                    clear_token(user_id)
+                    hd.local_storage.remove_item("c2_user_id")
+                    hd.local_storage.remove_item("workouts")
+                    hd.local_storage.remove_item("profile")
+                    loc.go(path="/")
 
-        # When the user clicks a tab, push its URL and render the new content
-        # immediately in the same pass (avoids a one-frame flicker).
-        proper_loc = _TAB_ROUTES.get(tabs.active, f"/{tabs.active.lower()}")
-        if proper_loc != loc.path:
-            current_tab = tabs.active
-            loc.go(proper_loc)
-
-        if current_tab == "Volume":
+        # ── Session detail overlay ─────────────────────────────────────────
+        if in_session:
+            try:
+                session_id = int(loc.path.split("/")[2])
+            except (IndexError, ValueError):
+                session_id = None
+            if session_id is not None:
+                with hd.scope(session_id):
+                    session_detail(
+                        session_id,
+                        client,
+                        user_id,
+                    )
+        elif current_tab == "Volume":
             volume_tab(client, user_id)
         elif current_tab == "Sessions":
             sessions_tab(client, user_id)
@@ -304,7 +322,7 @@ def main() -> None:
         _login_view()
         return
 
-    _dashboard_view(client, user_id)
+    _dashboard_view(client, user_id, app_state)
 
 
 _PORT = int(os.environ.get("HD_PORT", 8888))

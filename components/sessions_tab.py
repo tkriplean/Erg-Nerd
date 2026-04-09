@@ -27,5 +27,7 @@ def sessions_tab(client, user_id: str) -> None:
         return
 
     # ── Pace-vs-date scatter + windowed workouts table ────────────────────────
-    with hd.box(padding=(2, 2, 2, 2)):
+    with hd.box(padding=(2, 2, 2, 2), gap=2):
         sessions_chart(all_workouts)
+        from components.ranked_formatters import result_table
+        result_table(all_workouts)
