@@ -202,6 +202,30 @@ def build_stroke_chart_config(
 
     bands = _build_bands(workout, strokes)
 
+    # ── Y-axis bounds (pace/watts and SPM) ───────────────────────────────────
+    #
+    # For interval workouts: derive bounds from work-interval points only so
+    # that rest-period droop (slow pace / low SPM) doesn't compress the scale.
+    # For non-interval workouts: use all points.
+    # HR axis is intentionally excluded — let it float freely.
+    # Bounds are computed globally so the scale stays fixed when zoomed into
+    # a single interval, enabling easy comparison between splits.
+
+    if wtype in INTERVAL_WORKOUT_TYPES and bands:
+        work_ranges = [(b["xMin"], b["xMax"]) for b in bands if b.get("work")]
+        def _in_work(t_s):
+            return any(lo <= t_s <= hi for lo, hi in work_ranges)
+        y_pace = [p["y"] for p in pace_pts if _in_work(p["x"])]
+        y_spm  = [p["y"] for p in spm_pts  if _in_work(p["x"])]
+    else:
+        y_pace = [p["y"] for p in pace_pts]
+        y_spm  = [p["y"] for p in spm_pts]
+
+    pace_y_min = min(y_pace) if y_pace else None
+    pace_y_max = max(y_pace) if y_pace else None
+    spm_y_min  = min(y_spm)  if y_spm  else None
+    spm_y_max  = max(y_spm)  if y_spm  else None
+
     # ── x-axis zoom ──────────────────────────────────────────────────────────
 
     x_min = None
@@ -212,9 +236,7 @@ def build_stroke_chart_config(
         x_max = b["xMax"]
     else:
         # For non-interval workouts cap the x-axis at the recorded session
-        # duration so trailing noise/GPS drift beyond the finish doesn't expand
-        # the chart domain uselessly.
-        wtype = workout.get("workout_type", "")
+        # duration so trailing noise beyond the finish doesn't expand the domain.
         if wtype not in INTERVAL_WORKOUT_TYPES:
             session_time_s = (workout.get("time") or 0) / 10.0
             if session_time_s > 0:
@@ -225,7 +247,10 @@ def build_stroke_chart_config(
         "bands": bands,
         "showWatts": show_watts,
         "hasHr": has_hr,
-        "spmMax": spm_max,
+        "paceYMin": pace_y_min,
+        "paceYMax": pace_y_max,
+        "spmYMin": spm_y_min,
+        "spmYMax": spm_y_max,
         "xMin": x_min,
         "xMax": x_max,
         "isDark": is_dark,

@@ -65,6 +65,10 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
     const bands = cfg.bands || [];
     const xMin = cfg.xMin != null ? cfg.xMin : undefined;
     const xMax = cfg.xMax != null ? cfg.xMax : undefined;
+    const paceYMin = cfg.paceYMin != null ? cfg.paceYMin : undefined;
+    const paceYMax = cfg.paceYMax != null ? cfg.paceYMax : undefined;
+    const spmYMin  = cfg.spmYMin  != null ? cfg.spmYMin  : 0;
+    const spmYMax  = cfg.spmYMax  != null ? cfg.spmYMax  : 30;
 
     // Build annotation objects for interval background bands
     const annotations = {};
@@ -141,6 +145,8 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
             type: "linear",
             position: "left",
             reverse: !cfg.showWatts,  // faster pace = lower number = top of chart
+            min: paceYMin,
+            max: paceYMax,
             grid: { color: gridColor },
             ticks: {
               color: tickColor,
@@ -151,8 +157,8 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
             type: "linear",
             position: "right",
             display: true,
-            min: 0,
-            max: Math.ceil((cfg.spmMax || 30) * 1.2),
+            min: spmYMin,
+            max: spmYMax,
             grid: { drawOnChartArea: false },
             ticks: { color: isDark ? "#d97706" : "#b45309", callback: (v) => `${v}` },
             title: {
