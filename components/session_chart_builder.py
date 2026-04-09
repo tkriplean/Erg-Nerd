@@ -221,10 +221,16 @@ def build_stroke_chart_config(
         y_pace = [p["y"] for p in pace_pts]
         y_spm  = [p["y"] for p in spm_pts]
 
-    pace_y_min = min(y_pace) if y_pace else None
-    pace_y_max = max(y_pace) if y_pace else None
-    spm_y_min  = min(y_spm)  if y_spm  else None
-    spm_y_max  = max(y_spm)  if y_spm  else None
+    def _pad(lo, hi, frac=0.12, min_pad=0):
+        """Expand [lo, hi] by frac of the span on each side."""
+        if lo is None or hi is None:
+            return lo, hi
+        pad = max((hi - lo) * frac, min_pad)
+        return lo - pad, hi + pad
+
+    pace_y_min, pace_y_max = _pad(*((min(y_pace), max(y_pace)) if y_pace else (None, None)))
+    spm_y_min,  spm_y_max  = _pad(*((min(y_spm),  max(y_spm))  if y_spm  else (None, None)),
+                                   min_pad=2)
 
     # ── x-axis zoom ──────────────────────────────────────────────────────────
 

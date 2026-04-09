@@ -61,7 +61,6 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
     const isDark = cfg.isDark || false;
     const gridColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)";
     const tickColor = isDark ? "#9ca3af" : "#6b7280";
-    const datasets = cfg.datasets || [];
     const bands = cfg.bands || [];
     const xMin = cfg.xMin != null ? cfg.xMin : undefined;
     const xMax = cfg.xMax != null ? cfg.xMax : undefined;
@@ -69,6 +68,39 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
     const paceYMax = cfg.paceYMax != null ? cfg.paceYMax : undefined;
     const spmYMin  = cfg.spmYMin  != null ? cfg.spmYMin  : 0;
     const spmYMax  = cfg.spmYMax  != null ? cfg.spmYMax  : 30;
+
+    // Pre-compute faded x-ranges: rest periods + the first few seconds of
+    // each work interval (onset strokes are noisy).
+    const ONSET_S = 5;
+    const fadedRanges = [
+      ...bands.filter(b => !b.work).map(b => [b.xMin, b.xMax]),
+      ...bands.filter(b =>  b.work).map(b => [b.xMin, Math.min(b.xMin + ONSET_S, b.xMax)]),
+    ];
+    function inFaded(x) {
+      return fadedRanges.some(([lo, hi]) => x >= lo && x <= hi);
+    }
+    function segFaded(ctx) {
+      return inFaded((ctx.p0.parsed.x + ctx.p1.parsed.x) / 2);
+    }
+
+    // Clone datasets and attach segment callbacks to pace and SPM series.
+    const datasets = (cfg.datasets || []).map(ds => {
+      const d = Object.assign({}, ds);
+      if (d.yAxisID === "y") {
+        d.segment = {
+          borderColor: ctx => segFaded(ctx) ? "rgba(96,165,250,0.25)"  : "#60a5fa",
+          borderWidth: ctx => segFaded(ctx) ? 1    : 2.5,
+          borderDash:  ctx => segFaded(ctx) ? [4,4] : [],
+        };
+      } else if (d.yAxisID === "yspm") {
+        d.segment = {
+          borderColor: ctx => segFaded(ctx) ? "rgba(30,64,175,0.25)"   : "#1e40af",
+          borderWidth: ctx => segFaded(ctx) ? 1    : 1.5,
+          borderDash:  ctx => segFaded(ctx) ? [4,4] : [],
+        };
+      }
+      return d;
+    });
 
     // Build annotation objects for interval background bands
     const annotations = {};
