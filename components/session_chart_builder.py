@@ -83,6 +83,18 @@ def _stitch_interval_times(
 # ---------------------------------------------------------------------------
 
 
+def _interval_colors(n: int) -> list:
+    """Generate n visually distinct HSL colors spanning blue → orange."""
+    if n == 0:
+        return []
+    if n == 1:
+        return ["hsl(220, 75%, 55%)"]
+    return [
+        f"hsl({round(220 - i * 190 / (n - 1))}, 75%, 55%)"
+        for i in range(n)
+    ]
+
+
 def build_stroke_chart_config(
     strokes: list,
     workout: dict,
@@ -90,6 +102,10 @@ def build_stroke_chart_config(
     metric: str = "pace",  # "pace" | "watts"
     focused_interval_idx: Optional[int] = None,
     is_dark: bool = False,
+    stack: bool = False,
+    show_pace: bool = True,
+    show_spm: bool = True,
+    show_hr: bool = True,
 ) -> dict:
     """
     Return a Chart.js config dict for the stroke time-series.
@@ -231,6 +247,68 @@ def build_stroke_chart_config(
     pace_y_min, pace_y_max = _pad(*((min(y_pace), max(y_pace)) if y_pace else (None, None)))
     spm_y_min,  spm_y_max  = _pad(*((min(y_spm),  max(y_spm))  if y_spm  else (None, None)),
                                    min_pad=2)
+
+    # ── Stacked mode ─────────────────────────────────────────────────────────
+    #
+    # Build one dataset per work band per visible metric, all starting at x=0.
+
+    if stack:
+        work_bands = [b for b in bands if b.get("work")]
+        colors = _interval_colors(len(work_bands))
+        stacked_intervals = []
+
+        for idx, band in enumerate(work_bands):
+            x_min_s, x_max_s = band["xMin"], band["xMax"]
+            pace_p: list = []
+            spm_p: list = []
+            hr_p: list = []
+
+            for s in strokes:
+                t_s = (s.get("t") or 0) / 10.0
+                if t_s < x_min_s or t_s > x_max_s:
+                    continue
+                x = round(t_s - x_min_s, 2)
+
+                p = s.get("p")
+                if p and p > 0:
+                    pace_sec = p / 10.0
+                    y_val = (
+                        round(compute_watts(pace_sec), 1)
+                        if show_watts
+                        else round(pace_sec, 2)
+                    )
+                    pace_p.append({"x": x, "y": y_val})
+
+                spm_v = s.get("spm")
+                if spm_v is not None:
+                    spm_p.append({"x": x, "y": spm_v})
+
+                hr_v = s.get("hr")
+                if hr_v:
+                    hr_p.append({"x": x, "y": hr_v})
+
+            stacked_intervals.append({
+                "label": band.get("label", f"#{idx + 1}"),
+                "color": colors[idx],
+                "pacePoints": pace_p,
+                "spmPoints": spm_p,
+                "hrPoints": hr_p,
+            })
+
+        return {
+            "stack": True,
+            "stackedIntervals": stacked_intervals,
+            "showWatts": show_watts,
+            "showPace": show_pace,
+            "showSpm": show_spm,
+            "showHr": show_hr and has_hr,
+            "hasHr": has_hr,
+            "paceYMin": pace_y_min,
+            "paceYMax": pace_y_max,
+            "spmYMin": spm_y_min,
+            "spmYMax": spm_y_max,
+            "isDark": is_dark,
+        }
 
     # ── x-axis zoom ──────────────────────────────────────────────────────────
 

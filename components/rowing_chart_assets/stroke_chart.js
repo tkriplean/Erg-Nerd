@@ -69,6 +69,8 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
     const spmYMin  = cfg.spmYMin  != null ? cfg.spmYMin  : 0;
     const spmYMax  = cfg.spmYMax  != null ? cfg.spmYMax  : 30;
 
+
+
     // Pre-compute faded x-ranges: rest periods + the first few seconds of
     // each work interval (onset strokes are noisy).
     const ONSET_S = 5;
@@ -76,11 +78,12 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
       ...bands.filter(b => !b.work).map(b => [b.xMin, b.xMax]),
       ...bands.filter(b =>  b.work).map(b => [b.xMin, Math.min(b.xMin + ONSET_S, b.xMax)]),
     ];
+
     function inFaded(x) {
       return fadedRanges.some(([lo, hi]) => x >= lo && x <= hi);
     }
     function segFaded(ctx) {
-      return inFaded((ctx.p0.parsed.x + ctx.p1.parsed.x) / 2);
+      return !(xMin || xMax) && inFaded((ctx.p0.parsed.x + ctx.p1.parsed.x) / 2);
     }
 
     // Clone datasets and attach segment callbacks to pace and SPM series.
@@ -94,7 +97,7 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
         };
       } else if (d.yAxisID === "yspm") {
         d.segment = {
-          borderColor: ctx => segFaded(ctx) ? "rgba(30,64,175,0.25)"   : "#1e40af",
+          borderColor: ctx => segFaded(ctx) ? "rgba(30,64,175,0.0)"   : "#1e40af",
           borderWidth: ctx => segFaded(ctx) ? 1    : 1.5,
           borderDash:  ctx => segFaded(ctx) ? [4,4] : [],
         };
