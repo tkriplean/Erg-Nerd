@@ -125,6 +125,7 @@ def _solve_timed_pace(pace_fn, T_seconds: float) -> Optional[float]:
     ``pace_fn`` should accept a distance in meters and return a pace in
     sec/500m, or None if the pace cannot be computed at that distance.
     """
+
     def _residual(d):
         p = pace_fn(max(d, 1.0))
         if p is None:
@@ -154,6 +155,7 @@ def _compute_predictor_raws(
     lifetime_best: dict,
     lifetime_best_anchor: dict,
     rl_predictions: Optional[dict],
+    pauls_k: float = 5.0,
 ) -> dict:
     """
     Compute raw pace (sec/500m) for each predictor for one event.
@@ -164,6 +166,7 @@ def _compute_predictor_raws(
     event_type == "dist": event_value is meters.
     event_type == "time": event_value is tenths-of-seconds; T = event_value / 10.
     cp_params: (Pow1, tau1, Pow2, tau2) tuple or None.
+    pauls_k: personalised Paul's Law constant (sec/500m per doubling); default 5.0.
     """
     is_dist = event_type == "dist"
     dist_m = event_value if is_dist else None
@@ -174,9 +177,11 @@ def _compute_predictor_raws(
     if cp_params is not None:
         Pow1, tau1, Pow2, tau2 = cp_params
         if is_dist:
+
             def _cp_resid(t, _d=dist_m, P1=Pow1, t1=tau1, P2=Pow2, t2=tau2):
                 P = critical_power_model(t, P1, t1, P2, t2)
                 return (P / 2.80) ** (1.0 / 3.0) * t - _d if P > 0 else -_d
+
             try:
                 t_star = brentq(_cp_resid, 10.0, 20_000.0, xtol=0.1)
                 watts = critical_power_model(t_star, Pow1, tau1, Pow2, tau2)
@@ -208,36 +213,46 @@ def _compute_predictor_raws(
             if not anchor:
                 continue
             if is_dist:
-                predicted = pauls_law_pace(pb_pace, anchor, dist_m)
+                predicted = pauls_law_pace(pb_pace, anchor, dist_m, k=pauls_k)
                 if PACE_MIN <= predicted <= PACE_MAX:
                     _pl_paces.append(predicted)
             else:
                 pace_star = _solve_timed_pace(
-                    lambda d, p=pb_pace, a=anchor: pauls_law_pace(p, a, d), T
+                    lambda d, p=pb_pace, a=anchor: pauls_law_pace(p, a, d, k=pauls_k), T
                 )
                 if pace_star is not None:
                     _pl_paces.append(pace_star)
         if _pl_paces:
             pl_raw = sum(_pl_paces) / len(_pl_paces)
 
-    # ── RowingLevel ───────────────────────────────────────────────────────────
+    # ── RowingLevel — distance-weighted average ───────────────────────────────
+    # rl_predictions keys are str(tuple) e.g. "('dist', 2000)"; normalise once.
+    _str_lba = {str(k): v for k, v in lifetime_best_anchor.items()}
     rl_raw = None
     if rl_predictions:
-        _rl_paces = []
-        for preds in rl_predictions.values():
+        _rl_paces: list = []
+        _rl_weights: list = []
+        for cat_key, preds in rl_predictions.items():
             if is_dist:
+                anchor_dist = _str_lba.get(cat_key)
                 pace = preds.get(dist_m) or preds.get(str(dist_m))
                 if pace is not None and PACE_MIN <= pace <= PACE_MAX:
+                    w = (1.0 / (abs(math.log2(dist_m / anchor_dist)) + 0.5)
+                         if anchor_dist else 1.0)
                     _rl_paces.append(pace)
+                    _rl_weights.append(w)
             else:
                 pace_star = _solve_timed_pace(
                     lambda d, p=preds: _rl_interp_pace(p, d), T
                 )
                 if pace_star is not None:
                     _rl_paces.append(pace_star)
+                    _rl_weights.append(1.0)
         if _rl_paces:
-            rl_raw = sum(_rl_paces) / len(_rl_paces)
+            total_w = sum(_rl_weights)
+            rl_raw = sum(w * p for w, p in zip(_rl_weights, _rl_paces)) / total_w
 
+    # print({"cp_raw": cp_raw, "ll_raw": ll_raw, "pl_raw": pl_raw, "rl_raw": rl_raw})
     return {"cp_raw": cp_raw, "ll_raw": ll_raw, "pl_raw": pl_raw, "rl_raw": rl_raw}
 
 
@@ -254,6 +269,7 @@ def build_prediction_table_data(
     all_lifetime_best_anchor: dict,
     critical_power_params: Optional[dict] = None,
     rl_predictions: Optional[dict] = None,
+    pauls_k: float = 5.0,
 ) -> list[dict]:
     """
     Compute prediction-table rows for all four predictors simultaneously.
@@ -285,7 +301,9 @@ def build_prediction_table_data(
     # ── CP params — convert dict to tuple once ────────────────────────────────
     _cp = critical_power_params
     _cp_tuple: Optional[tuple] = (
-        (_cp["Pow1"], _cp["tau1"], _cp["Pow2"], _cp["tau2"]) if _cp is not None else None
+        (_cp["Pow1"], _cp["tau1"], _cp["Pow2"], _cp["tau2"])
+        if _cp is not None
+        else None
     )
 
     def _cell(raw_pace: Optional[float], event_type: str, event_value: int) -> tuple:
@@ -303,6 +321,7 @@ def build_prediction_table_data(
             lifetime_best=lifetime_best,
             lifetime_best_anchor=lifetime_best_anchor,
             rl_predictions=rl_predictions,
+            pauls_k=pauls_k,
         )
 
     rows: list[dict] = []
@@ -319,16 +338,31 @@ def build_prediction_table_data(
         _avg_cands = [r for r in [cp_raw, ll_raw, pl_raw, rl_raw] if r is not None]
         _avg_r = sum(_avg_cands) / len(_avg_cands) if _avg_cands else None
         _avg_r, avg_pace, avg_result = _cell(_avg_r, "dist", dist_m)
-        rows.append({
-            "label": _DIST_LABELS.get(dist_m, f"{dist_m:,}m"),
-            "event_type": "dist", "event_value": dist_m,
-            "avg_pace": avg_pace, "avg_result": avg_result, "avg_raw": _avg_r,
-            "cp_pace": cp_pace, "cp_result": cp_result, "cp_raw": cp_raw,
-            "loglog_pace": ll_pace, "loglog_result": ll_result, "loglog_raw": ll_raw,
-            "pl_pace": pl_pace, "pl_result": pl_result, "pl_raw": pl_raw,
-            "rl_pace": rl_pace, "rl_result": rl_result, "rl_raw": rl_raw,
-            "pb_pace": pb_pace, "pb_result": pb_result, "pb_raw": pb_raw,
-        })
+        rows.append(
+            {
+                "label": _DIST_LABELS.get(dist_m, f"{dist_m:,}m"),
+                "event_type": "dist",
+                "event_value": dist_m,
+                "avg_pace": avg_pace,
+                "avg_result": avg_result,
+                "avg_raw": _avg_r,
+                "cp_pace": cp_pace,
+                "cp_result": cp_result,
+                "cp_raw": cp_raw,
+                "loglog_pace": ll_pace,
+                "loglog_result": ll_result,
+                "loglog_raw": ll_raw,
+                "pl_pace": pl_pace,
+                "pl_result": pl_result,
+                "pl_raw": pl_raw,
+                "rl_pace": rl_pace,
+                "rl_result": rl_result,
+                "rl_raw": rl_raw,
+                "pb_pace": pb_pace,
+                "pb_result": pb_result,
+                "pb_raw": pb_raw,
+            }
+        )
 
     # ── Timed events ──────────────────────────────────────────────────────────
     for time_tenths, label in RANKED_TIMES:
@@ -342,15 +376,30 @@ def build_prediction_table_data(
         _avg_cands = [r for r in [cp_raw, ll_raw, pl_raw, rl_raw] if r is not None]
         _avg_r = sum(_avg_cands) / len(_avg_cands) if _avg_cands else None
         _avg_r, avg_pace, avg_result = _cell(_avg_r, "time", time_tenths)
-        rows.append({
-            "label": label,
-            "event_type": "time", "event_value": time_tenths,
-            "avg_pace": avg_pace, "avg_result": avg_result, "avg_raw": _avg_r,
-            "cp_pace": cp_pace, "cp_result": cp_result, "cp_raw": cp_raw,
-            "loglog_pace": ll_pace, "loglog_result": ll_result, "loglog_raw": ll_raw,
-            "pl_pace": pl_pace, "pl_result": pl_result, "pl_raw": pl_raw,
-            "rl_pace": rl_pace, "rl_result": rl_result, "rl_raw": rl_raw,
-            "pb_pace": pb_pace, "pb_result": pb_result, "pb_raw": pb_raw,
-        })
+        rows.append(
+            {
+                "label": label,
+                "event_type": "time",
+                "event_value": time_tenths,
+                "avg_pace": avg_pace,
+                "avg_result": avg_result,
+                "avg_raw": _avg_r,
+                "cp_pace": cp_pace,
+                "cp_result": cp_result,
+                "cp_raw": cp_raw,
+                "loglog_pace": ll_pace,
+                "loglog_result": ll_result,
+                "loglog_raw": ll_raw,
+                "pl_pace": pl_pace,
+                "pl_result": pl_result,
+                "pl_raw": pl_raw,
+                "rl_pace": rl_pace,
+                "rl_result": rl_result,
+                "rl_raw": rl_raw,
+                "pb_pace": pb_pace,
+                "pb_result": pb_result,
+                "pb_raw": pb_raw,
+            }
+        )
 
     return rows

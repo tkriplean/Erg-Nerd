@@ -54,11 +54,26 @@ over-predicted if the rower's physiology has a strong anaerobic component.
 
 ### 2.2 Paul's Law
 
-**Formula:**  `pace(d₂) = pace(d₁) + 5 × log₂(d₂ / d₁)`
+**Formula:**  `pace(d₂) = pace(d₁) + K × log₂(d₂ / d₁)`
 
-Paul's Law predicts that pace slows by exactly 5 sec/500m for each doubling of
-distance.  It is simple and surprisingly accurate for distances in the 1k–10k
-range for well-trained rowers.
+Paul's Law predicts that pace slows by *K* sec/500m for each doubling of
+distance.  The traditional constant is **K = 5**, which works well for many
+trained rowers, but the optimal value varies from person to person.
+
+#### Personalised Paul's Value
+
+The app fits K to the rower's own PBs using regression through the origin across
+all ordered (anchor, target) PB pairs:
+
+```
+K = Σ(x · y) / Σ(x²)
+where  x = log₂(d_target / d_anchor),  y = pace_target − pace_anchor
+```
+
+The result is rounded to one decimal place and clamped to [0.5, 15.0].  When at
+least two PBs are available, the fitted K replaces the default 5.0 in both the
+chart curve and the prediction table.  The fitted value is displayed in the
+chart settings row as **"Your Paul's Value: +X.Xs per doubling"**.
 
 Because the rule can be anchored to *any* existing PB, the app computes one
 prediction per anchor (one per ranked event where the rower has a PB), then
@@ -68,10 +83,9 @@ an outlier.  The chart shows this averaged curve by default; enabling
 
 Timed events are solved numerically (same brentq approach as log-log).
 
-**Limitation:** The +5 s/500m-per-doubling constant is empirical and works best
-for trained rowers at aerobic distances.  It does not model the sprint–endurance
-crossover and cannot represent a rower who is unusually strong over short vs.
-long distances.
+**Limitation:** A single K cannot capture rowers who are unusually strong over
+short vs. long distances (a sprint/endurance crossover).  It also does not model
+the anaerobic component.
 
 ---
 
@@ -83,8 +97,20 @@ bodyweight, and one reference performance.
 
 The app scrapes RowingLevel once per profile configuration, generating one
 prediction curve per ranked anchor event (the reference performance changes, so
-each PB yields a distinct RL curve).  Those curves are then **averaged** in the
-same way as Paul's Law.
+each PB yields a distinct RL curve).
+
+#### Distance-weighted averaging
+
+Those curves are combined using a **distance-weighted average** rather than a
+simple mean.  At each target distance *d*:
+
+```
+weight(anchor at d_a) = 1 / (|log₂(d / d_a)| + 0.5)
+```
+
+This gives higher weight to curves whose anchor PB is close to the prediction
+distance, so (for example) a 2k PB dominates the RL prediction near 2k while a
+Marathon anchor dominates near Marathon.  Timed events use an unweighted average.
 
 RL provides predictions for standard distance events only (≥500m in practice).
 Timed events (1 min, 4 min, 30 min, 60 min) are solved numerically: for each
@@ -93,7 +119,16 @@ distance, then `brentq` finds the distance where `interp_pace(d) × d / 500 = T`
 The 1-minute event (~280m) almost always fails this solve since it falls below
 RL's minimum distance.
 
-RowingLevel requires a completed user profile (gender, age, weight).
+#### Profile requirement and notice
+
+RowingLevel requires a **completed user profile** (gender, age via date of birth,
+and bodyweight).  When the profile is incomplete:
+
+- The RL chart line is not drawn.
+- The **Avg. RowingLevel** column is hidden from the prediction table.
+- A dismissible warning notice appears between the chart and the prediction
+  table.  After the user dismisses it, the dismissed state is stored in
+  localStorage under the key `"rl_notif_dismissed"` so it doesn't reappear.
 
 ---
 
@@ -137,6 +172,9 @@ The prediction table includes an **Average** column (rightmost) that is the
 unweighted mean of whichever predictors have a value for that event.  If only two
 of four predictors produce a value (e.g. CP is unavailable and RL doesn't cover
 1-minute events), the average is taken across just those two.
+
+When the user profile is incomplete, RowingLevel is excluded entirely and the
+average is computed across the remaining three predictors (CP, Log-Log, Paul's Law).
 
 This average is not necessarily more accurate than any individual predictor — it
 is simply a central tendency across the model ensemble.  Its RMSE and R² are
@@ -248,7 +286,7 @@ contributed.
 
 | File | Responsibility |
 |---|---|
-| `services/rowing_utils.py` | `pauls_law_pace`, `loglog_fit`, `loglog_predict_pace`, pace/watts conversions, RANKED_DISTANCES / RANKED_TIMES constants |
+| `services/rowing_utils.py` | `pauls_law_pace` (now takes optional `k` param), `compute_pauls_constant`, `loglog_fit`, `loglog_predict_pace`, pace/watts conversions, RANKED_DISTANCES / RANKED_TIMES constants |
 | `services/critical_power_model.py` | Two-component CP model, fitting, curve generation, crossover and sprint/stayer metrics |
 | `components/ranked_chart_builder.py` | `build_prediction_table_data` (all four predictors, both event types), `build_chart_config` (chart datasets including prediction curves and components), `compute_lifetime_bests`, `_rl_interp_pace` |
 | `components/ranked_tab.py` | State management, chart settings UI, prediction table renderer, event toggles, accuracy row |

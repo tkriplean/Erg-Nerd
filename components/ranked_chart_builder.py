@@ -267,21 +267,36 @@ def compute_lifetime_bests(workouts: list) -> tuple[dict, dict]:
 # ---------------------------------------------------------------------------
 
 
-def _rowinglevel_datasets(rl_predictions, pred_color, y_fn, show_components) -> list:
-    """RowingLevel average curve + optional per-anchor component curves."""
+def _rowinglevel_datasets(
+    rl_predictions, pred_color, y_fn, show_components, lifetime_best_anchor
+) -> list:
+    """RowingLevel distance-weighted average curve + optional per-anchor component curves.
+
+    At each target distance d_t the average is weighted by proximity of each anchor:
+        weight = 1 / (|log₂(d_t / d_anchor)| + 0.5)
+    This gives more influence to RL curves anchored close to the prediction point.
+    """
     out = []
     _rl_all_dists = sorted({
         int(d) for preds in rl_predictions.values() for d in preds if int(d) != 100
     })
+    # rl_predictions keys are str(tuple) e.g. "('dist', 2000)"; normalise once.
+    _str_lba = {str(k): v for k, v in lifetime_best_anchor.items()}
     _rl_avg_pts = []
     for _d in _rl_all_dists:
-        _rl_ps = [
-            _p
-            for _preds in rl_predictions.values()
-            if (_p := _preds.get(_d) or _preds.get(str(_d))) and PACE_MIN <= _p <= PACE_MAX
-        ]
+        _rl_ps = []
+        _rl_ws = []
+        for cat_key, _preds in rl_predictions.items():
+            _p = _preds.get(_d) or _preds.get(str(_d))
+            if _p and PACE_MIN <= _p <= PACE_MAX:
+                anchor_dist = _str_lba.get(cat_key)
+                w = (1.0 / (abs(math.log2(_d / anchor_dist)) + 0.5)
+                     if anchor_dist else 1.0)
+                _rl_ps.append(_p)
+                _rl_ws.append(w)
         if _rl_ps:
-            _rl_avg_pts.append({"x": _d, "y": y_fn(sum(_rl_ps) / len(_rl_ps))})
+            total_w = sum(_rl_ws)
+            _rl_avg_pts.append({"x": _d, "y": y_fn(sum(w * p for w, p in zip(_rl_ws, _rl_ps)) / total_w)})
     _rl_avg_pts.sort(key=lambda p: p["x"])
     if len(_rl_avg_pts) >= 2:
         out.append(_pred_dataset("_rl_avg", _rl_avg_pts, pred_color, point_radius=1.5, border_width=2.0))
@@ -301,8 +316,14 @@ def _rowinglevel_datasets(rl_predictions, pred_color, y_fn, show_components) -> 
     return out
 
 
-def _pauls_law_datasets(lifetime_best, lifetime_best_anchor, pred_color, y_fn, show_components) -> list:
-    """Paul's Law average curve + optional per-anchor component curves."""
+def _pauls_law_datasets(
+    lifetime_best, lifetime_best_anchor, pred_color, y_fn, show_components,
+    pauls_k: float = 5.0,
+) -> list:
+    """Paul's Law average curve + optional per-anchor component curves.
+
+    pauls_k is the personalised pace-increase constant (sec/500m per doubling).
+    """
     out = []
     _pl_by_dist: dict = {}
     _pl_per_anchor: dict = {}
@@ -312,7 +333,7 @@ def _pauls_law_datasets(lifetime_best, lifetime_best_anchor, pred_color, y_fn, s
             continue
         cat_pts = []
         for d in RANKED_DIST_VALUES:
-            predicted = pauls_law_pace(pb_pace, anchor_dist, d)
+            predicted = pauls_law_pace(pb_pace, anchor_dist, d, k=pauls_k)
             if PACE_MIN <= predicted <= PACE_MAX:
                 _pl_by_dist.setdefault(d, []).append(predicted)
                 cat_pts.append((d, predicted))
@@ -630,6 +651,7 @@ def build_chart_config(
     show_components=False,  # show per-anchor/component curves alongside the average
     lifetime_best=None,  # pre-computed from compute_lifetime_bests(); derived if None
     lifetime_best_anchor=None,  # pre-computed; derived alongside lifetime_best
+    pauls_k: float = 5.0,  # personalised Paul's Law constant (sec/500m per doubling)
 ):
     """Build a Chart.js config dict for the ranked-workouts chart."""
 
@@ -705,9 +727,9 @@ def build_chart_config(
 
     # 0. Prediction curves (order=4, furthest back)
     if predictor == "rowinglevel" and rl_predictions:
-        datasets.extend(_rowinglevel_datasets(rl_predictions, pred_color, _y, show_components))
+        datasets.extend(_rowinglevel_datasets(rl_predictions, pred_color, _y, show_components, lifetime_best_anchor or {}))
     if predictor == "pauls_law":
-        datasets.extend(_pauls_law_datasets(lifetime_best, lifetime_best_anchor, pred_color, _y, show_components))
+        datasets.extend(_pauls_law_datasets(lifetime_best, lifetime_best_anchor, pred_color, _y, show_components, pauls_k=pauls_k))
     if predictor == "loglog":
         datasets.extend(_loglog_dataset(lifetime_best, lifetime_best_anchor, pred_color, _y))
     if predictor == "critical_power" and critical_power_params is not None:

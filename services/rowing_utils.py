@@ -231,9 +231,48 @@ def compute_duration_s(workout: dict) -> Optional[float]:
 # ---------------------------------------------------------------------------
 
 
-def pauls_law_pace(p1: float, d1: float, d2: float) -> float:
-    """Predict pace at d2 given known pace p1 at d1 (Paul's Law)."""
-    return p1 + 5.0 * math.log2(d2 / d1)
+def pauls_law_pace(p1: float, d1: float, d2: float, k: float = 5.0) -> float:
+    """Predict pace at d2 given known pace p1 at d1 (Paul's Law).
+
+    k is the pace increase (sec/500m) per doubling of distance; defaults to the
+    standard 5.0 but can be personalised via compute_pauls_constant().
+    """
+    return p1 + k * math.log2(d2 / d1)
+
+
+def compute_pauls_constant(
+    lifetime_best: dict, lifetime_best_anchor: dict
+) -> Optional[float]:
+    """Return the best-fit Paul's Law constant K for the rower's PBs.
+
+    Uses regression through the origin across all ordered (anchor, target) PB
+    pairs:  K = Σ(x·y) / Σ(x²)  where  x = log₂(d_target/d_anchor)
+    and  y = pace_target − pace_anchor.
+
+    Returns K rounded to 1 decimal place and clamped to [0.5, 15.0], or None
+    if fewer than 2 PBs are available.
+    """
+    cats = [
+        (pace, lifetime_best_anchor[cat])
+        for cat, pace in lifetime_best.items()
+        if lifetime_best_anchor.get(cat)
+    ]
+    if len(cats) < 2:
+        return None
+    sx2 = 0.0
+    sxy = 0.0
+    for i, (pi, di) in enumerate(cats):
+        for j, (pj, dj) in enumerate(cats):
+            if i == j:
+                continue
+            x = math.log2(dj / di)
+            y = pj - pi
+            sx2 += x * x
+            sxy += x * y
+    if sx2 < 1e-10:
+        return None
+    k = sxy / sx2
+    return round(max(0.5, min(15.0, k)), 1)
 
 
 def loglog_fit(lifetime_best: dict, lifetime_best_anchor: dict) -> Optional[tuple]:
