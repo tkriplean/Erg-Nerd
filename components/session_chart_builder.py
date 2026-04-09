@@ -65,7 +65,7 @@ def build_stroke_chart_config(
     strokes: list,
     workout: dict,
     *,
-    metric: str = "pace",       # "pace" | "watts"
+    metric: str = "pace",  # "pace" | "watts"
     focused_interval_idx: Optional[int] = None,
     is_dark: bool = False,
 ) -> dict:
@@ -91,20 +91,22 @@ def build_stroke_chart_config(
     # ── Build datasets ───────────────────────────────────────────────────────
 
     pace_pts: list = []
-    spm_pts:  list = []
-    hr_pts:   list = []
+    spm_pts: list = []
+    hr_pts: list = []
     has_hr = False
     spm_max = 0
 
     for s in strokes:
         t_s = (s.get("t") or 0) / 10.0
         p_tenths = s.get("p")
-        spm_val  = s.get("spm")
-        hr_val   = s.get("hr")
+        spm_val = s.get("spm")
+        hr_val = s.get("hr")
 
         if p_tenths and p_tenths > 0:
             pace_sec = p_tenths / 10.0
-            y_val = round(compute_watts(pace_sec), 1) if show_watts else round(pace_sec, 2)
+            y_val = (
+                round(compute_watts(pace_sec), 1) if show_watts else round(pace_sec, 2)
+            )
             pace_pts.append({"x": round(t_s, 2), "y": y_val})
 
         if spm_val is not None:
@@ -116,10 +118,10 @@ def build_stroke_chart_config(
             has_hr = True
             hr_pts.append({"x": round(t_s, 2), "y": hr_val})
 
-    # Colour palette
-    pace_color = "#f59e0b"
-    spm_color  = "#d97706" if is_dark else "#b45309"
-    hr_color   = "#f87171" if is_dark else "#dc2626"
+    # Colour palette — all solid lines
+    pace_color = "#60a5fa"  # light blue (pace/watts, thicker)
+    spm_color = "#1e40af"  # dark blue  (stroke rate)
+    hr_color = "#ef4444"  # red        (heart rate)
 
     datasets = [
         {
@@ -136,32 +138,34 @@ def build_stroke_chart_config(
     ]
 
     if spm_pts:
-        datasets.append({
-            "label": "SPM",
-            "data": spm_pts,
-            "yAxisID": "yspm",
-            "borderColor": spm_color,
-            "backgroundColor": "transparent",
-            "borderWidth": 1,
-            "borderDash": [4, 3],
-            "pointRadius": 0,
-            "tension": 0.1,
-            "order": 2,
-        })
+        datasets.append(
+            {
+                "label": "SPM",
+                "data": spm_pts,
+                "yAxisID": "yspm",
+                "borderColor": spm_color,
+                "backgroundColor": "transparent",
+                "borderWidth": 1,
+                "pointRadius": 0,
+                "tension": 0.1,
+                "order": 2,
+            }
+        )
 
     if has_hr and hr_pts:
-        datasets.append({
-            "label": "HR",
-            "data": hr_pts,
-            "yAxisID": "yhr",
-            "borderColor": hr_color,
-            "backgroundColor": "transparent",
-            "borderWidth": 1,
-            "borderDash": [2, 4],
-            "pointRadius": 0,
-            "tension": 0.1,
-            "order": 3,
-        })
+        datasets.append(
+            {
+                "label": "HR",
+                "data": hr_pts,
+                "yAxisID": "yhr",
+                "borderColor": hr_color,
+                "backgroundColor": "transparent",
+                "borderWidth": 1,
+                "pointRadius": 0,
+                "tension": 0.1,
+                "order": 3,
+            }
+        )
 
     # ── Bands ────────────────────────────────────────────────────────────────
 
@@ -175,6 +179,15 @@ def build_stroke_chart_config(
         b = bands[focused_interval_idx]
         x_min = b["xMin"]
         x_max = b["xMax"]
+    else:
+        # For non-interval workouts cap the x-axis at the recorded session
+        # duration so trailing noise/GPS drift beyond the finish doesn't expand
+        # the chart domain uselessly.
+        wtype = workout.get("workout_type", "")
+        if wtype not in INTERVAL_WORKOUT_TYPES:
+            session_time_s = (workout.get("time") or 0) / 10.0
+            if session_time_s > 0:
+                x_max = round(session_time_s, 2)
 
     return {
         "datasets": datasets,
@@ -223,15 +236,19 @@ def _bands_from_intervals(intervals: list) -> list:
         dur_s = (iv.get("time") or 0) / 10.0
         if dur_s <= 0:
             continue
+
+        print(iv)
         is_work = (iv.get("type") or "work") != "rest"
         label = f"#{work_idx + 1}" if is_work else ""
-        bands.append({
-            "idx": len(bands),
-            "xMin": round(elapsed_s, 2),
-            "xMax": round(elapsed_s + dur_s, 2),
-            "label": label,
-            "work": is_work,
-        })
+        bands.append(
+            {
+                "idx": len(bands),
+                "xMin": round(elapsed_s, 2),
+                "xMax": round(elapsed_s + dur_s, 2),
+                "label": label,
+                "work": is_work,
+            }
+        )
         elapsed_s += dur_s
         if is_work:
             work_idx += 1
@@ -248,12 +265,14 @@ def _bands_from_splits(splits: list) -> list:
             continue
         dist_m = sp.get("distance") or 0
         label = f"{dist_m}m" if dist_m else f"Split {i + 1}"
-        bands.append({
-            "idx": i,
-            "xMin": round(elapsed_s, 2),
-            "xMax": round(elapsed_s + dur_s, 2),
-            "label": label,
-            "work": True,
-        })
+        bands.append(
+            {
+                "idx": i,
+                "xMin": round(elapsed_s, 2),
+                "xMax": round(elapsed_s + dur_s, 2),
+                "label": label,
+                "work": True,
+            }
+        )
         elapsed_s += dur_s
     return bands

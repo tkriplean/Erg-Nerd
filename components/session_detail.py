@@ -48,7 +48,6 @@ from components.hyperdiv_extensions import radio_group
 from components.workout_sync import workout_sync
 
 
-
 # ---------------------------------------------------------------------------
 # Summary stat grid
 # ---------------------------------------------------------------------------
@@ -386,12 +385,14 @@ def _splits_table(
         hd.text("No split data available.", font_color="neutral-500", font_size="small")
         return
 
-    has_max_w = strokes and any(sp.get("max_watts") is not None for sp in splits_data)
-    col_w = [2.5, 6, 6, 6, 4.5, 3.5, 5.5, 5.5]
-    headers = ["#", "Dist", "Time", "Pace", "Avg W", "SPM", "Avg HR", "Max HR"]
-    if has_max_w:
-        col_w.insert(5, 4.5)
-        headers.insert(5, "Max W")
+    has_hr = any(sp.get("hr_avg") is not None for sp in splits_data)
+    # "Watts" column shows "avg / max" when max is available from stroke data.
+    # "HR" column shows "avg / max" when both values are present.
+    col_w = [2.5, 6, 6, 6, 7, 3.5, 7]
+    headers = ["#", "Dist", "Time", "Pace", "Watts", "SPM", "HR"]
+    if not has_hr:
+        col_w = col_w[:-1]
+        headers = headers[:-1]
 
     _table_frame(
         splits_data,
@@ -402,17 +403,33 @@ def _splits_table(
         ts,
         focused_idx=focused_idx,
         on_focus=on_focus,
-        row_renderer=lambda i, sp, cw: _split_row(i, sp, cw, ts, has_max_w),
+        row_renderer=lambda i, sp, cw: _split_row(i, sp, cw, ts, has_hr),
     )
 
 
-def _split_row(i, sp, col_w, ts, has_max_w):
+def _split_row(i, sp, col_w, ts, has_hr):
     pace_t = sp.get("pace_tenths")
-    avg_w_str = str(round(compute_watts(pace_t / 10.0))) if pace_t else "—"
+    avg_w = round(compute_watts(pace_t / 10.0)) if pace_t else None
     max_w = sp.get("max_watts")
     hr_avg = sp.get("hr_avg")
     hr_max = sp.get("hr_max")
     spm = sp.get("spm")
+
+    # Combined Watts: "avg" or "avg / max"
+    if avg_w is None:
+        watts_str = "—"
+    elif max_w is not None:
+        watts_str = f"{avg_w} / {round(max_w)}"
+    else:
+        watts_str = str(avg_w)
+
+    # Combined HR: "avg" or "avg / max"
+    if hr_avg is None:
+        hr_str = "—"
+    elif hr_max:
+        hr_str = f"{hr_avg:.0f} / {hr_max:.0f}"
+    else:
+        hr_str = f"{hr_avg:.0f}"
 
     cells = [
         (str(i + 1), col_w[0], "neutral-500"),
@@ -425,32 +442,14 @@ def _split_row(i, sp, col_w, ts, has_max_w):
             None,
         ),
         (_fmt_pace(pace_t), col_w[3], None),
-        (avg_w_str, col_w[4], None),
+        (watts_str, col_w[4], None),
+        (f"{spm:.0f}" if spm else "—", col_w[5], None),
     ]
-    if has_max_w:
-        cells.append((str(round(max_w)) if max_w is not None else "—", col_w[5], None))
-        cells += [
-            (f"{spm:.0f}" if spm else "—", col_w[6], None),
-            (f"{hr_avg:.0f}" if hr_avg else "—", col_w[7], None),
-            (
-                f"{hr_max:.0f}" if hr_max else "—",
-                col_w[8] if len(col_w) > 8 else col_w[-1],
-                None,
-            ),
-        ]
-    else:
-        cells += [
-            (f"{spm:.0f}" if spm else "—", col_w[5], None),
-            (f"{hr_avg:.0f}" if hr_avg else "—", col_w[6], None),
-            (
-                f"{hr_max:.0f}" if hr_max else "—",
-                col_w[7] if len(col_w) > 7 else col_w[-1],
-                None,
-            ),
-        ]
+    if has_hr:
+        cells.append((hr_str, col_w[6], None))
 
     for idx, (val, w, color) in enumerate(cells):
-        with hd.scope(f"{idx}, {val}"):
+        with hd.scope(f"{idx}"):
             kwargs = {"font_size": ts, "width": w}
             if color:
                 kwargs["font_color"] = color
@@ -515,11 +514,11 @@ def _intervals_table(
             )
         work_idx += 1
 
-    col_w = [2.5, 6, 6, 6, 4.5, 3.5]
-    headers = ["#", "Dist", "Time", "Pace", "Avg W", "SPM"]
+    col_w = [2.5, 6, 6, 6, 5, 3.5]
+    headers = ["#", "Dist", "Time", "Pace", "W", "SPM"]
     if has_hr:
         col_w.append(5.5)
-        headers.append("Avg HR")
+        headers.append("HR")
 
     _table_frame(
         rows,
@@ -560,7 +559,7 @@ def _interval_row(i, r, col_w, ts, has_hr):
         cells.append((f"{hr:.0f}" if hr else "", col_w[6], muted))
 
     for idx, (val, w, color) in enumerate(cells):
-        with hd.scope(f"{idx}, {val}"):
+        with hd.scope(f"{idx}"):
             kwargs = {"font_size": ts, "width": w}
             if color:
                 kwargs["font_color"] = color
@@ -570,7 +569,12 @@ def _interval_row(i, r, col_w, ts, has_hr):
 def _table_frame(
     rows, col_w, headers, _theme, header_color, ts, focused_idx, on_focus, row_renderer
 ):
-    """Shared table chrome: header + body rows with click-to-focus."""
+    """Shared table chrome: header + body rows with click-to-focus.
+
+    Work rows (any row without _is_rest=True) are rendered as hd.link so the
+    entire row is clickable; clicking toggles the zoom focus for that band.
+    Rest rows are rendered as plain hboxes with no click target.
+    """
     border = "1px solid neutral-200"
     row_border = "1px solid neutral-100"
     focus_bg = "primary-50"
@@ -592,31 +596,40 @@ def _table_frame(
                         font_weight="semibold",
                         width=w,
                     )
-            # Spacer for focus icon column
-            hd.box(width=2.5)
 
         # Body rows
         for i, row in enumerate(rows):
             with hd.scope(i):
                 is_focused = i == focused_idx
-                with hd.hbox(
-                    padding=(0.35, 0.75, 0.35, 0.75),
+                is_rest = row.get("_is_rest", False)
+                is_focusable = on_focus is not None and not is_rest
+
+                row_kwargs = dict(
                     gap=0.5,
                     border_bottom=row_border,
                     background_color=focus_bg if is_focused else None,
                     align="center",
-                ):
-                    row_renderer(i, row, col_w)
-                    # Focus toggle button at right edge
-                    if on_focus is not None:
-                        focus_btn = hd.icon_button(
-                            "zoom-in" if not is_focused else "zoom-out",
-                            font_size="x-small",
-                            font_color="primary" if is_focused else "neutral-600",
-                            width=2.5,
-                        )
-                        if focus_btn.clicked:
-                            on_focus(None if is_focused else i)
+                    padding=(0.35, 0.75, 0.35, 0.75),
+                )
+
+                if is_focusable:
+                    # hd.link renders as <a> and carries Interactive.clicked
+                    # without causing navigation when href="#" (fragment only).
+                    with hd.link(
+                        href="#",
+                        target="_self",
+                        direction="horizontal",
+                        font_color="neutral-700",
+                        underline=False,
+                        hover_background_color="neutral-50",
+                        **row_kwargs,
+                    ) as row_el:
+                        row_renderer(i, row, col_w)
+                    if row_el.clicked:
+                        on_focus(None if is_focused else i, row)
+                else:
+                    with hd.hbox(**row_kwargs):
+                        row_renderer(i, row, col_w)
 
 
 # ---------------------------------------------------------------------------
@@ -661,17 +674,14 @@ def _find_similar(workout: dict, all_workouts: list, n: int = 8) -> list:
 # ---------------------------------------------------------------------------
 
 
-def session_detail(
-    session_id: int,
-    client,
-    user_id: str
-) -> None:
+def session_detail(session_id: int, client, user_id: str) -> None:
     """Render the full-screen session detail overlay."""
     _theme = hd.theme()
 
     state = hd.state(
         metric="pace",  # "pace" | "watts"
         focused_interval=None,  # int | None
+        focused_interval_excluding_rest=None,  # int | None
         custom_splits=None,  # list[int] | None
     )
 
@@ -692,7 +702,6 @@ def session_detail(
     wtype = workout.get("workout_type", "")
     is_interval = wtype in INTERVAL_WORKOUT_TYPES
 
-
     def _fetch_detail():
         return client.get_strokes(int(user_id), workout["id"])
 
@@ -710,8 +719,7 @@ def session_detail(
 
         title = f"{reps} x {interval_structure_key(workout, compact=True)}"
     else:
-        title =  _fmt_distance_label(workout)
-
+        title = _fmt_distance_label(workout)
 
     # ── Layout ───────────────────────────────────────────────────────────────
 
@@ -719,28 +727,23 @@ def session_detail(
         # ── Header ───────────────────────────────────────────────────────────
 
         with hd.hbox(padding_top=1, gap=2, align="center"):
-            hd.text(
-                _fmt_date(workout.get("date", "")),
-                 font_color="neutral-500"
-            )
+            hd.text(_fmt_date(workout.get("date", "")), font_color="neutral-500")
 
             # hd.text( "/", font_color="neutral-500")
 
             hd.text(title, font_weight="bold", font_size="x-large")
 
-
         if workout.get("comments"):
             with hd.hbox(gap=0.25):
-                hd.icon("quote", font_color="neutral-500") 
+                hd.icon("quote", font_color="neutral-500")
                 hd.text(
                     workout["comments"], font_color="neutral-500", font_size="medium"
                 )
-                hd.text("\"")
+                hd.text('"')
 
         # ── Summary stats ─────────────────────────────────────────────────────
 
         _summary_section(workout, strokes)
-
 
         # ── Chart + Splits side by side ───────────────────────────────────────
 
@@ -748,11 +751,23 @@ def session_detail(
         total_dist = workout.get("distance") or 0
         show_custom = has_strokes and not is_interval and total_dist > 0
 
+        def on_split_focus(idx, row):
+            state.focused_interval = idx
+            if idx is None:
+                state.focused_interval_excluding_rest = None
+            else:
+                state.focused_interval_excluding_rest = row.get("_work_idx", 0) + 1
+
         with hd.hbox(gap=2, align="start"):
             # Left: chart
             with hd.box(gap=1, grow=True, min_width=0):
+                if state.focused_interval is not None:
+                    band_type = "Interval" if is_interval else "Split"
+                    graph_title = f"Workout Graph: {band_type} {state.focused_interval_excluding_rest}"
+                else:
+                    graph_title = "Workout Graph"
                 hd.text(
-                    f"Workout Graph {"" if not state.focused_interval else f": {"Interval" if is_interval else "Split"} {state.focused_interval}"}",
+                    graph_title,
                     font_weight="semibold",
                     font_size="x-large",
                     font_color="neutral-800",
@@ -808,10 +823,12 @@ def session_detail(
                             state.metric = rg.value
 
                         if state.focused_interval is not None:
-                            reset_btn = hd.button("Reset zoom", variant="neutral", size="small")
+                            reset_btn = hd.button(
+                                "Reset zoom", variant="neutral", size="small"
+                            )
                             if reset_btn.clicked:
                                 state.focused_interval = None
-
+                                state.focused_interval_excluding_rest = None
 
                 else:
                     hd.text(
@@ -820,8 +837,6 @@ def session_detail(
                         font_size="small",
                     )
 
-
-                
             # Right: splits/intervals table + custom splits editor
             with hd.box(gap=0.75):
                 with hd.hbox(gap=0.5):
@@ -847,7 +862,7 @@ def session_detail(
                     focused_idx=state.focused_interval
                     if state.focused_interval is not None
                     else -1,
-                    on_focus=lambda i: setattr(state, "focused_interval", i),
+                    on_focus=on_split_focus,
                 )
 
         # ── Similar sessions ─────────────────────────────────────────────────
@@ -860,7 +875,18 @@ def session_detail(
                 font_size="small",
                 font_color="neutral-500",
             )
-            result_table(similar)
+            result_table(
+                similar,
+                extra_col=(
+                    "Workout",
+                    12,
+                    lambda w: (
+                        interval_structure_key(w, compact=True)
+                        if w.get("workout_type", "") in INTERVAL_WORKOUT_TYPES
+                        else ""
+                    ),
+                ),
+            )
 
 
 # ---------------------------------------------------------------------------

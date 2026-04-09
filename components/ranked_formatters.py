@@ -119,11 +119,16 @@ def result_table(
     results: list,
     *,
     paginate: bool = True,
+    extra_col: tuple | None = None,
 ) -> None:
     """
     Render a data table of workout results.
 
     Each row has a link to /session/{id} for drill-down navigation.
+
+    extra_col : optional (header_str, width, fn) tuple.  fn(row) -> str is
+                called for each row to produce the cell value.  The column is
+                inserted immediately after Date (before Distance).
     """
     if not results:
         hd.text("No results.", font_color="neutral-500", font_size="small")
@@ -167,6 +172,14 @@ def result_table(
                 font_weight="semibold",
                 width=_COL_WIDTHS["Date"],
             )
+            if extra_col:
+                hd.text(
+                    extra_col[0],
+                    font_color=header_color,
+                    font_size=text_size,
+                    font_weight="semibold",
+                    width=extra_col[1],
+                )
             if multi_type:
                 hd.text(
                     "Type",
@@ -241,6 +254,13 @@ def result_table(
                         font_size=text_size,
                         width=_COL_WIDTHS["Date"],
                     )
+                    if extra_col:
+                        hd.text(
+                            extra_col[2](r),
+                            font_size=text_size,
+                            font_color="neutral-500",
+                            width=extra_col[1],
+                        )
                     if multi_type:
                         hd.text(
                             _machine_label(r.get("type", "")),
