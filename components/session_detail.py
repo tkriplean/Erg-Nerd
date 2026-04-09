@@ -55,14 +55,14 @@ from components.workout_sync import workout_sync
 
 def _stat(label: str, value: str) -> None:
     """One stat cell: small muted label above bold value."""
-    with hd.box(min_width=8, padding=(0.5, 1.25)):
+    with hd.box(padding=(0.5, 1.25, 0.5, 1.25)):
         hd.text(
             label,
-            font_size="x-small",
+            font_size="small",
             font_color="neutral-500",
             font_weight="semibold",
         )
-        hd.text(value, font_weight="bold", font_size="medium")
+        hd.text(value, font_weight="bold", font_size="large")
 
 
 def _summary_section(workout: dict, strokes: Optional[list]) -> None:
@@ -91,10 +91,7 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
     rest_dist = workout.get("rest_distance")
     rest_time = workout.get("rest_time")
 
-    _theme = hd.theme()
-    border_b = "1px solid neutral-200"
-
-    with hd.box(border_bottom=border_b, padding_bottom=0.25, margin_bottom=0.5):
+    with hd.box(grow=True):
         with hd.hbox(wrap="wrap", gap=0):
             if workout.get("distance"):
                 _stat("Distance", _fmt_distance(workout["distance"]))
@@ -722,27 +719,28 @@ def session_detail(session_id: int, client, user_id: str) -> None:
 
     # ── Layout ───────────────────────────────────────────────────────────────
 
-    with hd.box(padding=(1, 2), gap=1.5):
-        # ── Header ───────────────────────────────────────────────────────────
+    with hd.box(padding=(1, 2, 0, 4), gap=3):
+        with hd.hbox(gap=4, align="center", justify="end"):
+            # ── Header ───────────────────────────────────────────────────────────
 
-        with hd.hbox(padding_top=1, gap=2, align="center"):
-            hd.text(_fmt_date(workout.get("date", "")), font_color="neutral-500")
+            with hd.box(padding_top=1, gap=0, align="start"):
+                hd.text(_fmt_date(workout.get("date", "")), font_color="neutral-500")
 
-            # hd.text( "/", font_color="neutral-500")
+                hd.text(title, font_weight="bold", font_size="2x-large")
 
-            hd.text(title, font_weight="bold", font_size="x-large")
+                if workout.get("comments"):
+                    with hd.hbox(gap=0.25):
+                        hd.icon("quote", font_color="neutral-500")
+                        hd.text(
+                            workout["comments"],
+                            font_color="neutral-500",
+                            font_size="medium",
+                        )
+                        hd.text('"')
 
-        if workout.get("comments"):
-            with hd.hbox(gap=0.25):
-                hd.icon("quote", font_color="neutral-500")
-                hd.text(
-                    workout["comments"], font_color="neutral-500", font_size="medium"
-                )
-                hd.text('"')
+            # ── Summary stats ─────────────────────────────────────────────────────
 
-        # ── Summary stats ─────────────────────────────────────────────────────
-
-        _summary_section(workout, strokes)
+            _summary_section(workout, strokes)
 
         # ── Chart + Splits side by side ───────────────────────────────────────
 
@@ -750,14 +748,7 @@ def session_detail(session_id: int, client, user_id: str) -> None:
         total_dist = workout.get("distance") or 0
         show_custom = has_strokes and not is_interval and total_dist > 0
 
-        def on_split_focus(idx, row):
-            state.focused_interval = idx
-            if idx is None:
-                state.focused_interval_excluding_rest = None
-            else:
-                state.focused_interval_excluding_rest = row.get("_work_idx", 0) + 1
-
-        with hd.hbox(gap=2, align="start"):
+        with hd.hbox(gap=2, align="start", grow=True):
             # Left: chart
             with hd.box(gap=1, grow=True, min_width=0):
                 if state.focused_interval is not None:
@@ -805,7 +796,7 @@ def session_detail(session_id: int, client, user_id: str) -> None:
                             focused_interval_idx=state.focused_interval,
                             is_dark=_theme.is_dark,
                         )
-                        chart = StrokeChart(config=cfg, height=300)
+                        chart = StrokeChart(config=cfg, height="50vh")
                         if (
                             chart.clicked_band_idx >= 0
                             and chart.clicked_band_idx != state.focused_interval
@@ -835,6 +826,13 @@ def session_detail(session_id: int, client, user_id: str) -> None:
                         font_color="neutral-500",
                         font_size="small",
                     )
+
+            def on_split_focus(idx, row):
+                state.focused_interval = idx
+                if idx is None:
+                    state.focused_interval_excluding_rest = None
+                else:
+                    state.focused_interval_excluding_rest = row.get("_work_idx", 0) + 1
 
             # Right: splits/intervals table + custom splits editor
             with hd.box(gap=0.75):

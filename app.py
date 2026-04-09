@@ -204,7 +204,9 @@ def _dashboard_view(client, user_id: str, app_state) -> None:
     current_tab = _ROUTE_TABS.get(loc.path, None if in_session else _DEFAULT_TAB)
 
     with hd.box(padding=2, gap=1, padding_top=0):
-        with hd.hbox(gap=2, align="end"):
+        with hd.hbox(
+            gap=2,
+        ):
             rowing_animation(width=10, theme="dark" if _theme.is_dark else "light")
             with hd.nav(direction="horizontal", gap=0, align="end"):
                 for tab_name, path in _TAB_ROUTES.items():
