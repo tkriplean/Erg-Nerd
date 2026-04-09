@@ -224,34 +224,46 @@ def _bands_from_intervals(intervals: list) -> list:
     """
     Build bands from the workout's interval list using cumulative durations.
 
-    Each interval (work and rest) with a non-zero time becomes a band.  The
-    x positions are accumulated from interval time fields (tenths → seconds),
-    which directly matches the stitched stroke timeline produced by
-    _stitch_interval_times() since both accumulate the same durations.
+    Each entry in the intervals list is a work interval.  A rest band is
+    synthesised immediately after whenever the work interval carries a
+    non-zero rest_time field.
+
+    Mirrors the row-building logic in _intervals_table exactly so that
+    band index i always corresponds to table row i (required for
+    click-to-focus to zoom the correct chart region).
     """
     bands = []
     elapsed_s = 0.0
-    work_idx = 0
-    for iv in intervals:
+    for work_idx, iv in enumerate(intervals):
         dur_s = (iv.get("time") or 0) / 10.0
         if dur_s <= 0:
             continue
 
-        print(iv)
-        is_work = (iv.get("type") or "work") != "rest"
-        label = f"#{work_idx + 1}" if is_work else ""
+        # Work band
         bands.append(
             {
                 "idx": len(bands),
                 "xMin": round(elapsed_s, 2),
                 "xMax": round(elapsed_s + dur_s, 2),
-                "label": label,
-                "work": is_work,
+                "label": f"#{work_idx + 1}",
+                "work": True,
             }
         )
         elapsed_s += dur_s
-        if is_work:
-            work_idx += 1
+
+        # Rest band (optional — only present when rest_time is set)
+        rest_dur_s = (iv.get("rest_time") or 0) / 10.0
+        if rest_dur_s > 0:
+            bands.append(
+                {
+                    "idx": len(bands),
+                    "xMin": round(elapsed_s, 2),
+                    "xMax": round(elapsed_s + rest_dur_s, 2),
+                    "label": "",
+                    "work": False,
+                }
+            )
+            elapsed_s += rest_dur_s
     return bands
 
 

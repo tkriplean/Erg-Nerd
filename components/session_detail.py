@@ -472,13 +472,14 @@ def _intervals_table(
     _bands_from_intervals() (both skip zero-duration intervals, same order).
     Rest rows are styled muted with "r" in the # column.
     """
-    # Detect HR data across all intervals
+    # Detect HR data across all work intervals
     has_hr = any((iv.get("heart_rate") or {}).get("average") for iv in intervals)
 
-    # Build rows from all non-zero-duration intervals (mirrors _bands_from_intervals)
+    # Build rows — one work row per interval, plus an optional rest row when
+    # rest_time is set.  Mirrors _bands_from_intervals exactly so row index i
+    # always corresponds to band index i for click-to-focus.
     rows = []
-    work_idx = 0
-    for iv in intervals:
+    for work_idx, iv in enumerate(intervals):
         t = iv.get("time") or 0
         if t <= 0:
             continue
@@ -499,20 +500,18 @@ def _intervals_table(
             }
         )
 
-        rest_time = iv.get("rest_time") or 0
-        if rest_time > 0:
-            d = iv.get("rest_distance") or 0
-            pace_t = (rest_time * 500 / d) if d else None
-
+        rest_t = iv.get("rest_time") or 0
+        if rest_t > 0:
+            rest_d = iv.get("rest_distance") or 0
+            rest_pace_t = (rest_t * 500 / rest_d) if rest_d else None
             rows.append(
                 {
                     "_is_rest": True,
-                    "time": rest_time,
-                    "distance": d,
-                    "pace_tenths": pace_t,
+                    "time": rest_t,
+                    "distance": rest_d,
+                    "pace_tenths": rest_pace_t,
                 }
             )
-        work_idx += 1
 
     col_w = [2.5, 6, 6, 6, 5, 3.5]
     headers = ["#", "Dist", "Time", "Pace", "W", "SPM"]
