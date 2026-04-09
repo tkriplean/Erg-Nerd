@@ -31,24 +31,46 @@ from services.rowing_utils import compute_watts, INTERVAL_WORKOUT_TYPES
 # ---------------------------------------------------------------------------
 
 
-def _stitch_interval_times(strokes: list) -> list:
+def _stitch_interval_times(
+    strokes: list,
+    intervals: Optional[list] = None,
+) -> list:
     """
     Return a copy of strokes with t values made monotonically increasing.
 
-    When the Concept2 API returns interval workouts, t resets to 0 at the
-    start of each interval (work and rest).  This function detects the reset
-    by checking whether t drops significantly from the previous stroke, then
-    accumulates an offset so all strokes share a single continuous timeline.
+    The Concept2 API resets t to 0 at the start of each work interval.
+    t does NOT reset separately for rest periods — rest strokes (if any)
+    continue counting up from where the work strokes left off, and the
+    next reset happens only when the following work interval begins.
+    This means there is exactly one backward jump per interval boundary.
+
+    At each jump we know which interval just ended, so we advance the offset
+    by the full canonical duration of that interval (work time + rest time)
+    rather than by prev_t.  This is necessary because the last stroke before
+    a boundary may arrive several tenths before the interval actually ends,
+    and accumulating prev_t would compress the chart timeline by that gap on
+    every boundary.
+
+    Falls back to accumulating prev_t if interval metadata is absent or
+    exhausted.
     """
     if not strokes:
         return strokes
+
     result = []
     offset = 0
     prev_t = 0
+    interval_idx = 0  # index of the interval that just ended at each jump
+
     for i, s in enumerate(strokes):
         t = s.get("t", 0)
         if i > 0 and t < prev_t:
-            offset += prev_t
+            if intervals and interval_idx < len(intervals):
+                iv = intervals[interval_idx]
+                offset += (iv.get("time") or 0) + (iv.get("rest_time") or 0)
+            else:
+                offset += prev_t  # fallback
+            interval_idx += 1
         prev_t = t
         stitched = dict(s)
         stitched["t"] = t + offset
@@ -83,8 +105,17 @@ def build_stroke_chart_config(
     if not strokes:
         return {}
 
-    # Stitch t values for interval workouts (each interval resets t to 0).
-    strokes = _stitch_interval_times(strokes)
+    # Stitch t values so all strokes share a continuous timeline.
+    # Pass the interval list so segment boundaries are snapped to exact
+    # durations rather than inferred from the last observed stroke t.
+    wo = workout.get("workout") or {}
+    wtype = workout.get("workout_type", "")
+    intervals = (
+        wo.get("intervals")
+        if wtype in INTERVAL_WORKOUT_TYPES
+        else None
+    )
+    strokes = _stitch_interval_times(strokes, intervals=intervals)
 
     show_watts = metric == "watts"
 

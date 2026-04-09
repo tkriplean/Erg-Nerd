@@ -704,7 +704,7 @@ def session_detail(session_id: int, client, user_id: str) -> None:
     if has_strokes:
         stroke_task.run(_fetch_detail)
 
-    strokes: Optional[list] = None
+    strokes = None
     if has_strokes and stroke_task.done and not stroke_task.error:
         strokes = stroke_task.result if isinstance(stroke_task.result, list) else []
 
