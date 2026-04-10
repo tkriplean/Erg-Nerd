@@ -244,7 +244,12 @@ _CHAIN_Y3 = 186.17041
 _SEAT_X = [114, 84, 84, 84]
 
 # Head image [x, y] per frame
-_HEAD_XY = [(119, 59), (92, 51), (8, 50), (8, 50)]
+_HEAD_XY = [(119, 59), (92, 51), (6, 53), (6, 53)]
+
+# Head rotation (degrees, CCW-positive in SVG) per frame [catch, legs, body, finish]
+_HEAD_ROT = [0, 0, -23, -23]
+# Pivot point within the 110×110 head image (local coords — near the base/neck)
+_HEAD_ROT_CX, _HEAD_ROT_CY = 55, 88
 
 # Letter [x, y] per frame  (tspan positions)
 _LETTERS: dict[str, list[tuple[int, int]]] = {
@@ -302,6 +307,33 @@ def _letter_translate(letter: str) -> str:
     formatted = "; ".join(f"{dx},{dy}" for dx, dy in [o0, o1, o2, o3, o2, o1, o0])
     return (
         f'<animateTransform attributeName="transform" type="translate"'
+        f' calcMode="spline" dur="{_DUR}" repeatCount="indefinite"'
+        f' keyTimes="{_KT}" values="{formatted}"'
+        f' keySplines="{_KS}"/>'
+    )
+
+
+def _animate_head_translate() -> str:
+    """animateTransform (translate) that moves the head group to the correct position."""
+    xy0, xy1, xy2, xy3 = _HEAD_XY
+    frames = [xy0, xy1, xy2, xy3, xy2, xy1, xy0]
+    formatted = "; ".join(f"{x},{y}" for x, y in frames)
+    return (
+        f'<animateTransform attributeName="transform" type="translate"'
+        f' calcMode="spline" dur="{_DUR}" repeatCount="indefinite"'
+        f' keyTimes="{_KT}" values="{formatted}"'
+        f' keySplines="{_KS}"/>'
+    )
+
+
+def _animate_head_rotate() -> str:
+    """animateTransform (rotate) for head tilt — -23° in body/finish phases."""
+    cx, cy = _HEAD_ROT_CX, _HEAD_ROT_CY
+    r0, r1, r2, r3 = _HEAD_ROT
+    frames = [r0, r1, r2, r3, r2, r1, r0]
+    formatted = "; ".join(f"{r} {cx} {cy}" for r in frames)
+    return (
+        f'<animateTransform attributeName="transform" type="rotate"'
         f' calcMode="spline" dur="{_DUR}" repeatCount="indefinite"'
         f' keyTimes="{_KT}" values="{formatted}"'
         f' keySplines="{_KS}"/>'
@@ -520,12 +552,14 @@ def build_svg(theme: str = "light") -> str:
     {_letter_translate('G')}
   </text>
 
-  <!-- head (embedded image, animated position) -->
-  <image id="Head" x="{_HEAD_XY[0][0]}" y="{_HEAD_XY[0][1]}"
-         width="110" height="110" xlink:href="{_HEAD_URI}">
-    {_animate_attr('x', [xy[0] for xy in _HEAD_XY])}
-    {_animate_attr('y', [xy[1] for xy in _HEAD_XY])}
-  </image>
+  <!-- head: outer group translates to position; inner group rotates around neck pivot -->
+  <g id="HeadGroup">
+    {_animate_head_translate()}
+    <g id="HeadRotate">
+      {_animate_head_rotate()}
+      <image id="Head" x="0" y="0" width="110" height="110" xlink:href="{_HEAD_URI}"/>
+    </g>
+  </g>
 
 </svg>"""
     return svg
