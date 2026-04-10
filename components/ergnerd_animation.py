@@ -251,6 +251,22 @@ _HEAD_ROT = [0, 0, -23, -23]
 # Pivot point within the 110×110 head image (local coords — near the base/neck)
 _HEAD_ROT_CX, _HEAD_ROT_CY = 55, 88
 
+# ---------------------------------------------------------------------------
+# Sweat droplet constants
+# ---------------------------------------------------------------------------
+# Droplets appear during the body-drive phase (keyTimes 0.2222→0.3333, ≈0.444 s)
+# and fly off the back (left side) of the head.
+# At body phase the head sits at SVG global (6, 53); the left/back edge is x≈6.
+#
+# Five keyframes: stationary+hidden → fade-in+fly → fade-out → invisible reset
+_SWEAT_KT = "0; 0.2222; 0.2778; 0.3333; 1"
+
+# Each row: (start_x, start_y, end_x, end_y, rx, ry, rotation_deg, peak_opacity, fill)
+_SWEAT_DROPS = [
+    (16, 66, -13, 41, 2.8, 4.8, -45, 0.90, "#3b82f6"),  # upper droplet, richer blue
+    (12, 82, -16, 61, 2.2, 3.6, -40, 0.75, "#60a5fa"),  # lower droplet, lighter blue
+]
+
 # Letter [x, y] per frame  (tspan positions)
 _LETTERS: dict[str, list[tuple[int, int]]] = {
     "N": [(249, 77), (159, 77), (129, 105), (126, 84)],
@@ -337,6 +353,32 @@ def _animate_head_rotate() -> str:
         f' calcMode="spline" dur="{_DUR}" repeatCount="indefinite"'
         f' keyTimes="{_KT}" values="{formatted}"'
         f' keySplines="{_KS}"/>'
+    )
+
+
+def _sweat_drop_svg(sx, sy, ex, ey, rx, ry, rot, peak, color) -> str:
+    """
+    Return SVG for one animated sweat droplet.
+
+    The droplet is invisible outside the body-drive phase.  It starts at
+    (sx, sy), flies to (ex, ey) via the midpoint, fading in then out.
+    Rendered as a rotated ellipse to suggest a flying teardrop.
+    """
+    mid_x = round((sx + ex) / 2, 1)
+    mid_y = round((sy + ey) / 2, 1)
+    pos_vals = f"{sx},{sy}; {sx},{sy}; {mid_x},{mid_y}; {ex},{ey}; {sx},{sy}"
+    opa_vals = f"0; 0; {peak}; 0; 0"
+    return (
+        f'<g opacity="0">'
+        f'<animate attributeName="opacity" calcMode="linear"'
+        f' dur="{_DUR}" repeatCount="indefinite"'
+        f' keyTimes="{_SWEAT_KT}" values="{opa_vals}"/>'
+        f'<animateTransform attributeName="transform" type="translate"'
+        f' calcMode="linear" dur="{_DUR}" repeatCount="indefinite"'
+        f' keyTimes="{_SWEAT_KT}" values="{pos_vals}"/>'
+        f'<ellipse cx="0" cy="0" rx="{rx}" ry="{ry}"'
+        f' fill="{color}" transform="rotate({rot})"/>'
+        f'</g>'
     )
 
 
@@ -449,9 +491,11 @@ def build_svg(theme: str = "light") -> str:
         ]
     )
 
+    _sweat_svg = "\n  ".join(_sweat_drop_svg(*d) for d in _SWEAT_DROPS)
+
     svg = f"""<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
-     viewBox="0 0 388 275" width="388" height="275">
+     viewBox="-40 0 428 275" width="428" height="275">
 
   <defs>
     <!-- clip mask that grows as chain extends during drive -->
@@ -560,6 +604,9 @@ def build_svg(theme: str = "light") -> str:
       <image id="Head" x="0" y="0" width="110" height="110" xlink:href="{_HEAD_URI}"/>
     </g>
   </g>
+
+  <!-- sweat droplets: body-drive phase only, fly off back (left side) of head -->
+  {_sweat_svg}
 
 </svg>"""
     return svg
