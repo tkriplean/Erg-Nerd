@@ -61,6 +61,176 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
     const isDark = cfg.isDark || false;
     const gridColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)";
     const tickColor = isDark ? "#9ca3af" : "#6b7280";
+
+    // -----------------------------------------------------------------------
+    // Stacked mode — one dataset per interval per visible metric, x reset to 0
+    // -----------------------------------------------------------------------
+
+    if (cfg.stack) {
+      const intervals = cfg.stackedIntervals || [];
+      const paceYMin = cfg.paceYMin != null ? cfg.paceYMin : undefined;
+      const paceYMax = cfg.paceYMax != null ? cfg.paceYMax : undefined;
+      const spmYMin  = cfg.spmYMin  != null ? cfg.spmYMin  : 0;
+      const spmYMax  = cfg.spmYMax  != null ? cfg.spmYMax  : 40;
+
+      const datasets = [];
+
+      // Pace / Watts — primary Y axis (one per interval)
+      if (cfg.showPace !== false) {
+        intervals.forEach((iv) => {
+          if (!iv.pacePoints || !iv.pacePoints.length) return;
+          datasets.push({
+            label: iv.label,
+            data: iv.pacePoints,
+            yAxisID: "y",
+            borderColor: iv.color,
+            backgroundColor: "transparent",
+            borderWidth: 1.5,
+            pointRadius: 0,
+            tension: 0.15,
+            order: 1,
+          });
+        });
+      }
+
+      // SPM — right axis, dashed (one per interval)
+      if (cfg.showSpm !== false) {
+        intervals.forEach((iv) => {
+          if (!iv.spmPoints || !iv.spmPoints.length) return;
+          datasets.push({
+            label: "_" + iv.label + " spm",   // "_" prefix hides from legend
+            data: iv.spmPoints,
+            yAxisID: "yspm",
+            borderColor: iv.color,
+            backgroundColor: "transparent",
+            borderWidth: 1,
+            borderDash: [3, 3],
+            pointRadius: 0,
+            tension: 0.1,
+            order: 2,
+          });
+        });
+      }
+
+      // HR — right axis, dotted (one per interval)
+      if (cfg.showHr !== false && cfg.hasHr) {
+        intervals.forEach((iv) => {
+          if (!iv.hrPoints || !iv.hrPoints.length) return;
+          datasets.push({
+            label: "_" + iv.label + " hr",    // "_" prefix hides from legend
+            data: iv.hrPoints,
+            yAxisID: "yhr",
+            borderColor: iv.color,
+            backgroundColor: "transparent",
+            borderWidth: 1,
+            borderDash: [2, 4],
+            pointRadius: 0,
+            tension: 0.1,
+            order: 3,
+          });
+        });
+      }
+
+      chartInstance = new Chart(canvas, {
+        type: "line",
+        data: { datasets },
+        options: {
+          animation: false,
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            legend: {
+              display: true,
+              position: "top",
+              labels: {
+                usePointStyle: true,
+                pointStyle: "line",
+                filter: (item) => !item.text.startsWith("_"),
+                color: tickColor,
+                font: { size: 11 },
+              },
+            },
+            tooltip: {
+              callbacks: {
+                title: (items) => formatTime(items[0].parsed.x),
+                label: (item) => {
+                  const ds = datasets[item.datasetIndex] || {};
+                  const name = (ds.label || "").replace(/^_/, "");
+                  if (ds.yAxisID === "y") {
+                    return cfg.showWatts
+                      ? ` ${name}: ${Math.round(item.parsed.y)} W`
+                      : ` ${name}: ${formatPace(item.parsed.y)}`;
+                  }
+                  if (ds.yAxisID === "yspm") return ` ${name}: ${item.parsed.y} spm`;
+                  if (ds.yAxisID === "yhr")  return ` ${name}: ${item.parsed.y} bpm`;
+                  return ` ${name}: ${item.parsed.y}`;
+                },
+              },
+            },
+          },
+          scales: {
+            x: {
+              type: "linear",
+              grid: { color: gridColor },
+              ticks: {
+                color: tickColor,
+                maxTicksLimit: 10,
+                callback: (v) => formatTime(v),
+              },
+            },
+            y: {
+              type: "linear",
+              position: "left",
+              reverse: !cfg.showWatts,
+              min: paceYMin,
+              max: paceYMax,
+              grid: { color: gridColor },
+              ticks: {
+                color: tickColor,
+                callback: (v) => cfg.showWatts ? `${Math.round(v)}W` : formatPace(v),
+              },
+            },
+            yspm: {
+              type: "linear",
+              position: "right",
+              display: cfg.showSpm !== false,
+              min: spmYMin,
+              max: spmYMax,
+              grid: { drawOnChartArea: false },
+              ticks: { color: isDark ? "#d97706" : "#b45309", callback: (v) => `${v}` },
+              title: {
+                display: true,
+                text: "spm",
+                color: isDark ? "#d97706" : "#b45309",
+                font: { size: 10 },
+              },
+            },
+            yhr: {
+              type: "linear",
+              position: "right",
+              display: cfg.showHr !== false && (cfg.hasHr || false),
+              min: 40,
+              max: 220,
+              grid: { drawOnChartArea: false },
+              ticks: { color: isDark ? "#f87171" : "#dc2626", callback: (v) => `${v}` },
+              title: {
+                display: true,
+                text: "bpm",
+                color: isDark ? "#f87171" : "#dc2626",
+                font: { size: 10 },
+              },
+            },
+          },
+        },
+      });
+      return;  // stacked chart built — skip normal path
+    }
+
+    // -----------------------------------------------------------------------
+    // Normal (non-stacked) path
+    // -----------------------------------------------------------------------
+
     const bands = cfg.bands || [];
     const xMin = cfg.xMin != null ? cfg.xMin : undefined;
     const xMax = cfg.xMax != null ? cfg.xMax : undefined;
@@ -68,8 +238,6 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
     const paceYMax = cfg.paceYMax != null ? cfg.paceYMax : undefined;
     const spmYMin  = cfg.spmYMin  != null ? cfg.spmYMin  : 0;
     const spmYMax  = cfg.spmYMax  != null ? cfg.spmYMax  : 30;
-
-
 
     // Pre-compute faded x-ranges: rest periods + the first few seconds of
     // each work interval (onset strokes are noisy).

@@ -501,6 +501,7 @@ def _intervals_table(
         if rest_t > 0:
             rest_d = iv.get("rest_distance") or 0
             rest_pace_t = (rest_t * 500 / rest_d) if rest_d else None
+
             rows.append(
                 {
                     "_is_rest": True,
@@ -539,6 +540,9 @@ def _interval_row(i, r, col_w, ts, has_hr):
     muted = "neutral-400" if is_rest else None
 
     num_str = "" if is_rest else str(r["_work_idx"] + 1)
+    if is_rest and d == 0:
+        return hd.text(height=0, border=None)
+
     cells = [
         (num_str, col_w[0], "neutral-400" if is_rest else "neutral-500"),
         (_fmt_distance(d) if d else "—", col_w[1], muted),
@@ -602,7 +606,7 @@ def _table_frame(
 
                 row_kwargs = dict(
                     gap=0.5,
-                    border_bottom=row_border,
+                    # border_bottom=row_border,
                     background_color=focus_bg if is_focused else None,
                     align="center",
                     padding=(0.35, 0.75, 0.35, 0.75),
@@ -679,6 +683,10 @@ def session_detail(session_id: int, client, user_id: str) -> None:
         focused_interval=None,  # int | None
         focused_interval_excluding_rest=None,  # int | None
         custom_splits=None,  # list[int] | None
+        stack=False,  # stacked-intervals overlay mode
+        show_pace=True,  # show pace/watts series in stacked mode
+        show_spm=True,  # show SPM series in stacked mode
+        show_hr=True,  # show HR series in stacked mode
     )
 
     # ── Pre-fetch workout list (cached; zero cost on repeat renders) ───────
@@ -713,7 +721,9 @@ def session_detail(session_id: int, client, user_id: str) -> None:
         work_ivs = [iv for iv in ivs if (iv.get("type") or "").lower() != "rest"]
         reps = len(work_ivs) or len(ivs)
 
-        title = f"{reps} x {interval_structure_key(workout, compact=True)}"
+        title = interval_structure_key(workout, compact=True)
+        if not workout.get("workout_type", "") == "VariableInterval":
+            title = f"{reps} x {title}"
     else:
         title = _fmt_distance_label(workout)
 
@@ -788,37 +798,89 @@ def session_detail(session_id: int, client, user_id: str) -> None:
                         opened=True,
                     )
                 elif strokes:
+                    has_hr = any(s.get("hr") for s in strokes)
+                    # Stack option: available when there are multiple work bands
+                    # (interval workouts, or split-based steady-state rows).
+                    can_stack = is_interval or bool(
+                        (workout.get("workout") or {}).get("splits")
+                    )
+
                     with hd.scope("chart"):
                         cfg = build_stroke_chart_config(
                             strokes,
                             workout,
                             metric=state.metric,
-                            focused_interval_idx=state.focused_interval,
+                            focused_interval_idx=(
+                                None if state.stack else state.focused_interval
+                            ),
                             is_dark=_theme.is_dark,
+                            stack=state.stack,
+                            show_pace=state.show_pace,
+                            show_spm=state.show_spm,
+                            show_hr=state.show_hr,
                         )
                         chart = StrokeChart(config=cfg, height="50vh")
                         if (
-                            chart.clicked_band_idx >= 0
+                            not state.stack
+                            and chart.clicked_band_idx >= 0
                             and chart.clicked_band_idx != state.focused_interval
                         ):
                             state.focused_interval = chart.clicked_band_idx
 
                     # ── Chart controls ────────────────────────────────────────────────────
 
-                    with hd.hbox(gap=1.5, align="center", padding_bottom=0.25):
-                        with radio_group(value=state.metric, size="small") as rg:
-                            hd.radio_button("Pace", value="pace")
-                            hd.radio_button("Watts", value="watts", size="small")
-                        if rg.changed:
-                            state.metric = rg.value
+                    with hd.box(gap=0.75, padding_bottom=0.25):
+                        # Row 1: metric toggle · stack switch
+                        with hd.hbox(gap=1.5, align="center"):
+                            with radio_group(value=state.metric, size="small") as rg:
+                                hd.radio_button("Pace", value="pace")
+                                hd.radio_button("Watts", value="watts", size="small")
+                            if rg.changed:
+                                state.metric = rg.value
 
-                        if state.focused_interval is not None:
-                            reset_btn = hd.button(
-                                "Reset zoom", variant="neutral", size="small"
-                            )
-                            if reset_btn.clicked:
-                                state.focused_interval = None
-                                state.focused_interval_excluding_rest = None
+                            if can_stack:
+                                stack_sw = hd.switch(
+                                    "Stack", checked=state.stack, size="small"
+                                )
+                                if stack_sw.changed:
+                                    state.stack = stack_sw.checked
+                                    # Clear zoom when entering stacked mode
+                                    if stack_sw.checked:
+                                        state.focused_interval = None
+                                        state.focused_interval_excluding_rest = None
+
+                            if not state.stack and state.focused_interval is not None:
+                                reset_btn = hd.button(
+                                    "Reset zoom", variant="neutral", size="small"
+                                )
+                                if reset_btn.clicked:
+                                    state.focused_interval = None
+                                    state.focused_interval_excluding_rest = None
+
+                        # Row 2 (stacked only): per-series visibility toggles
+                        if state.stack:
+                            with hd.hbox(gap=1.5, align="center"):
+                                metric_label = (
+                                    "Watts" if state.metric == "watts" else "Pace"
+                                )
+                                pace_sw = hd.switch(
+                                    metric_label, checked=state.show_pace, size="small"
+                                )
+                                if pace_sw.changed:
+                                    state.show_pace = pace_sw.checked
+
+                                spm_sw = hd.switch(
+                                    "SPM", checked=state.show_spm, size="small"
+                                )
+                                if spm_sw.changed:
+                                    state.show_spm = spm_sw.checked
+
+                                if has_hr:
+                                    hr_sw = hd.switch(
+                                        "HR", checked=state.show_hr, size="small"
+                                    )
+                                    if hr_sw.changed:
+                                        state.show_hr = hr_sw.checked
 
                 else:
                     hd.text(
