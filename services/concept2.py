@@ -48,6 +48,40 @@ SCOPES = "user:read,results:read"
 # Keeps us polite to the Concept2 API.
 _PAGE_DELAY = 1.0
 
+# ---------------------------------------------------------------------------
+# Stroke data sanitisation
+# ---------------------------------------------------------------------------
+
+# Genuine interval resets drop t back to near 0 (a few tenths at most).
+# Any backward jump whose new t is above this value is device noise, not a
+# real section boundary.
+_STROKE_RESET_THRESHOLD = 300  # tenths of a second (= 30 s)
+
+
+def _sanitise_strokes(strokes: list) -> list:
+    """
+    Remove anomalous strokes where t decreases but is clearly not an interval
+    reset.
+
+    Concept2 devices occasionally emit a stroke mid-rest whose t value is
+    slightly earlier than the previous stroke (e.g. 3770 → 3737).  These are
+    duplicates with no useful positional or physiological data, and they
+    corrupt interval-boundary detection in the chart builder if left in.
+
+    Genuine section resets always drop t back near zero (≤ a few tenths), so
+    any backward jump where the new t is still above _STROKE_RESET_THRESHOLD
+    is treated as noise and silently dropped.
+    """
+    cleaned = []
+    prev_t = 0
+    for s in strokes:
+        t = s.get("t", 0)
+        if t < prev_t and t > _STROKE_RESET_THRESHOLD:
+            continue  # anomalous backward-t noise
+        prev_t = t
+        cleaned.append(s)
+    return cleaned
+
 
 # Credentials are read lazily (inside functions) so that load_dotenv() in
 # app.py has always run before they are needed, regardless of import order.
@@ -517,7 +551,7 @@ class Concept2Client:
         """
         path = f"/users/{user_id}/results/{result_id}/strokes"
         results = self._get(path)
-        return results.get("data") or []
+        return _sanitise_strokes(results.get("data") or [])
 
     # ------------------------------------------------------------------
     # Context manager support

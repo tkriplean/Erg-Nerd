@@ -53,6 +53,10 @@ def _stitch_interval_times(
 
     Falls back to accumulating prev_t if interval metadata is absent or
     exhausted.
+
+    Anomalous device-emitted strokes with small backward-t values are removed
+    upstream by concept2.get_strokes(), so every backward jump seen here is a
+    genuine section reset.
     """
     if not strokes:
         return strokes
@@ -89,10 +93,7 @@ def _interval_colors(n: int) -> list:
         return []
     if n == 1:
         return ["hsl(220, 75%, 55%)"]
-    return [
-        f"hsl({round(220 - i * 190 / (n - 1))}, 75%, 55%)"
-        for i in range(n)
-    ]
+    return [f"hsl({round(220 - i * 190 / (n - 1))}, 75%, 55%)" for i in range(n)]
 
 
 def build_stroke_chart_config(
@@ -126,11 +127,7 @@ def build_stroke_chart_config(
     # durations rather than inferred from the last observed stroke t.
     wo = workout.get("workout") or {}
     wtype = workout.get("workout_type", "")
-    intervals = (
-        wo.get("intervals")
-        if wtype in INTERVAL_WORKOUT_TYPES
-        else None
-    )
+    intervals = wo.get("intervals") if wtype in INTERVAL_WORKOUT_TYPES else None
     strokes = _stitch_interval_times(strokes, intervals=intervals)
 
     show_watts = metric == "watts"
@@ -229,13 +226,15 @@ def build_stroke_chart_config(
 
     if wtype in INTERVAL_WORKOUT_TYPES and bands:
         work_ranges = [(b["xMin"], b["xMax"]) for b in bands if b.get("work")]
+
         def _in_work(t_s):
             return any(lo <= t_s <= hi for lo, hi in work_ranges)
+
         y_pace = [p["y"] for p in pace_pts if _in_work(p["x"])]
-        y_spm  = [p["y"] for p in spm_pts  if _in_work(p["x"])]
+        y_spm = [p["y"] for p in spm_pts if _in_work(p["x"])]
     else:
         y_pace = [p["y"] for p in pace_pts]
-        y_spm  = [p["y"] for p in spm_pts]
+        y_spm = [p["y"] for p in spm_pts]
 
     def _pad(lo, hi, frac=0.12, min_pad=0):
         """Expand [lo, hi] by frac of the span on each side."""
@@ -244,9 +243,12 @@ def build_stroke_chart_config(
         pad = max((hi - lo) * frac, min_pad)
         return lo - pad, hi + pad
 
-    pace_y_min, pace_y_max = _pad(*((min(y_pace), max(y_pace)) if y_pace else (None, None)))
-    spm_y_min,  spm_y_max  = _pad(*((min(y_spm),  max(y_spm))  if y_spm  else (None, None)),
-                                   min_pad=2)
+    pace_y_min, pace_y_max = _pad(
+        *((min(y_pace), max(y_pace)) if y_pace else (None, None))
+    )
+    spm_y_min, spm_y_max = _pad(
+        *((min(y_spm), max(y_spm)) if y_spm else (None, None)), min_pad=2
+    )
 
     # ── Stacked mode ─────────────────────────────────────────────────────────
     #
@@ -287,13 +289,15 @@ def build_stroke_chart_config(
                 if hr_v:
                     hr_p.append({"x": x, "y": hr_v})
 
-            stacked_intervals.append({
-                "label": band.get("label", f"#{idx + 1}"),
-                "color": colors[idx],
-                "pacePoints": pace_p,
-                "spmPoints": spm_p,
-                "hrPoints": hr_p,
-            })
+            stacked_intervals.append(
+                {
+                    "label": band.get("label", f"#{idx + 1}"),
+                    "color": colors[idx],
+                    "pacePoints": pace_p,
+                    "spmPoints": spm_p,
+                    "hrPoints": hr_p,
+                }
+            )
 
         return {
             "stack": True,
