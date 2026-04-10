@@ -457,14 +457,25 @@ class Concept2Client:
 
         Args:
             initial_workouts: dict of {str(id): result_dict} from localStorage.
-            on_progress: optional callable(pages_fetched, workouts_cached)
-                         called after each page. Safe to call from a background
-                         thread (e.g. mutate an hd.state).
+            on_progress: optional callable(pages_fetched, workouts_cached,
+                         api_total, earliest_date) called after each page.
+                         api_total is None until the first page resolves.
+                         earliest_date is an ISO date string (YYYY-MM-DD prefix)
+                         of the oldest workout seen so far, or None.
+                         Safe to call from a background thread (e.g. mutate hd.state).
         """
         local = dict(initial_workouts)  # work on a copy
         print(f"[concept2] Starting sync. Local cache: {len(local)} workouts.")
 
         api_total: Optional[int] = None  # learned from first page's meta
+
+        # Seed earliest_date from cache so returning users see their true history depth.
+        earliest_date: Optional[str] = None
+        if local:
+            dates = [r.get("date", "")[:10] for r in local.values() if r.get("date")]
+            if dates:
+                earliest_date = min(dates)
+
         page = 1
         while True:
             if page > 1:
@@ -496,6 +507,9 @@ class Concept2Client:
                 rid = str(result.get("id", ""))
                 if not rid:
                     continue
+                d = result.get("date", "")[:10]
+                if d and (earliest_date is None or d < earliest_date):
+                    earliest_date = d
                 if rid in local:
                     overlap_found = True
                     # Keep going through this page — there may be newer
@@ -504,7 +518,7 @@ class Concept2Client:
                     local[rid] = result
 
             if on_progress:
-                on_progress(page, len(local))
+                on_progress(page, len(local), api_total, earliest_date)
 
             # Only stop on overlap once the cache is complete.
             cache_complete = api_total is None or len(local) >= api_total

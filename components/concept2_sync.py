@@ -29,9 +29,19 @@ Usage
         ...
 """
 
+from datetime import datetime
+
 import hyperdiv as hd
 
 from services.local_storage_compression import compress_workouts, decompress_workouts
+
+
+def _fmt_month_year(date_str: str) -> str:
+    """'2019-03-14' → 'Mar 2019'"""
+    try:
+        return datetime.strptime(date_str[:10], "%Y-%m-%d").strftime("%b %Y")
+    except Exception:
+        return date_str[:7]
 
 
 def concept2_sync(client) -> tuple | None:
@@ -54,13 +64,15 @@ def concept2_sync(client) -> tuple | None:
         sync_state.initial_loaded = True
 
     # ── Step 2: background API sync ──────────────────────────────────────────
-    progress = hd.state(pages=0, total=0)
+    progress = hd.state(pages=0, total=0, api_total=None, earliest_date=None)
     task = hd.task()
 
     def _fetch(client, initial, progress):
-        def on_progress(pages_fetched, workouts_cached):
+        def on_progress(pages_fetched, workouts_cached, api_total, earliest_date):
             progress.pages = pages_fetched
             progress.total = workouts_cached
+            progress.api_total = api_total
+            progress.earliest_date = earliest_date
 
         return client.get_all_results(initial, on_progress=on_progress)
 
@@ -76,15 +88,27 @@ def concept2_sync(client) -> tuple | None:
 
     # Loading UI
     if task.running:
-        with hd.box(align="center", padding=4, gap=1):
-            hd.spinner()
+        with hd.box(align="center", padding=4, gap=2):
+            if progress.pages >= 2 and progress.api_total:
+                pct = min(100, round(progress.total / progress.api_total * 100))
+                with hd.box(width=32):
+                    hd.progress_bar(value=pct)
+            else:
+                hd.spinner()
             if progress.pages == 0:
                 hd.text("Loading workout history…", font_color="neutral-500")
             else:
-                hd.text(
-                    f"Page {progress.pages} fetched — {progress.total:,} workouts loaded so far…",
-                    font_color="neutral-500",
-                )
+                if progress.api_total:
+                    count_line = f"Syncing {progress.total:,} of {progress.api_total:,} workouts…"
+                else:
+                    count_line = f"Syncing {progress.total:,} workouts…"
+                hd.text(count_line, font_color="neutral-500")
+                if progress.earliest_date:
+                    hd.text(
+                        f"Back to {_fmt_month_year(progress.earliest_date)}",
+                        font_color="neutral-400",
+                        font_size="small",
+                    )
         return None
 
     # Error UI
