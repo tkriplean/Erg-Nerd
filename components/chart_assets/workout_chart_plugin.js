@@ -48,6 +48,41 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
   }
 
   // -----------------------------------------------------------------------
+  // Shared right-axis scale builder — de-duplicates yspm/yhr between modes
+  // -----------------------------------------------------------------------
+
+  function buildRightScales(cfg, isDark, displaySpm, displayHr) {
+    const spmColor = isDark ? "#3b82f6" : "#1e40af";
+    const hrColor  = isDark ? "#f87171" : "#ef4444";
+    const spmYMin  = cfg.spmYMin  != null ? cfg.spmYMin  : 0;
+    const spmYMax  = cfg.spmYMax  != null ? cfg.spmYMax  : 30;
+    const hrYMin   = cfg.hrYMin   != null ? cfg.hrYMin   : 40;
+    const hrYMax   = cfg.hrYMax   != null ? cfg.hrYMax   : 220;
+    return {
+      yspm: {
+        type: "linear",
+        position: "right",
+        display: displaySpm,
+        min: spmYMin,
+        max: spmYMax,
+        grid: { drawOnChartArea: false },
+        ticks: { color: spmColor, callback: (v) => `${v}` },
+        title: { display: true, text: "spm", color: spmColor, font: { size: 10 } },
+      },
+      yhr: {
+        type: "linear",
+        position: "right",
+        display: displayHr,
+        min: hrYMin,
+        max: hrYMax,
+        grid: { drawOnChartArea: false },
+        ticks: { color: hrColor, callback: (v) => `${v}` },
+        title: { display: true, text: "bpm", color: hrColor, font: { size: 10 } },
+      },
+    };
+  }
+
+  // -----------------------------------------------------------------------
   // Chart builder
   // -----------------------------------------------------------------------
 
@@ -70,8 +105,6 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
       const intervals = cfg.stackedIntervals || [];
       const paceYMin = cfg.paceYMin != null ? cfg.paceYMin : undefined;
       const paceYMax = cfg.paceYMax != null ? cfg.paceYMax : undefined;
-      const spmYMin  = cfg.spmYMin  != null ? cfg.spmYMin  : 0;
-      const spmYMax  = cfg.spmYMax  != null ? cfg.spmYMax  : 40;
 
       const datasets = [];
 
@@ -191,36 +224,11 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
                 callback: (v) => cfg.showWatts ? `${Math.round(v)}W` : formatPace(v),
               },
             },
-            yspm: {
-              type: "linear",
-              position: "right",
-              display: cfg.showSpm !== false,
-              min: spmYMin,
-              max: spmYMax,
-              grid: { drawOnChartArea: false },
-              ticks: { color: isDark ? "#3b82f6" : "#1e40af", callback: (v) => `${v}` },
-              title: {
-                display: true,
-                text: "spm",
-                color: isDark ? "#3b82f6" : "#1e40af",
-                font: { size: 10 },
-              },
-            },
-            yhr: {
-              type: "linear",
-              position: "right",
-              display: cfg.showHr !== false && (cfg.hasHr || false),
-              min: 40,
-              max: 220,
-              grid: { drawOnChartArea: false },
-              ticks: { color: isDark ? "#f87171" : "#ef4444", callback: (v) => `${v}` },
-              title: {
-                display: true,
-                text: "bpm",
-                color: isDark ? "#f87171" : "#ef4444",
-                font: { size: 10 },
-              },
-            },
+            ...buildRightScales(
+              cfg, isDark,
+              cfg.showSpm !== false,
+              cfg.showHr !== false && (cfg.hasHr || false)
+            ),
           },
         },
       });
@@ -236,8 +244,6 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
     const xMax = cfg.xMax != null ? cfg.xMax : undefined;
     const paceYMin = cfg.paceYMin != null ? cfg.paceYMin : undefined;
     const paceYMax = cfg.paceYMax != null ? cfg.paceYMax : undefined;
-    const spmYMin  = cfg.spmYMin  != null ? cfg.spmYMin  : 0;
-    const spmYMax  = cfg.spmYMax  != null ? cfg.spmYMax  : 30;
 
     // Pre-compute faded x-ranges: rest periods + the first few seconds of
     // each work interval (onset strokes are noisy).
@@ -254,18 +260,24 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
       return !(xMin || xMax) && inFaded((ctx.p0.parsed.x + ctx.p1.parsed.x) / 2);
     }
 
+    // Read series colors from config (Python is the single source of truth).
+    const paceColor      = cfg.paceColor      || "#60a5fa";
+    const paceFadedColor = cfg.paceFadedColor || "rgba(96,165,250,0.25)";
+    const spmSegColor    = cfg.spmColor       || "#1e40af";
+    const spmFadedColor  = cfg.spmFadedColor  || "rgba(30,64,175,0.0)";
+
     // Clone datasets and attach segment callbacks to pace and SPM series.
     const datasets = (cfg.datasets || []).map(ds => {
       const d = Object.assign({}, ds);
       if (d.yAxisID === "y") {
         d.segment = {
-          borderColor: ctx => segFaded(ctx) ? "rgba(96,165,250,0.25)"  : "#60a5fa",
+          borderColor: ctx => segFaded(ctx) ? paceFadedColor : paceColor,
           borderWidth: ctx => segFaded(ctx) ? 1    : 2.5,
           borderDash:  ctx => segFaded(ctx) ? [4,4] : [],
         };
       } else if (d.yAxisID === "yspm") {
         d.segment = {
-          borderColor: ctx => segFaded(ctx) ? "rgba(30,64,175,0.0)"   : "#1e40af",
+          borderColor: ctx => segFaded(ctx) ? spmFadedColor  : spmSegColor,
           borderWidth: ctx => segFaded(ctx) ? 1    : 1.5,
           borderDash:  ctx => segFaded(ctx) ? [4,4] : [],
         };
@@ -356,36 +368,7 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
               callback: (v) => cfg.showWatts ? `${Math.round(v)}W` : formatPace(v),
             },
           },
-          yspm: {
-            type: "linear",
-            position: "right",
-            display: true,
-            min: spmYMin,
-            max: spmYMax,
-            grid: { drawOnChartArea: false },
-            ticks: { color: isDark ? "#3b82f6" : "#1e40af", callback: (v) => `${v}` },
-            title: {
-              display: true,
-              text: "spm",
-              color: isDark ? "#3b82f6" : "#1e40af",
-              font: { size: 10 },
-            },
-          },
-          yhr: {
-            type: "linear",
-            position: "right",
-            display: cfg.hasHr || false,
-            min: 40,
-            max: 220,
-            grid: { drawOnChartArea: false },
-            ticks: { color: isDark ? "#f87171" : "#ef4444", callback: (v) => `${v}` },
-            title: {
-              display: true,
-              text: "bpm",
-              color: isDark ? "#f87171" : "#ef4444",
-              font: { size: 10 },
-            },
-          },
+          ...buildRightScales(cfg, isDark, true, cfg.hasHr || false),
         },
       },
     };

@@ -1,5 +1,5 @@
 """
-components/workout_detail.py — Full-screen session detail overlay.
+components/workout_detail.py — Full-screen workout detail overlay.
 
 Renders when app_state.selected_session_id is set.  Displays:
 
@@ -13,12 +13,14 @@ Renders when app_state.selected_session_id is set.  Displays:
 Entry point::
 
     workout_detail(
-        workout,            # dict from _workouts_dict
+        session_id,         # int — key into _workouts_dict
         client,             # Concept2Client (for fetching strokes)
         user_id,            # str
-        all_workouts,       # full sorted list
-        on_session_click,   # callable(id) → open another session
     )
+
+All workout data and the full workout list are fetched internally via
+concept2_sync(), which is task-cached so repeat calls within a render
+cycle are free.
 """
 
 from __future__ import annotations
@@ -35,7 +37,10 @@ from components.ranked_formatters import (
     fmt_split,
     result_table,
 )
-from components.workout_chart_builder import build_stroke_chart_config
+from components.workout_chart_builder import (
+    build_interval_rows_and_bands,
+    build_stroke_chart_config,
+)
 from components.workout_chart_plugin import StrokeChart
 from services.interval_utils import interval_structure_key
 from services.rowing_utils import (
@@ -76,7 +81,8 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
     # Stroke-derived metrics
     max_w = None
     if strokes:
-        watts_list, hr_list = [], []
+        watts_list = []
+        hr_list = []
         for s in strokes:
             p = s.get("p")
             if p and p > 0:
@@ -161,7 +167,6 @@ def _custom_splits_ui(
 
     with hd.box(gap=0.5, padding_bottom=0.5):
         with hd.hbox(gap=1, align="center"):
-            # hd.text("Custom splits", font_weight="semibold", font_size="small")
             toggle_btn = hd.button(
                 "Edit" if not s.editing else "Cancel",
                 variant="text",
@@ -334,7 +339,7 @@ def _splits_table(
     """
     Render splits or intervals table.
 
-    Clicking a row calls on_focus(i) to zoom the chart to that band.
+    Clicking a row calls on_focus(i, row) to zoom the chart to that band.
     focused_idx highlights the currently zoomed row.
     """
     _theme = hd.theme()
@@ -347,7 +352,6 @@ def _splits_table(
     if is_interval:
         _intervals_table(
             wo.get("intervals") or [],
-            strokes,
             _theme,
             header_color,
             ts,
@@ -383,8 +387,6 @@ def _splits_table(
         return
 
     has_hr = any(sp.get("hr_avg") is not None for sp in splits_data)
-    # "Watts" column shows "avg / max" when max is available from stroke data.
-    # "HR" column shows "avg / max" when both values are present.
     col_w = [2.5, 6, 6, 6, 7, 3.5, 7]
     headers = ["#", "Dist", "Time", "Pace", "Watts", "SPM", "HR"]
     if not has_hr:
@@ -455,7 +457,6 @@ def _split_row(i, sp, col_w, ts, has_hr):
 
 def _intervals_table(
     intervals: list,
-    strokes: Optional[list],
     _theme,
     header_color: str,
     ts: str,
@@ -465,51 +466,15 @@ def _intervals_table(
     """
     Render interval-workout intervals table.
 
-    Includes both work and rest rows so row index i matches band index i from
-    _bands_from_intervals() (both skip zero-duration intervals, same order).
-    Rest rows are styled muted with "r" in the # column.
+    Rows and their indices are produced by build_interval_rows_and_bands(),
+    which is the single source of truth shared with _build_bands() in
+    workout_chart_builder.py.  This guarantees row index i always corresponds
+    to band index i for click-to-focus zoom.
     """
-    # Detect HR data across all work intervals
-    has_hr = any((iv.get("heart_rate") or {}).get("average") for iv in intervals)
+    rows, _ = build_interval_rows_and_bands(intervals)
 
-    # Build rows — one work row per interval, plus an optional rest row when
-    # rest_time is set.  Mirrors _bands_from_intervals exactly so row index i
-    # always corresponds to band index i for click-to-focus.
-    rows = []
-    for work_idx, iv in enumerate(intervals):
-        t = iv.get("time") or 0
-        if t <= 0:
-            continue
-
-        d = iv.get("distance") or 0
-        pace_t = (t * 500 / d) if d else None
-        hr = (iv.get("heart_rate") or {}).get("average")
-        rows.append(
-            {
-                "_is_rest": False,
-                "_work_idx": work_idx,
-                "time": t,
-                "distance": d,
-                "pace_tenths": pace_t,
-                "avg_watts": round(compute_watts(pace_t / 10.0)) if pace_t else None,
-                "spm": iv.get("stroke_rate"),
-                "hr_avg": hr,
-            }
-        )
-
-        rest_t = iv.get("rest_time") or 0
-        if rest_t > 0:
-            rest_d = iv.get("rest_distance") or 0
-            rest_pace_t = (rest_t * 500 / rest_d) if rest_d else None
-
-            rows.append(
-                {
-                    "_is_rest": True,
-                    "time": rest_t,
-                    "distance": rest_d,
-                    "pace_tenths": rest_pace_t,
-                }
-            )
+    # Detect HR data across work rows only
+    has_hr = any(r.get("hr_avg") for r in rows if not r.get("_is_rest"))
 
     col_w = [2.5, 6, 6, 6, 5, 3.5]
     headers = ["#", "Dist", "Time", "Pace", "W", "SPM"]
@@ -576,7 +541,6 @@ def _table_frame(
     Rest rows are rendered as plain hboxes with no click target.
     """
     border = "1px solid neutral-200"
-    row_border = "1px solid neutral-100"
     focus_bg = "primary-50"
 
     with hd.box(border=border, border_radius="medium"):
@@ -606,15 +570,12 @@ def _table_frame(
 
                 row_kwargs = dict(
                     gap=0.5,
-                    # border_bottom=row_border,
                     background_color=focus_bg if is_focused else None,
                     align="center",
                     padding=(0.35, 0.75, 0.35, 0.75),
                 )
 
                 if is_focusable:
-                    # hd.link renders as <a> and carries Interactive.clicked
-                    # without causing navigation when href="#" (fragment only).
                     with hd.link(
                         href="#",
                         target="_self",
@@ -670,28 +631,95 @@ def _find_similar(workout: dict, all_workouts: list, n: int = 8) -> list:
 
 
 # ---------------------------------------------------------------------------
+# Chart controls
+# ---------------------------------------------------------------------------
+
+
+def _chart_controls(state, can_stack: bool, has_hr: bool) -> None:
+    """
+    Render the two-row chart control bar and mutate state in place.
+
+    Row 1: Pace/Watts radio · Stack switch (if multi-band) · Reset zoom button
+    Row 2: (stacked mode only) per-series visibility switches
+    """
+    with hd.box(gap=0.75, padding_bottom=0.25):
+        # Row 1: metric toggle · stack switch · reset zoom
+        with hd.hbox(gap=1.5, align="center"):
+            with radio_group(value=state.metric, size="small") as rg:
+                hd.radio_button("Pace", value="pace")
+                hd.radio_button("Watts", value="watts", size="small")
+            if rg.changed:
+                state.metric = rg.value
+
+            if can_stack:
+                stack_sw = hd.switch("Stack", checked=state.stack, size="small")
+                if stack_sw.changed:
+                    state.stack = stack_sw.checked
+                    if stack_sw.checked:
+                        state.focused_interval = None
+                        state.focused_interval_excluding_rest = None
+
+            if not state.stack and state.focused_interval is not None:
+                reset_btn = hd.button("Reset zoom", variant="neutral", size="small")
+                if reset_btn.clicked:
+                    state.focused_interval = None
+                    state.focused_interval_excluding_rest = None
+
+        # Row 2 (stacked only): per-series visibility toggles
+        if state.stack:
+            with hd.hbox(gap=1.5, align="center"):
+                metric_label = "Watts" if state.metric == "watts" else "Pace"
+                pace_sw = hd.switch(metric_label, checked=state.show_pace, size="small")
+                if pace_sw.changed:
+                    state.show_pace = pace_sw.checked
+
+                spm_sw = hd.switch("SPM", checked=state.show_spm, size="small")
+                if spm_sw.changed:
+                    state.show_spm = spm_sw.checked
+
+                if has_hr:
+                    hr_sw = hd.switch("HR", checked=state.show_hr, size="small")
+                    if hr_sw.changed:
+                        state.show_hr = hr_sw.checked
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _fmt_distance_label(workout: dict) -> str:
+    d = workout.get("distance")
+    if d:
+        return _fmt_distance(d)
+    t = workout.get("time")
+    if t:
+        return format_time(t)
+    return ""
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
 
 def workout_detail(session_id: int, client, user_id: str) -> None:
-    """Render the full-screen session detail overlay."""
+    """Render the full-screen workout detail overlay."""
     _theme = hd.theme()
 
     state = hd.state(
-        metric="pace",  # "pace" | "watts"
-        focused_interval=None,  # int | None
-        focused_interval_excluding_rest=None,  # int | None
-        custom_splits=None,  # list[int] | None
-        stack=False,  # stacked-intervals overlay mode
-        show_pace=True,  # show pace/watts series in stacked mode
-        show_spm=True,  # show SPM series in stacked mode
-        show_hr=True,  # show HR series in stacked mode
+        metric="pace",                        # "pace" | "watts"
+        focused_interval=None,                # int | None  (raw band index)
+        focused_interval_excluding_rest=None, # int | None  (1-based work interval #)
+        custom_splits=None,                   # list[int] | None
+        stack=False,                          # stacked-intervals overlay mode
+        show_pace=True,                       # show pace/watts in stacked mode
+        show_spm=True,                        # show SPM in stacked mode
+        show_hr=True,                         # show HR in stacked mode
     )
 
-    # ── Pre-fetch workout list (cached; zero cost on repeat renders) ───────
+    # ── Pre-fetch workout list (task-cached; free on repeat renders) ────────
     sync_result = concept2_sync(client)
-
     if sync_result is None:
         return
 
@@ -716,26 +744,38 @@ def workout_detail(session_id: int, client, user_id: str) -> None:
     if has_strokes and stroke_task.done and not stroke_task.error:
         strokes = stroke_task.result if isinstance(stroke_task.result, list) else []
 
+    # ── Title ────────────────────────────────────────────────────────────────
+
     if is_interval:
         ivs = (workout.get("workout") or {}).get("intervals") or []
         work_ivs = [iv for iv in ivs if (iv.get("type") or "").lower() != "rest"]
         reps = len(work_ivs) or len(ivs)
-
         title = interval_structure_key(workout, compact=True)
         if not workout.get("workout_type", "") == "VariableInterval":
             title = f"{reps} x {title}"
     else:
         title = _fmt_distance_label(workout)
 
+    # ── Callbacks ────────────────────────────────────────────────────────────
+
+    def on_split_focus(idx, row):
+        state.focused_interval = idx
+        if idx is None:
+            state.focused_interval_excluding_rest = None
+        else:
+            state.focused_interval_excluding_rest = row.get("_work_idx", 0) + 1
+
     # ── Layout ───────────────────────────────────────────────────────────────
+
+    total_dist = workout.get("distance") or 0
+    show_custom = has_strokes and not is_interval and total_dist > 0
 
     with hd.box(padding=(1, 2, 0, 4), gap=3):
         with hd.hbox(gap=4, align="center", justify="end"):
-            # ── Header ───────────────────────────────────────────────────────────
+            # ── Header ───────────────────────────────────────────────────────
 
             with hd.box(padding_top=1, gap=0, align="start"):
                 hd.text(_fmt_date(workout.get("date", "")), font_color="neutral-500")
-
                 hd.text(title, font_weight="bold", font_size="2x-large")
 
                 if workout.get("comments"):
@@ -748,15 +788,11 @@ def workout_detail(session_id: int, client, user_id: str) -> None:
                         )
                         hd.text('"')
 
-            # ── Summary stats ─────────────────────────────────────────────────────
+            # ── Summary stats ─────────────────────────────────────────────────
 
             _summary_section(workout, strokes)
 
-        # ── Chart + Splits side by side ───────────────────────────────────────
-
-        is_interval = workout.get("workout_type", "") in INTERVAL_WORKOUT_TYPES
-        total_dist = workout.get("distance") or 0
-        show_custom = has_strokes and not is_interval and total_dist > 0
+        # ── Chart + Splits side by side ───────────────────────────────────
 
         with hd.hbox(gap=2, align="start", grow=True):
             # Left: chart
@@ -778,9 +814,7 @@ def workout_detail(session_id: int, client, user_id: str) -> None:
                         padding=2,
                         align="center",
                         border_radius="medium",
-                        background_color="neutral-100"
-                        if not _theme.is_dark
-                        else "neutral-800",
+                        background_color="neutral-100" if not _theme.is_dark else "neutral-800",
                         height=18,
                     ):
                         hd.text(
@@ -799,8 +833,6 @@ def workout_detail(session_id: int, client, user_id: str) -> None:
                     )
                 elif strokes:
                     has_hr = any(s.get("hr") for s in strokes)
-                    # Stack option: available when there are multiple work bands
-                    # (interval workouts, or split-based steady-state rows).
                     can_stack = is_interval or bool(
                         (workout.get("workout") or {}).get("splits")
                     )
@@ -827,60 +859,7 @@ def workout_detail(session_id: int, client, user_id: str) -> None:
                         ):
                             state.focused_interval = chart.clicked_band_idx
 
-                    # ── Chart controls ────────────────────────────────────────────────────
-
-                    with hd.box(gap=0.75, padding_bottom=0.25):
-                        # Row 1: metric toggle · stack switch
-                        with hd.hbox(gap=1.5, align="center"):
-                            with radio_group(value=state.metric, size="small") as rg:
-                                hd.radio_button("Pace", value="pace")
-                                hd.radio_button("Watts", value="watts", size="small")
-                            if rg.changed:
-                                state.metric = rg.value
-
-                            if can_stack:
-                                stack_sw = hd.switch(
-                                    "Stack", checked=state.stack, size="small"
-                                )
-                                if stack_sw.changed:
-                                    state.stack = stack_sw.checked
-                                    # Clear zoom when entering stacked mode
-                                    if stack_sw.checked:
-                                        state.focused_interval = None
-                                        state.focused_interval_excluding_rest = None
-
-                            if not state.stack and state.focused_interval is not None:
-                                reset_btn = hd.button(
-                                    "Reset zoom", variant="neutral", size="small"
-                                )
-                                if reset_btn.clicked:
-                                    state.focused_interval = None
-                                    state.focused_interval_excluding_rest = None
-
-                        # Row 2 (stacked only): per-series visibility toggles
-                        if state.stack:
-                            with hd.hbox(gap=1.5, align="center"):
-                                metric_label = (
-                                    "Watts" if state.metric == "watts" else "Pace"
-                                )
-                                pace_sw = hd.switch(
-                                    metric_label, checked=state.show_pace, size="small"
-                                )
-                                if pace_sw.changed:
-                                    state.show_pace = pace_sw.checked
-
-                                spm_sw = hd.switch(
-                                    "SPM", checked=state.show_spm, size="small"
-                                )
-                                if spm_sw.changed:
-                                    state.show_spm = spm_sw.checked
-
-                                if has_hr:
-                                    hr_sw = hd.switch(
-                                        "HR", checked=state.show_hr, size="small"
-                                    )
-                                    if hr_sw.changed:
-                                        state.show_hr = hr_sw.checked
+                    _chart_controls(state, can_stack, has_hr)
 
                 else:
                     hd.text(
@@ -888,13 +867,6 @@ def workout_detail(session_id: int, client, user_id: str) -> None:
                         font_color="neutral-500",
                         font_size="small",
                     )
-
-            def on_split_focus(idx, row):
-                state.focused_interval = idx
-                if idx is None:
-                    state.focused_interval_excluding_rest = None
-                else:
-                    state.focused_interval_excluding_rest = row.get("_work_idx", 0) + 1
 
             # Right: splits/intervals table + custom splits editor
             with hd.box(gap=0.75):
@@ -924,7 +896,7 @@ def workout_detail(session_id: int, client, user_id: str) -> None:
                     on_focus=on_split_focus,
                 )
 
-        # ── Similar sessions ─────────────────────────────────────────────────
+        # ── Similar sessions ─────────────────────────────────────────────
 
         similar = _find_similar(workout, all_workouts)
         if similar:
@@ -946,18 +918,3 @@ def workout_detail(session_id: int, client, user_id: str) -> None:
                     ),
                 ),
             )
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _fmt_distance_label(workout: dict) -> str:
-    d = workout.get("distance")
-    if d:
-        return _fmt_distance(d)
-    t = workout.get("time")
-    if t:
-        return format_time(t)
-    return ""

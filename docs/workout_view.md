@@ -1,7 +1,7 @@
-# Session Detail View — Design & UI Reference
+# Workout Detail View — Design & UI Reference
 
-This document covers how the per-session detail view works in Erg Nerd:
-how it is opened, what it displays, how the stroke chart is built, how
+This document covers how the per-workout detail view works in Erg Nerd:
+how it is opened, what it displays, how the workout chart is built, how
 custom splits work, and how similar sessions are found.
 
 ---
@@ -17,7 +17,7 @@ The detail view is composed of five sections rendered top-to-bottom:
 
 1. **Header bar** — back button, date, machine type, workout type
 2. **Summary cards** — wrapping grid of key metrics
-3. **Stroke chart** — pace/watts vs. elapsed time with SPM and HR overlays
+3. **Workout chart** — pace/watts vs. elapsed time with SPM and HR overlays
 4. **Splits / intervals table** — per-split or per-interval breakdown, with an optional custom-split editor
 5. **Similar sessions** — a clickable result table of the most similar past workouts
 
@@ -25,14 +25,14 @@ The detail view is composed of five sections rendered top-to-bottom:
 
 ## 2. Navigation and State
 
-### How a session is opened
+### How a workout is opened
 
-Each tab (`ranked_tab`, `sessions_tab`, `interval_tab`) receives an
+Each tab (`performance_tab`, `sessions_tab`, `interval_tab`) receives an
 `on_session_click(workout_id)` callback from `app.py`.  Clicking the view
 icon calls this callback, which sets `app_state.selected_session_id`.
 
 `_dashboard_view()` in `app.py` checks this value on every render.  When
-set, it renders `session_detail(...)` instead of the normal tab content.
+set, it renders `workout_detail(...)` instead of the normal tab content.
 When cleared, the tab view reappears.
 
 ### Closing the view
@@ -42,7 +42,7 @@ The **← Back** button calls `on_close()`, which sets
 the active tab — they return exactly where they left off.
 
 Switching tabs (clicking the tab bar) also clears the overlay automatically,
-so the user cannot be left in a "session detail on the wrong tab" state.
+so the user cannot be left in a "workout detail on the wrong tab" state.
 
 ### Chaining sessions
 
@@ -77,11 +77,11 @@ on narrow windows.
 
 ---
 
-## 4. Stroke Chart
+## 4. Workout Chart
 
 ### When it appears
 
-The stroke chart is only shown when `workout.stroke_data == True`.  Workouts
+The workout chart is only shown when `workout.stroke_data == True`.  Workouts
 recorded without a PM5 or with stroke data unavailable show a grey notice
 instead.
 
@@ -89,38 +89,70 @@ instead.
 
 Stroke data is fetched on-demand when the detail view opens via
 `client.get_strokes(user_id, result_id)` — `GET /api/users/{user}/results/{id}/strokes`.
-The endpoint returns a JSON array directly (one object per stroke):
+The endpoint returns a JSON array (one object per stroke):
 
 | Field | Unit | Description |
 |---|---|---|
-| `t` | tenths of a second | Elapsed time |
+| `t` | tenths of a second | Elapsed time (resets to 0 at each interval boundary) |
 | `d` | decimeters | Elapsed distance |
 | `p` | tenths of a sec/500m | Pace (divide by 10 for display) |
 | `spm` | strokes/min | Stroke rate |
 | `hr` | bpm | Heart rate (`0` when no HR monitor was worn) |
 
-Stroke data is not cached — it is fetched fresh each time a session is opened
+Stroke data is not cached — it is fetched fresh each time a workout is opened
 and held only for the lifetime of that view.
+
+#### Upstream sanitisation
+
+`concept2.get_strokes()` passes the raw API data through `_sanitise_strokes()`
+before returning it.  This silently drops any stroke where `t` decreases but
+the new value is still above 300 tenths (30 s) — a device bug where the PM5
+occasionally emits a duplicate stroke with a slightly earlier timestamp
+mid-rest.  Genuine interval-boundary resets always drop `t` back near zero.
+
+#### Interval time stitching
+
+For interval workouts the API resets `t` to 0 at the start of each work
+interval.  `_stitch_interval_times()` in `workout_chart_builder.py` detects
+each backward jump and adds a running offset so the final `t` values are
+monotonically increasing across the whole session.  The offset is advanced
+by the canonical interval duration (work time + rest time) from the interval
+metadata rather than by `prev_t`, so rest periods are correctly represented
+even when the last stroke arrives a few tenths before the interval ends.
 
 ### Chart axes
 
 | Axis | Content | Notes |
 |---|---|---|
 | X | Elapsed time (seconds) | Tick labels formatted as M:SS |
-| Primary Y | Pace (sec/500m) or Watts | Inverted when showing pace so faster = higher; toggle between modes |
-| Secondary Y left | SPM | Range 0–50; dashed amber line |
-| Secondary Y right | HR (bpm) | Range 40–220; dotted red line; hidden if no HR data |
+| Primary Y (left) | Pace (sec/500m) or Watts | Inverted when showing pace so faster = higher |
+| Secondary Y (right, dark blue) | SPM | Min 0, integer bounds; matches series colour |
+| Secondary Y (right, red) | HR (bpm) | Range 40–220; hidden if no HR data |
 
-### Controls
+### Controls — normal mode
 
 | Control | What it does |
 |---|---|
 | **Pace / Watts** radio | Switch the primary Y-axis between pace (sec/500m) and watts |
-| **SPM** switch | Show or hide the stroke rate overlay |
-| **HR** switch | Show or hide the heart rate overlay (only present when HR data exists) |
-| **Reset zoom** button | Appears when an interval band is zoomed; resets to full x-axis |
+| **Stack** switch | Enter stacked-intervals mode (available when there are multiple work bands) |
+| **Reset zoom** button | Appears when a band is zoomed; resets to full x-axis |
 
-### Interval bands
+### Controls — stacked mode
+
+Enabled by the **Stack** switch.  Each work interval is overlaid on a shared
+x-axis starting at t = 0, coloured with an HSL palette from blue to orange.
+A Chart.js legend shows one entry per interval.  Entering stack mode clears
+any active zoom.
+
+An additional row of per-series visibility switches appears below the chart:
+
+| Switch | What it controls |
+|---|---|
+| **Pace** / **Watts** | Show or hide the pace/watts series for all intervals |
+| **SPM** | Show or hide the stroke-rate series for all intervals |
+| **HR** | Show or hide the heart-rate series (only present when HR data exists) |
+
+### Interval bands (normal mode)
 
 The chart draws shaded background bands for each split or interval:
 
@@ -135,13 +167,23 @@ in tenths of a second, accumulated to elapsed seconds on the x-axis).
 For split workouts, bands come from `workout.workout.splits`.
 JustRow workouts with no splits have no bands.
 
+### Series colours
+
+| Series | Light mode | Dark mode |
+|---|---|---|
+| Pace / Watts | `#60a5fa` (light blue, thicker) | same |
+| SPM | `#1e40af` (dark blue, dashed) | `#3b82f6` (lighter blue) |
+| HR | `#ef4444` (red, dotted) | `#f87171` (lighter red) |
+
+Axis tick labels and titles use the same colour as their series.
+
 ### Code
 
 | File | Responsibility |
 |---|---|
-| `components/session_chart_builder.py` | `build_stroke_chart_config()` — converts strokes + workout to a Chart.js config dict |
-| `components/stroke_chart.py` | `StrokeChart` HyperDiv plugin — wraps the config in a `<canvas>` |
-| `components/rowing_chart_assets/stroke_chart.js` | Chart.js rendering, band shading, click-to-zoom, tooltips |
+| `components/workout_chart_builder.py` | `build_stroke_chart_config()` — converts strokes + workout to a Chart.js config dict |
+| `components/workout_chart_plugin.py` | `StrokeChart` HyperDiv plugin — wraps the config in a `<canvas>` |
+| `components/chart_assets/workout_chart_plugin.js` | Chart.js rendering, band shading, click-to-zoom, stacked mode, tooltips |
 
 ---
 
@@ -179,14 +221,14 @@ distance within ±2 metres.  A warning is shown while the sum is off; the
 **Recalculate** button is disabled.
 
 **Recalculation:** When recalculate is clicked, `_recalculate_splits()` in
-`session_detail.py` interpolates elapsed time from the stroke data at each
+`workout_detail.py` interpolates elapsed time from the stroke data at each
 cumulative split boundary (binary search + linear interpolation on the `d`
 field), then computes pace, SPM, and HR for each window.
 
 **Persistence:** Custom split configurations are saved to the browser's
 `localStorage` under the key `"custom_splits"` as a JSON object
 `{str(workout_id): [dist_m, ...]}`.  They survive page refreshes and are
-loaded back automatically the next time that session is opened.
+loaded back automatically the next time that workout is opened.
 
 ---
 
@@ -214,12 +256,12 @@ When pace cannot be computed, results fall back to date descending.
 
 | File | Responsibility |
 |---|---|
-| `components/session_detail.py` | Top-level overlay component; all sections; custom-split recalculation; similar-session logic |
-| `components/session_chart_builder.py` | `build_stroke_chart_config()` — pure Python Chart.js config builder |
-| `components/stroke_chart.py` | `StrokeChart` HyperDiv plugin class |
-| `components/rowing_chart_assets/stroke_chart.js` | Chart.js rendering, band click-to-zoom, dual Y-axis setup |
-| `components/ranked_formatters.py` | `result_table()` — now accepts `on_click` for clickable rows + manual pagination |
-| `services/concept2.py` | `Concept2Client.get_strokes()` — fetches the `/strokes` list for a result |
+| `components/workout_detail.py` | Top-level overlay component; all sections; custom-split recalculation; similar-session logic |
+| `components/workout_chart_builder.py` | `build_stroke_chart_config()` — pure Python Chart.js config builder |
+| `components/workout_chart_plugin.py` | `StrokeChart` HyperDiv plugin class |
+| `components/chart_assets/workout_chart_plugin.js` | Chart.js rendering, band click-to-zoom, stacked mode, dual Y-axis setup |
+| `components/ranked_formatters.py` | `result_table()` — accepts `on_click` for clickable rows + manual pagination |
+| `services/concept2.py` | `Concept2Client.get_strokes()` — fetches and sanitises the `/strokes` list for a result |
 | `app.py` | `selected_session_id` in `app_state`; overlay dispatch in `_dashboard_view()` |
 
 ### Entry point
@@ -228,7 +270,7 @@ When pace cannot be computed, results fall back to date descending.
 # app.py — _dashboard_view()
 if app_state.selected_session_id is not None:
     wo = _workouts_dict.get(str(app_state.selected_session_id))
-    session_detail(wo, client, user_id, all_workouts,
+    workout_detail(wo, client, user_id, all_workouts,
                    on_session_click=_open_session)
     return
 ```
@@ -250,7 +292,7 @@ and manual prev/next pagination (25 rows per page).
 
 ## 8. Known Limitations
 
-- **Stroke data not cached.** Each time a session is opened, a fresh API call
+- **Stroke data not cached.** Each time a workout is opened, a fresh API call
   is made.  On slow connections there may be a brief spinner before the chart
   appears.  Summary cards and the splits table (from the cached workout object)
   are visible immediately.
