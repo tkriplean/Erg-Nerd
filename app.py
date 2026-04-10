@@ -137,6 +137,14 @@ def _login_view() -> None:
             border="1px solid neutral-100",
             width=34,
         ):
+            with hd.box(align="center", gap=1):
+                hd.h1("Erg Nerd", font_color="primary")
+                hd.text(
+                    "Fancy Concept2 data visuals to help you procrastinate your next workout",
+                    text_align="center",
+                    font_color="neutral-700",
+                )
+
             ergnerd_animation(width=22, theme="dark" if _theme.is_dark else "light")
 
             with hd.box(gap=1, align="center"):
@@ -161,7 +169,7 @@ def _login_view() -> None:
                         font_weight="semibold",
                     )
                 hd.text(
-                    "Your data stays in your browser, not our server.",
+                    "Your data stored in your browser, not on our server.",
                     font_color="neutral-500",
                     font_size="small",
                 )
