@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Volume Chart on the Volume tab shows how many meters were rowed across time, broken down by the physiological intensity zone each meter was performed at. The goal is to make it easy to understand training load distribution at a glance: how much was easy aerobic base, how much was threshold or race-pace work, and how much was rest between intervals.
+The Volume Chart on the Volume page shows how many meters were rowed across time, broken down by the physiological intensity zone each meter was performed at. The goal is to make it easy to understand training load distribution at a glance: how much was easy aerobic base, how much was threshold or race-pace work, and how much was rest between intervals.
 
 The chart supports two **zone modes**:
 

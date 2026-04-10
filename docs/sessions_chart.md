@@ -1,6 +1,6 @@
 # Sessions Chart — Design Reference
 
-Pace-vs-date scatter chart for the Sessions tab, implemented as a HyperDiv plugin
+Pace-vs-date scatter chart for the Sessions page, implemented as a HyperDiv plugin
 backed by Chart.js 4. This document records the design decisions and important
 implementation details so that future changes can be made with full context.
 
