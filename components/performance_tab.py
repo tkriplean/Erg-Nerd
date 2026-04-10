@@ -887,7 +887,7 @@ def _prediction_table(
     )
 
     with hd.box(padding=(2, 0, 0, 0)):
-        hd.h3("Predicted Performances")
+        hd.h2("Predicted Performances")
         hd.text(
             "Pace (top) and result — total time for distance events,"
             " predicted meters for timed events."
