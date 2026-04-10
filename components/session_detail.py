@@ -931,8 +931,8 @@ def session_detail(session_id: int, client, user_id: str) -> None:
             hd.text(
                 "Similar sessions",
                 font_weight="semibold",
-                font_size="small",
-                font_color="neutral-500",
+                font_size="x-large",
+                font_color="neutral-800",
             )
             result_table(
                 similar,

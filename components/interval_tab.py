@@ -636,14 +636,14 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                         ):
                             hd.text(
                                 row_label,
-                                font_size="x-small",
+                                font_size="small",
                                 font_weight="bold",
                                 font_color="neutral-600",
                                 # text_align="right",
                             )
                             hd.text(
                                 ratio_range,
-                                font_size="x-small",
+                                font_size="small",
                                 font_color="neutral-400",
                                 # text_align="right",
                             )
@@ -662,7 +662,7 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                         ):
                             hd.text(
                                 col_label,
-                                font_size="x-small",
+                                font_size="small",
                                 font_weight="bold",
                                 font_color="neutral-600",
                                 text_align="center",
@@ -825,7 +825,7 @@ def _interval_table(workouts: list[dict], state) -> tuple[int, int]:
             font_weight="bold",
             font_color="neutral-500",
         )
-        _sort_header("Zones", "zones", 10, state)
+        _sort_header("Intensity zones", "zones", 10, state)
         _sort_header("Work", "work", 6, state)
         _sort_header("Avg Split", "split", 7, state)
         _sort_header("Time", "time", 7, state)
@@ -897,7 +897,8 @@ def _interval_table(workouts: list[dict], state) -> tuple[int, int]:
                     font_size="small",
                 )
                 hd.text(
-                    r.get("time_formatted") or (format_time(r["time"]) if r.get("time") else "—"),
+                    r.get("time_formatted")
+                    or (format_time(r["time"]) if r.get("time") else "—"),
                     width=7,
                     font_size="small",
                     font_color="neutral-500",

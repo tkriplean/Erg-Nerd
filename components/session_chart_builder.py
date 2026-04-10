@@ -21,6 +21,7 @@ the resulting t values are monotonically increasing across the whole session.
 
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 from services.rowing_utils import compute_watts, INTERVAL_WORKOUT_TYPES
@@ -236,18 +237,29 @@ def build_stroke_chart_config(
         y_pace = [p["y"] for p in pace_pts]
         y_spm = [p["y"] for p in spm_pts]
 
-    def _pad(lo, hi, frac=0.12, min_pad=0):
-        """Expand [lo, hi] by frac of the span on each side."""
+    def _pad(lo, hi, frac=0.12, min_pad=0, lo_floor=None, round_to_int=False):
+        """Expand [lo, hi] by frac of the span on each side.
+
+        lo_floor    — if set, clamps the lower bound to at least this value.
+        round_to_int — if True, floors lo and ceils hi to the nearest integer.
+        """
         if lo is None or hi is None:
             return lo, hi
         pad = max((hi - lo) * frac, min_pad)
-        return lo - pad, hi + pad
+        lo_out, hi_out = lo - pad, hi + pad
+        if lo_floor is not None:
+            lo_out = max(lo_out, lo_floor)
+        if round_to_int:
+            lo_out = math.floor(lo_out)
+            hi_out = math.ceil(hi_out)
+        return lo_out, hi_out
 
     pace_y_min, pace_y_max = _pad(
         *((min(y_pace), max(y_pace)) if y_pace else (None, None))
     )
     spm_y_min, spm_y_max = _pad(
-        *((min(y_spm), max(y_spm)) if y_spm else (None, None)), min_pad=2
+        *((min(y_spm), max(y_spm)) if y_spm else (None, None)),
+        min_pad=2, lo_floor=0, round_to_int=True,
     )
 
     # ── Stacked mode ─────────────────────────────────────────────────────────
