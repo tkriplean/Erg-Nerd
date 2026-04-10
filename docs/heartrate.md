@@ -88,7 +88,7 @@ Stacked-bar draw order (bottom → top): `[6, 5, 4, 3, 2, 1, 0]` — same as pac
 | `HR_Z2_BINS` | `frozenset({3})` | Tempo zone (70–80 %) |
 | `HR_Z3_BINS` | `frozenset({1, 2})` | Hard zone (> 80 %) |
 
-`HR_Z3_BINS` is further split in the volume tab into `_HR_Z3A_BINS = frozenset({2})` (Threshold, 80–90 %) and `_HR_Z3B_BINS = frozenset({1})` (Max, > 90 %) for the 4-column table layout. These are defined in `components/volume_tab.py` rather than exported from heartrate_utils since they are a UI-level concern.
+`HR_Z3_BINS` is further split in the volume tab into `_HR_Z3A_BINS = frozenset({2})` (Threshold, 80–90 %) and `_HR_Z3B_BINS = frozenset({1})` (Max, > 90 %) for the 4-column table layout. These are defined in `components/volume_page.py` rather than exported from heartrate_utils since they are a UI-level concern.
 
 ---
 

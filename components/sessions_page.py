@@ -13,7 +13,7 @@ from components.concept2_sync import concept2_sync
 # ---------------------------------------------------------------------------
 
 
-def sessions_tab(client, user_id: str) -> None:
+def sessions_page(client, user_id: str) -> None:
     """Top-level component for the Sessions tab."""
 
     result = concept2_sync(client)

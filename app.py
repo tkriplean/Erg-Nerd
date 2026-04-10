@@ -37,13 +37,13 @@ from services.concept2 import (
     save_token,
 )
 from services.rowing_utils import compress_workouts, decompress_workouts
-from components.interval_tab import interval_tab
-from components.profile_tab import profile_tab
-from components.performance_tab import performance_tab
+from components.intervals_page import intervals_page
+from components.profile_page import profile_page
+from components.performance_page import performance_page
 from components.ergnerd_animation import ergnerd_animation
-from components.workout_detail import workout_detail
-from components.sessions_tab import sessions_tab
-from components.volume_tab import volume_tab
+from components.workout_page import workout_page
+from components.sessions_page import sessions_page
+from components.volume_page import volume_page
 from components.concept2_sync import concept2_sync
 
 
@@ -255,21 +255,21 @@ def _dashboard_view(client, user_id: str, app_state) -> None:
                 session_id = None
             if session_id is not None:
                 with hd.scope(session_id):
-                    workout_detail(
+                    workout_page(
                         session_id,
                         client,
                         user_id,
                     )
         elif current_tab == "Volume":
-            volume_tab(client, user_id)
+            volume_page(client, user_id)
         elif current_tab == "Sessions":
-            sessions_tab(client, user_id)
+            sessions_page(client, user_id)
         elif current_tab == "Intervals":
-            interval_tab(client, user_id)
+            intervals_page(client, user_id)
         elif current_tab == "Performance":
-            performance_tab(client, user_id)
+            performance_page(client, user_id)
         else:
-            profile_tab()
+            profile_page()
 
 
 # ---------------------------------------------------------------------------

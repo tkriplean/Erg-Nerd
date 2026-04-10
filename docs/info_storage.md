@@ -51,7 +51,7 @@ HyperDiv exposes `hd.local_storage` for async key/value storage in the browser. 
 |---|---|---|
 | `c2_user_id` | Plain string, e.g. `"988721"` | `app.py` after OAuth |
 | `workouts` | zlib + base64 compressed JSON string | Each tab after sync |
-| `profile` | JSON string | `profile_tab.py` and `volume_tab.py` (HR field) |
+| `profile` | JSON string | `profile_page.py` and `volume_page.py` (HR field) |
 
 ### `c2_user_id`
 

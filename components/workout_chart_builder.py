@@ -100,14 +100,14 @@ def build_interval_rows_and_bands(intervals: list) -> tuple:
     """
     Single source of truth for the interval → (rows, bands) transformation.
 
-    Both the intervals table (workout_detail.py) and band generation must
+    Both the intervals table (workout_page.py) and band generation must
     iterate intervals in exactly the same order so that band index i always
     matches table row i for click-to-focus.  This function guarantees that by
     computing both simultaneously from the same iteration.
 
     Returns
     -------
-    rows : list of dicts for _table_frame() / _interval_row() in workout_detail
+    rows : list of dicts for _table_frame() / _interval_row() in workout_page
         Keys: _is_rest, _work_idx, time, distance, pace_tenths, avg_watts,
               spm, hr_avg  (work rows only);  _is_rest, time, distance,
               pace_tenths  (rest rows).

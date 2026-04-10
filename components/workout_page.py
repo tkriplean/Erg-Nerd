@@ -1,5 +1,5 @@
 """
-components/workout_detail.py — Full-screen workout detail overlay.
+components/workout_page.py — Full-screen workout detail overlay.
 
 Renders when app_state.selected_session_id is set.  Displays:
 
@@ -12,7 +12,7 @@ Renders when app_state.selected_session_id is set.  Displays:
 
 Entry point::
 
-    workout_detail(
+    workout_page(
         session_id,         # int — key into _workouts_dict
         client,             # Concept2Client (for fetching strokes)
         user_id,            # str
@@ -703,7 +703,7 @@ def _fmt_distance_label(workout: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
-def workout_detail(session_id: int, client, user_id: str) -> None:
+def workout_page(session_id: int, client, user_id: str) -> None:
     """Render the full-screen workout detail overlay."""
     _theme = hd.theme()
 

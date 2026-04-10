@@ -27,12 +27,12 @@ The detail view is composed of five sections rendered top-to-bottom:
 
 ### How a workout is opened
 
-Each tab (`performance_tab`, `sessions_tab`, `interval_tab`) receives an
+Each tab (`performance_page`, `sessions_page`, `intervals_page`) receives an
 `on_session_click(workout_id)` callback from `app.py`.  Clicking the view
 icon calls this callback, which sets `app_state.selected_session_id`.
 
 `_dashboard_view()` in `app.py` checks this value on every render.  When
-set, it renders `workout_detail(...)` instead of the normal tab content.
+set, it renders `workout_page(...)` instead of the normal tab content.
 When cleared, the tab view reappears.
 
 ### Closing the view
@@ -221,7 +221,7 @@ distance within ±2 metres.  A warning is shown while the sum is off; the
 **Recalculate** button is disabled.
 
 **Recalculation:** When recalculate is clicked, `_recalculate_splits()` in
-`workout_detail.py` interpolates elapsed time from the stroke data at each
+`workout_page.py` interpolates elapsed time from the stroke data at each
 cumulative split boundary (binary search + linear interpolation on the `d`
 field), then computes pace, SPM, and HR for each window.
 
@@ -256,7 +256,7 @@ When pace cannot be computed, results fall back to date descending.
 
 | File | Responsibility |
 |---|---|
-| `components/workout_detail.py` | Top-level overlay component; all sections; custom-split recalculation; similar-session logic |
+| `components/workout_page.py` | Top-level overlay component; all sections; custom-split recalculation; similar-session logic |
 | `components/workout_chart_builder.py` | `build_stroke_chart_config()` — pure Python Chart.js config builder |
 | `components/workout_chart_plugin.py` | `StrokeChart` HyperDiv plugin class |
 | `components/chart_assets/workout_chart_plugin.js` | Chart.js rendering, band click-to-zoom, stacked mode, dual Y-axis setup |
@@ -270,8 +270,8 @@ When pace cannot be computed, results fall back to date descending.
 # app.py — _dashboard_view()
 if app_state.selected_session_id is not None:
     wo = _workouts_dict.get(str(app_state.selected_session_id))
-    workout_detail(wo, client, user_id, all_workouts,
-                   on_session_click=_open_session)
+    workout_page(wo, client, user_id, all_workouts,
+                 on_session_click=_open_session)
     return
 ```
 

@@ -8,7 +8,7 @@ The Volume tab provides a stacked bar chart of training meters broken down by ph
 
 | File | Role |
 |---|---|
-| `components/volume_tab.py` | UI entry point: controls, HR callout, data flow, calls chart/table |
+| `components/volume_page.py` | UI entry point: controls, HR callout, data flow, calls chart/table |
 | `components/volume_chart_builder.py` | Pure chart config builder and table row generator |
 | `components/volume_chart.py` | HyperDiv plugin wrapper for `VolumeChart` (Chart.js) |
 | `components/rowing_chart_assets/volume_chart.js` | JS plugin: Y-axis formatter, Chart.js tooltips |
@@ -152,7 +152,7 @@ Six possible values: **Easy / LSD**, **Polarized**, **Pyramidal**, **Threshold**
 ## Data Flow
 
 ```
-volume_tab()
+volume_page()
   └── hd.task(_fetch)              # load workouts from API or cache
         └── _volume_section(all_workouts)
               ├── controls row     # radio_buttons, scope select, machine select
@@ -177,6 +177,6 @@ volume_tab()
 
 **Change HR zone thresholds**: edit `hr_zone_idx()` in `heartrate_utils.py`. No other files need to change.
 
-**Change the distribution table columns**: edit `_distribution_table()` in `volume_tab.py` and potentially `get_period_rows()` in `volume_chart_builder.py` if new row fields are needed.
+**Change the distribution table columns**: edit `_distribution_table()` in `volume_page.py` and potentially `get_period_rows()` in `volume_chart_builder.py` if new row fields are needed.
 
 **Change the chart height**: the `height="42vh"` on the chart box in `_volume_section` is the only place to change it.

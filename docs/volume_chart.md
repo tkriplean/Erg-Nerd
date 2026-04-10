@@ -186,16 +186,16 @@ Registered as `VolumeChart` in the HyperDiv plugin system. Injects:
 
 `VolumeChart(hd.Plugin)` loads the same Chart.js CDN URL as `RowingChart` (deduplicated by HyperDiv) plus the `volume_chart.js` plugin.
 
-### UI entry point (`components/volume_tab.py`)
+### UI entry point (`components/volume_page.py`)
 
-`volume_tab()` orchestrates data loading, the volume chart section (with zone-mode toggle, optional HR callout), and the distribution table.
+`volume_page()` orchestrates data loading, the volume chart section (with zone-mode toggle, optional HR callout), and the distribution table.
 
 ---
 
 ## HR Mode
 
 > For full HR data handling details (validation, zone model, binning algorithm) see `docs/heartrate.md`.
-> For UI controls and data flow see `docs/volume_tab.md`.
+> For UI controls and data flow see `docs/volume_page.md`.
 
 ### Enabling HR Mode
 

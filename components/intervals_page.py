@@ -1,5 +1,5 @@
 """
-components/interval_tab.py
+components/intervals_page.py
 
 Interval Workouts tab — 2D grid browser + sortable data table.
 
@@ -951,7 +951,7 @@ def _pagination(state, total: int, total_pages: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-def interval_tab(client, user_id: str) -> None:
+def intervals_page(client, user_id: str) -> None:
     """Top-level HyperDiv component for the Interval Workouts tab."""
 
     result = concept2_sync(client)

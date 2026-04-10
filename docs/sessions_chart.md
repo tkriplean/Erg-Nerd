@@ -529,6 +529,6 @@ the totals footer.
 | `components/sessions_chart_builder.py` | Data prep, outlier filter, SB detection, interval parsing, point serialisation, HyperDiv component |
 | `components/sessions_chart_plugin.py` | HyperDiv `Plugin` subclass — prop definitions, JS asset registration |
 | `components/rowing_chart_assets/sessions_chart.js` | Chart.js plugin, brush logic, hatch pattern generator, tooltip callbacks |
-| `components/sessions_tab.py` | Tab entry point; loads workouts, calls `sessions_chart()` |
+| `components/sessions_page.py` | Tab entry point; loads workouts, calls `sessions_chart()` |
 | `services/rowing_utils.py` | `INTERVAL_WORKOUT_TYPES`, `RANKED_DIST_SET`, `RANKED_TIME_SET`, `compute_pace`, `get_season` |
 | `services/critical_power_model.py` | `fit_critical_power()`, `critical_power_model()` |

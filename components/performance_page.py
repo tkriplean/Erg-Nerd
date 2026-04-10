@@ -2,7 +2,7 @@
 Ranked Events tab — UI and orchestration for the ranked-events view.
 
 Exported:
-  performance_tab()   — top-level HyperDiv component; call from app.py
+  performance_page()   — top-level HyperDiv component; call from app.py
 
 Helper logic is split across:
   components/ranked_formatters.py    — formatting helpers + result_table
@@ -11,7 +11,7 @@ Helper logic is split across:
   components/performance_chart_builder.py — chart config builder
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-UI LAYOUT (inside performance_tab)
+UI LAYOUT (inside performance_page)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   Filter bar:
@@ -31,7 +31,7 @@ UI LAYOUT (inside performance_tab)
   Workout count / result_table()
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STATE VARIABLES  (declared at the top of performance_tab())
+STATE VARIABLES  (declared at the top of performance_page())
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   dist_enabled       tuple[bool]   one flag per RANKED_DISTANCES entry (index-aligned)
@@ -1125,7 +1125,7 @@ def _prediction_table(
 # ---------------------------------------------------------------------------
 
 
-def performance_tab(client, user_id: str) -> None:
+def performance_page(client, user_id: str) -> None:
     """
     Top-level entry point for the Performance tab.
     Fetches data, computes all derived state, then calls sub-components.
@@ -1310,7 +1310,7 @@ def performance_tab(client, user_id: str) -> None:
         state.cp_fit_result = fit_critical_power(_cp_pb_list)
     _cp_params = state.cp_fit_result
 
-    # ---- RowingLevel scrape (runs at performance_tab scope, result passed down) ----
+    # ---- RowingLevel scrape (runs at performance_page scope, result passed down) ----
     rl_task = None
     rl_predictions: dict = {}
     if _at_today and profile_complete(profile):

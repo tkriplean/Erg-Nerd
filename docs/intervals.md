@@ -15,13 +15,13 @@ The tab has two main regions:
 
 | File | Role |
 |---|---|
-| `components/interval_tab.py` | All HyperDiv UI: grid, legend, table, entry point `interval_tab()` |
+| `components/intervals_page.py` | All HyperDiv UI: grid, legend, table, entry point `intervals_page()` |
 | `services/interval_utils.py` | Pure-Python helpers: structure label generation, pace computation, SPM weighting |
 | `services/volume_bins.py` | Pace-zone infrastructure: `workout_bin_meters()`, `bin_bar_svg()`, `BIN_NAMES`, `BIN_COLORS`, `Z1/Z2/Z3_BINS`, `get_reference_sbs()`, `compute_bin_thresholds()` |
 | `services/rowing_utils.py` | `INTERVAL_WORKOUT_TYPES` — the set of `workout_type` strings that qualify as interval sessions |
 | `services/concept2.py` | Data loading: `get_client()`, `load_local_workouts()` |
 | `components/ranked_formatters.py` | Shared formatters: `_fmt_date`, `_fmt_distance`, `_fmt_hr`, `fmt_split` |
-| `app.py` | Tab declaration (`hd.tab("Intervals")`) and dispatch (`elif tabs.active == "Intervals": interval_tab()`) |
+| `app.py` | Tab declaration (`hd.tab("Intervals")`) and dispatch (`elif tabs.active == "Intervals": intervals_page()`) |
 
 ---
 
@@ -202,7 +202,7 @@ This differs from steady-state workouts where `time` includes everything. No res
 
 ## State Variables
 
-All reactive state lives in a single `hd.state()` call in `interval_tab()`:
+All reactive state lives in a single `hd.state()` call in `intervals_page()`:
 
 | Variable | Type | Meaning |
 |---|---|---|
@@ -221,11 +221,11 @@ The grid always displays the full enriched list regardless of `active_bins`.
 
 ## Adding or Changing Things
 
-**To adjust grid cell labels or tooltips**: edit `_STIMULI` and `_TOOLTIPS` in `interval_tab.py`. Both are 5×6 lists indexed `[row_idx][col_idx]`.
+**To adjust grid cell labels or tooltips**: edit `_STIMULI` and `_TOOLTIPS` in `intervals_page.py`. Both are 5×6 lists indexed `[row_idx][col_idx]`.
 
 **To change axis boundaries**: edit `_DUR_COLS` (X axis, seconds) or `_RATIO_ROWS` (Y axis, internal rest/work ratio). Changing boundaries does not require changing `_STIMULI` — cells just shift.
 
-**To change pace-zone filter thresholds**: edit `_bin_passes()` in `interval_tab.py`.
+**To change pace-zone filter thresholds**: edit `_bin_passes()` in `intervals_page.py`.
 
 **To change pace-zone definitions** (what split qualifies as "2k pace" etc.): see `compute_bin_thresholds()` in `services/volume_bins.py`. These thresholds are derived from the user's recent personal bests; all tabs share them.
 

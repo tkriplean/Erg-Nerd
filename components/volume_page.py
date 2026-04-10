@@ -383,7 +383,7 @@ def _volume_section(all_workouts: list, profile: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-def volume_tab(client, user_id: str) -> None:
+def volume_page(client, user_id: str) -> None:
     """Top-level component for the Volume tab."""
 
     result = concept2_sync(client)

@@ -2,7 +2,7 @@
 Builder and component function for the sessions pace-vs-date chart.
 
 Public surface:
-  sessions_chart(workouts)  — HyperDiv component; call from sessions_tab.
+  sessions_chart(workouts)  — HyperDiv component; call from sessions_page.
 """
 
 from __future__ import annotations

@@ -18,7 +18,7 @@ import hyperdiv as hd
 from services.rowinglevel import _PROFILE_DEFAULTS, age_from_dob
 
 
-def profile_tab() -> None:
+def profile_page() -> None:
     # ── One-time load from localStorage ─────────────────────────────────────
     state = hd.state(
         loaded=False,
