@@ -29,13 +29,13 @@ import os
 import hyperdiv as hd
 
 _HERE = os.path.dirname(__file__)
-with open(os.path.join(_HERE, "rowing_chart_assets", "stroke_chart.js")) as _f:
+with open(os.path.join(_HERE, "chart_assets", "workout_chart_plugin.js")) as _f:
     _STROKE_CHART_JS = _f.read()
 
 
 class StrokeChart(hd.Plugin):
     _name = "StrokeChart"
-    _assets_root = os.path.join(_HERE, "rowing_chart_assets")
+    _assets_root = os.path.join(_HERE, "chart_assets")
     _assets = [
         # Shared Chart.js CDN copy — deduplicated by HyperDiv if PerformanceChart
         # is already registered on the same page.
@@ -51,7 +51,7 @@ class StrokeChart(hd.Plugin):
 
     # ── Python → JS ──────────────────────────────────────────────────────────
 
-    # Full chart config dict produced by session_chart_builder.build_stroke_chart_config()
+    # Full chart config dict produced by workout_chart_builder.build_stroke_chart_config()
     config = hd.Prop(hd.Any, None)
 
     # Canvas height in pixels (or CSS string like "300px").

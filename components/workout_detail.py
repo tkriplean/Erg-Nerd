@@ -1,5 +1,5 @@
 """
-components/session_detail.py — Full-screen session detail overlay.
+components/workout_detail.py — Full-screen session detail overlay.
 
 Renders when app_state.selected_session_id is set.  Displays:
 
@@ -12,7 +12,7 @@ Renders when app_state.selected_session_id is set.  Displays:
 
 Entry point::
 
-    session_detail(
+    workout_detail(
         workout,            # dict from _workouts_dict
         client,             # Concept2Client (for fetching strokes)
         user_id,            # str
@@ -35,8 +35,8 @@ from components.ranked_formatters import (
     fmt_split,
     result_table,
 )
-from components.session_chart_builder import build_stroke_chart_config
-from components.stroke_chart import StrokeChart
+from components.workout_chart_builder import build_stroke_chart_config
+from components.workout_chart_plugin import StrokeChart
 from services.interval_utils import interval_structure_key
 from services.rowing_utils import (
     INTERVAL_WORKOUT_TYPES,
@@ -45,7 +45,7 @@ from services.rowing_utils import (
 )
 
 from components.hyperdiv_extensions import radio_group
-from components.workout_sync import workout_sync
+from components.concept2_sync import concept2_sync
 
 
 # ---------------------------------------------------------------------------
@@ -674,7 +674,7 @@ def _find_similar(workout: dict, all_workouts: list, n: int = 8) -> list:
 # ---------------------------------------------------------------------------
 
 
-def session_detail(session_id: int, client, user_id: str) -> None:
+def workout_detail(session_id: int, client, user_id: str) -> None:
     """Render the full-screen session detail overlay."""
     _theme = hd.theme()
 
@@ -690,7 +690,7 @@ def session_detail(session_id: int, client, user_id: str) -> None:
     )
 
     # ── Pre-fetch workout list (cached; zero cost on repeat renders) ───────
-    sync_result = workout_sync(client)
+    sync_result = concept2_sync(client)
 
     if sync_result is None:
         return

@@ -5,7 +5,7 @@ Sessions tab — pace-vs-date scatter chart + recent-workouts table.
 import hyperdiv as hd
 
 from components.sessions_chart_builder import sessions_chart
-from components.workout_sync import workout_sync
+from components.concept2_sync import concept2_sync
 
 
 # ---------------------------------------------------------------------------
@@ -16,7 +16,7 @@ from components.workout_sync import workout_sync
 def sessions_tab(client, user_id: str) -> None:
     """Top-level component for the Sessions tab."""
 
-    result = workout_sync(client)
+    result = concept2_sync(client)
     if result is None:
         return
     _workouts_dict, all_workouts = result

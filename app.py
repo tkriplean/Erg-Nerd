@@ -39,12 +39,12 @@ from services.concept2 import (
 from services.rowing_utils import compress_workouts, decompress_workouts
 from components.interval_tab import interval_tab
 from components.profile_tab import profile_tab
-from components.ranked_tab import ranked_tab
-from components.rowing_animation import rowing_animation
-from components.session_detail import session_detail
+from components.performance_tab import performance_tab
+from components.ergnerd_animation import ergnerd_animation
+from components.workout_detail import workout_detail
 from components.sessions_tab import sessions_tab
 from components.volume_tab import volume_tab
-from components.workout_sync import workout_sync
+from components.concept2_sync import concept2_sync
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +137,7 @@ def _login_view() -> None:
             border="1px solid neutral-100",
             width=34,
         ):
-            rowing_animation(width=22, theme="dark" if _theme.is_dark else "light")
+            ergnerd_animation(width=22, theme="dark" if _theme.is_dark else "light")
 
             with hd.box(gap=1, align="center"):
                 if missing_credentials:
@@ -207,7 +207,7 @@ def _dashboard_view(client, user_id: str, app_state) -> None:
         with hd.hbox(
             gap=2,
         ):
-            rowing_animation(width=10, theme="dark" if _theme.is_dark else "light")
+            ergnerd_animation(width=10, theme="dark" if _theme.is_dark else "light")
             with hd.nav(direction="horizontal", gap=0, align="end"):
                 for tab_name, path in _TAB_ROUTES.items():
                     with hd.scope(f"{tab_name, loc.path}"):
@@ -255,7 +255,7 @@ def _dashboard_view(client, user_id: str, app_state) -> None:
                 session_id = None
             if session_id is not None:
                 with hd.scope(session_id):
-                    session_detail(
+                    workout_detail(
                         session_id,
                         client,
                         user_id,
@@ -267,7 +267,7 @@ def _dashboard_view(client, user_id: str, app_state) -> None:
         elif current_tab == "Intervals":
             interval_tab(client, user_id)
         elif current_tab == "Performance":
-            ranked_tab(client, user_id)
+            performance_tab(client, user_id)
         else:
             profile_tab()
 

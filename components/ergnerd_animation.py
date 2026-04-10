@@ -1,5 +1,5 @@
 """
-components/rowing_animation.py
+components/ergnerd_animation.py
 
 Animated rowing logo for the Erg Nerd app.
 
@@ -11,8 +11,8 @@ Drive easing: ease-in-cubic (acceleration).
 Recovery easing: ease-out-cubic (deceleration into catch).
 
 Usage:
-    from components.rowing_animation import rowing_animation
-    rowing_animation(width=20)          # HyperDiv component
+    from components.ergnerd_animation import ergnerd_animation
+    ergnerd_animation(width=20)          # HyperDiv component
 """
 
 import base64
@@ -536,7 +536,7 @@ def build_svg(theme: str = "light") -> str:
 # ---------------------------------------------------------------------------
 
 
-def rowing_animation(width: int = 20, theme: str | None = None) -> None:
+def ergnerd_animation(width: int = 20, theme: str | None = None) -> None:
     """
     Render the animated rowing logo as a HyperDiv image component.
 

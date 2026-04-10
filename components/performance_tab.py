@@ -2,16 +2,16 @@
 Ranked Events tab — UI and orchestration for the ranked-events view.
 
 Exported:
-  ranked_tab()   — top-level HyperDiv component; call from app.py
+  performance_tab()   — top-level HyperDiv component; call from app.py
 
 Helper logic is split across:
   components/ranked_formatters.py    — formatting helpers + result_table
   services/ranked_filters.py         — quality filters + season helpers
   services/ranked_predictions.py     — multi-model prediction computation
-  components/ranked_chart_builder.py — chart config builder
+  components/performance_chart_builder.py — chart config builder
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-UI LAYOUT (inside ranked_tab)
+UI LAYOUT (inside performance_tab)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   Filter bar:
@@ -31,7 +31,7 @@ UI LAYOUT (inside ranked_tab)
   Workout count / result_table()
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STATE VARIABLES  (declared at the top of ranked_tab())
+STATE VARIABLES  (declared at the top of performance_tab())
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   dist_enabled       tuple[bool]   one flag per RANKED_DISTANCES entry (index-aligned)
@@ -76,8 +76,8 @@ SEASONS
 CHART / PREDICTION
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  Chart rendered by PerformanceChart (components/performance_chart.py), an hd.Plugin
-  wrapping Chart.js with custom JS in rowing_chart_assets/performance_chart.js.
+  Chart rendered by PerformanceChart (components/performance_chart_plugin.py), an hd.Plugin
+  wrapping Chart.js with custom JS in chart_assets/performance_chart_plugin.js.
 
   Custom JS features:
     - canvasLabelsPlugin: stable overlay labels stored in a Map keyed by
@@ -132,10 +132,10 @@ from services.rowing_utils import (
     compute_duration_s,
     compute_pauls_constant,
 )
-from components.workout_sync import workout_sync
+from components.concept2_sync import concept2_sync
 from services.critical_power_model import fit_critical_power
-from components.performance_chart import PerformanceChart
-from components.date_slider import DateSlider
+from components.performance_chart_plugin import PerformanceChart
+from components.date_slider_plugin import DateSlider
 from components.ranked_formatters import result_table
 from services.ranked_filters import (
     is_ranked_noninterval,
@@ -143,7 +143,7 @@ from services.ranked_filters import (
     apply_quality_filters,
     sim_workouts_at,
 )
-from components.ranked_chart_builder import (
+from components.performance_chart_builder import (
     build_sb_annotations,
     ol_event_line,
     pcts,
@@ -1125,7 +1125,7 @@ def _prediction_table(
 # ---------------------------------------------------------------------------
 
 
-def ranked_tab(client, user_id: str) -> None:
+def performance_tab(client, user_id: str) -> None:
     """
     Top-level entry point for the Performance tab.
     Fetches data, computes all derived state, then calls sub-components.
@@ -1174,7 +1174,7 @@ def ranked_tab(client, user_id: str) -> None:
             pass
 
     # ---- fetch (shared sync component) ----
-    sync_result = workout_sync(client)
+    sync_result = concept2_sync(client)
 
     # ---- base set + quality filters (empty while loading) ----
     if sync_result is not None:
@@ -1310,7 +1310,7 @@ def ranked_tab(client, user_id: str) -> None:
         state.cp_fit_result = fit_critical_power(_cp_pb_list)
     _cp_params = state.cp_fit_result
 
-    # ---- RowingLevel scrape (runs at ranked_tab scope, result passed down) ----
+    # ---- RowingLevel scrape (runs at performance_tab scope, result passed down) ----
     rl_task = None
     rl_predictions: dict = {}
     if _at_today and profile_complete(profile):

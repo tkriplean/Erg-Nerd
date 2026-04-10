@@ -1,5 +1,5 @@
 """
-session_chart_builder.py — Chart.js config builder for stroke-by-stroke data.
+workout_chart_builder.py — Chart.js config builder for stroke-by-stroke data.
 
 Exported:
     build_stroke_chart_config(strokes, workout, *, metric, focused_interval_idx,

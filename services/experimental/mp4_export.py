@@ -5,10 +5,10 @@ This module is intentionally unused for now — the MP4 export feature is
 parked here for future re-enablement.  The render logic (generate_mp4) and
 the HyperDiv UI wiring (render_mp4_export_button) are kept together so the
 feature can be re-enabled by importing and calling render_mp4_export_button
-from ranked_tab.py and wiring mp4_task = hd.task() back in.
+from performance_tab.py and wiring mp4_task = hd.task() back in.
 
 To re-enable:
-  1. In ranked_tab.py, add `mp4_task = hd.task()` inside ranked_tab().
+  1. In performance_tab.py, add `mp4_task = hd.task()` inside performance_tab().
   2. Call render_mp4_export_button(state, mp4_task, sim_config) in the
      chart-settings row where the commented-out MP4 block currently sits.
   3. Build sim_config from the current state variables (see docstring on
@@ -346,7 +346,7 @@ def generate_mp4(
 
 
 # ---------------------------------------------------------------------------
-# HyperDiv UI wiring (parked — uncomment and call from ranked_tab to re-enable)
+# HyperDiv UI wiring (parked — uncomment and call from performance_tab to re-enable)
 # ---------------------------------------------------------------------------
 
 
@@ -354,7 +354,7 @@ def render_mp4_export_button(state, mp4_task, sim_config: dict) -> None:
     """
     Render the MP4 export icon button and its status indicators.
 
-    Call this from the chart-settings row in ranked_tab() after adding
+    Call this from the chart-settings row in performance_tab() after adding
     `mp4_task = hd.task()` to the state setup.
 
     sim_config must contain:

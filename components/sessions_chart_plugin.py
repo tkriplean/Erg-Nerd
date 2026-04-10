@@ -21,13 +21,13 @@ import os
 import hyperdiv as hd
 
 _HERE = os.path.dirname(__file__)
-with open(os.path.join(_HERE, "rowing_chart_assets", "sessions_chart.js")) as _f:
+with open(os.path.join(_HERE, "chart_assets", "sessions_chart_plugin.js")) as _f:
     _SESSIONS_CHART_JS = _f.read()
 
 
 class SessionsChart(hd.Plugin):
     _name       = "SessionsChart"
-    _assets_root = os.path.join(_HERE, "rowing_chart_assets")
+    _assets_root = os.path.join(_HERE, "chart_assets")
     _assets = [
         # Same Chart.js CDN copy as RowingChart / VolumeChart.
         # HyperDiv deduplicates identical URLs so it's only loaded once.

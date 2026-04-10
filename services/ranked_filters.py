@@ -102,7 +102,7 @@ def apply_quality_filters(
          ADJACENT_FILTER_PCT% faster (by pace).
 
     Returns the filtered list.  selected_dists, selected_times, and
-    excluded_seasons are not applied here — they are applied in ranked_tab.py
+    excluded_seasons are not applied here — they are applied in performance_tab.py
     after this call.
     """
     # 1) Lifetime-PB quality filter
@@ -179,7 +179,7 @@ def sim_workouts_at(
     Return the workouts visible at *sim_date*.
 
     Quality filters (PB quality, rolling-window SB quality, cross-event
-    domination) are applied once upfront in ranked_tab.py before the
+    domination) are applied once upfront in performance_tab.py before the
     simulation receives the data — whether a performance was max/near-max
     effort does not change as sim_date advances.
 

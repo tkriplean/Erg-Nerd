@@ -1,7 +1,7 @@
 """
 Shared workout-sync component.
 
-Every tab that needs workout data calls workout_sync(client) at the top of its
+Every tab that needs workout data calls concept2_sync(client) at the top of its
 render function.  The function handles the full lifecycle:
 
   1. One-time load of the compressed workout blob from browser localStorage
@@ -19,10 +19,10 @@ Return value
 
 Usage
 -----
-    from components.workout_sync import workout_sync
+    from components.concept2_sync import concept2_sync
 
     def my_tab(client, user_id: str) -> None:
-        result = workout_sync(client)
+        result = concept2_sync(client)
         if result is None:
             return
         workouts_dict, all_workouts = result
@@ -34,7 +34,7 @@ import hyperdiv as hd
 from services.rowing_utils import compress_workouts, decompress_workouts
 
 
-def workout_sync(client) -> tuple | None:
+def concept2_sync(client) -> tuple | None:
     """
     Load, sync, and persist workout data.  Returns (workouts_dict, sorted_list)
     when ready, or None while the component is still loading.

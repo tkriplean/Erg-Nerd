@@ -30,7 +30,7 @@ import hyperdiv as hd
 
 import json
 
-from components.workout_sync import workout_sync
+from components.concept2_sync import concept2_sync
 from services.volume_bins import (
     get_reference_sbs,
     compute_bin_thresholds,
@@ -50,7 +50,7 @@ from services.heartrate_utils import (
 )
 from services.rowinglevel import _PROFILE_DEFAULTS
 from components.volume_chart_builder import build_volume_chart_config, get_period_rows
-from components.volume_chart import VolumeChart
+from components.volume_chart_plugin import VolumeChart
 
 # HR Z3 sub-zones: bin 2 = Z4 Threshold (80–90 %), bin 1 = Z5 Max (> 90 %)
 _HR_Z3A_BINS = frozenset({2})  # Threshold
@@ -386,7 +386,7 @@ def _volume_section(all_workouts: list, profile: dict) -> None:
 def volume_tab(client, user_id: str) -> None:
     """Top-level component for the Volume tab."""
 
-    result = workout_sync(client)
+    result = concept2_sync(client)
     if result is None:
         return
     _workouts_dict, all_workouts = result

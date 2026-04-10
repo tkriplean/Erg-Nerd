@@ -56,7 +56,7 @@ import statistics
 import hyperdiv as hd
 
 from services.rowing_utils import format_time, INTERVAL_WORKOUT_TYPES
-from components.workout_sync import workout_sync
+from components.concept2_sync import concept2_sync
 from services.interval_utils import (
     avg_work_pace_tenths,
     avg_work_spm,
@@ -954,7 +954,7 @@ def _pagination(state, total: int, total_pages: int) -> None:
 def interval_tab(client, user_id: str) -> None:
     """Top-level HyperDiv component for the Interval Workouts tab."""
 
-    result = workout_sync(client)
+    result = concept2_sync(client)
     if result is None:
         return
     _workouts_dict, all_workouts = result
