@@ -31,6 +31,8 @@ import hyperdiv as hd
 import json
 
 from components.concept2_sync import concept2_sync
+from services.formatters import machine_label
+
 from services.volume_bins import (
     get_reference_sbs,
     compute_bin_thresholds,
@@ -56,24 +58,6 @@ from components.volume_chart_plugin import VolumeChart
 _HR_Z3A_BINS = frozenset({2})  # Threshold
 _HR_Z3B_BINS = frozenset({1})  # Max
 _HR_NO_DATA_BINS = frozenset({6})  # "No HR" — excluded from classification denominator
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _machine_label(type_str: str) -> str:
-    """'rower' → 'Rower', 'skierg' → 'SkiErg', etc."""
-    _LABELS = {
-        "rower": "Rower",
-        "skierg": "SkiErg",
-        "bike": "Bike",
-        "dynamic": "Dynamic",
-        "slides": "Slides",
-    }
-    return _LABELS.get(type_str.lower(), type_str.capitalize())
-
 
 # ---------------------------------------------------------------------------
 # Distribution colour helpers
@@ -293,7 +277,7 @@ def _volume_section(all_workouts: list, profile: dict) -> None:
                 with machine_sel:
                     hd.option("All Machines", value="All")
                     for mt in machine_types:
-                        hd.option(_machine_label(mt), value=mt)
+                        hd.option(machine_label(mt), value=mt)
                 if machine_sel.changed:
                     state.machine = machine_sel.value
         else:

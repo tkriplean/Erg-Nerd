@@ -29,7 +29,7 @@ from services.rowing_utils import (
     watts_to_pace,
 )
 from services.critical_power_model import critical_power_model
-from components.ranked_formatters import fmt_split
+from services.formatters import fmt_split
 
 
 # ---------------------------------------------------------------------------
@@ -237,8 +237,11 @@ def _compute_predictor_raws(
                 anchor_dist = _str_lba.get(cat_key)
                 pace = preds.get(dist_m) or preds.get(str(dist_m))
                 if pace is not None and PACE_MIN <= pace <= PACE_MAX:
-                    w = (1.0 / (abs(math.log2(dist_m / anchor_dist)) + 0.5)
-                         if anchor_dist else 1.0)
+                    w = (
+                        1.0 / (abs(math.log2(dist_m / anchor_dist)) + 0.5)
+                        if anchor_dist
+                        else 1.0
+                    )
                     _rl_paces.append(pace)
                     _rl_weights.append(w)
             else:

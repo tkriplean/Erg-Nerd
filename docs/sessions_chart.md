@@ -436,7 +436,7 @@ string).
 
 - Sorted descending by date (most recent first).
 - Capped at 250 rows (single-page; no pagination overflow).
-- Uses the shared `result_table()` renderer from `components/ranked_formatters.py`.
+- Uses the shared `result_table()` renderer from `components/workout_table.py`.
 - The heading shows a count: `"Workouts in View  (N)"`.
 
 The table reflects all active user-facing filters but **not** the outlier filter

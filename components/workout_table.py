@@ -2,99 +2,25 @@
 Formatting helpers and the shared result-table renderer for ranked workouts.
 
 Exported:
-  _MACHINE_LABELS     — dict mapping machine type strings to display labels
-  _fmt_date()         — ISO date string → "Mon DD, YYYY"
-  fmt_split()         — tenths-of-a-second → "M:SS.t"
-  _pace_tenths()      — compute pace tenths from a workout dict
-  _fmt_distance()     — meters → "N,NNNm"
-  _fmt_hr()           — heart-rate dict → "NNN bpm"
-  _machine_label()    — machine type string → human label
-  _fmt_watts()        — compute and format watts from a workout dict
   result_table()      — HyperDiv table renderer with per-row view links.
                         Each row gets a link to /session/{id} so the browser
                         can navigate, bookmark, or open in a new tab.
 """
 
-from datetime import datetime
+
+from services.formatters import (
+    fmt_date,
+    fmt_split,
+    pace_tenths,
+    fmt_distance,
+    fmt_hr,
+    machine_label,
+    fmt_watts,
+)
 
 import hyperdiv as hd
 
-from services.rowing_utils import compute_pace, compute_watts, format_time
-
-# ---------------------------------------------------------------------------
-# Machine type labels
-# ---------------------------------------------------------------------------
-
-_MACHINE_LABELS = {
-    "rower": "Rower",
-    "skierg": "SkiErg",
-    "bike": "BikeErg",
-    "dynamic": "Dynamic",
-    "slides": "Slides",
-    "paddle": "Paddle",
-    "water": "Water",
-    "snow": "Snow",
-    "rollerski": "Roller Ski",
-    "multierg": "MultiErg",
-}
-
-
-# ---------------------------------------------------------------------------
-# Formatting helpers
-# ---------------------------------------------------------------------------
-
-
-def _fmt_date(date_str: str) -> str:
-    try:
-        return datetime.strptime(date_str[:10], "%Y-%m-%d").strftime("%b %d, %Y")
-    except Exception:
-        return date_str[:10] if date_str else "—"
-
-
-def fmt_split(tenths) -> str:
-    """Tenths-of-a-second → M:SS.t string."""
-    if not tenths:
-        return "—"
-    total = tenths / 10
-    m = int(total // 60)
-    s = total % 60
-    return f"{m}:{s:04.1f}"
-
-
-def _pace_tenths(r: dict):
-    """
-    Compute pace in tenths-of-a-second per 500m from a workout dict.
-    Returns None if time or distance are unavailable.
-    """
-    t = r.get("time")
-    d = r.get("distance")
-    if not t or not d:
-        return None
-    return t * 500 / d
-
-
-def _fmt_distance(meters) -> str:
-    if not meters:
-        return "—"
-    return f"{meters:,}m"
-
-
-def _fmt_hr(hr) -> str:
-    if not hr or not isinstance(hr, dict):
-        return "—"
-    avg = hr.get("average")
-    return f"{avg} bpm" if avg else "—"
-
-
-def _machine_label(type_str: str) -> str:
-    return _MACHINE_LABELS.get(type_str, type_str.capitalize() if type_str else "—")
-
-
-def _fmt_watts(r: dict) -> str:
-    pace = compute_pace(r)
-    if pace is None:
-        return "—"
-    return str(round(compute_watts(pace)))
+from services.formatters import format_time
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +176,7 @@ def result_table(
                     # hover_background_color=row_hover_bg,
                 ):
                     hd.text(
-                        _fmt_date(r.get("date", "")),
+                        fmt_date(r.get("date", "")),
                         font_size=text_size,
                         width=_COL_WIDTHS["Date"],
                     )
@@ -263,12 +189,12 @@ def result_table(
                         )
                     if multi_type:
                         hd.text(
-                            _machine_label(r.get("type", "")),
+                            machine_label(r.get("type", "")),
                             font_size=text_size,
                             width=_COL_WIDTHS["Type"],
                         )
                     hd.text(
-                        _fmt_distance(r.get("distance")),
+                        fmt_distance(r.get("distance")),
                         font_size=text_size,
                         width=_COL_WIDTHS["Distance"],
                     )
@@ -277,12 +203,12 @@ def result_table(
                     )
                     hd.text(tf, font_size=text_size, width=_COL_WIDTHS["Time"])
                     hd.text(
-                        fmt_split(_pace_tenths(r)),
+                        fmt_split(pace_tenths(r)),
                         font_size=text_size,
                         width=_COL_WIDTHS["Pace /500m"],
                     )
                     hd.text(
-                        _fmt_watts(r), font_size=text_size, width=_COL_WIDTHS["Watts"]
+                        fmt_watts(r), font_size=text_size, width=_COL_WIDTHS["Watts"]
                     )
                     hd.text(
                         str(r.get("drag_factor") or "—"),
@@ -295,7 +221,7 @@ def result_table(
                         width=_COL_WIDTHS["SPM"],
                     )
                     hd.text(
-                        _fmt_hr(r.get("heart_rate")),
+                        fmt_hr(r.get("heart_rate")),
                         font_size=text_size,
                         width=_COL_WIDTHS["HR"],
                     )

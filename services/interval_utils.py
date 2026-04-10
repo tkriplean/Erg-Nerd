@@ -13,50 +13,18 @@ Exported:
   wrap_parts(parts, sep, per_row)   → list of wrapped lines
   build_interval_lines(r)           → list of human-readable description lines
   interval_totals(work_m, rest_m)   → "Xm work  ·  Ym rest" footer string
-  avg_work_pace_tenths(r)           → tenths/500m (r["time"]*500/r["distance"])
+  avg_workpace_tenths(r)           → tenths/500m (r["time"]*500/r["distance"])
   avg_work_spm(r)                   → work-weighted average stroke rate
   interval_structure_label(r)       → canonical one-line structure string
   interval_structure_key(r)         → structure label with leading "N × " stripped
 """
 
 from __future__ import annotations
-
+from services.formatters import fmt_tenths
 
 # ---------------------------------------------------------------------------
 # Formatting helpers  (moved verbatim from sessions_chart_builder.py)
 # ---------------------------------------------------------------------------
-
-def fmt_tenths(tenths: int) -> str:
-    """Convert tenths of seconds to 'M:SS' string.  E.g. 600 → '1:00'."""
-    total_s = int(tenths) // 10
-    mins, secs = divmod(total_s, 60)
-    return f"{mins}:{secs:02d}"
-
-
-def fmt_tenths_compact(tenths: int) -> str:
-    """
-    Compact time string for use in interval structure labels.
-
-    Rules (chosen for brevity while remaining unambiguous):
-      Whole minutes  →  "4'"       (e.g. 2400 tenths → "4'")
-      Pure seconds   →  '30"'      (e.g.  300 tenths → '30"')
-      Mixed          →  "1:30"     (unchanged — "1'30\"" would be harder to read)
-
-    Examples:
-      0:10  → '10"'
-      0:30  → '30"'
-      1:00  → "1'"
-      1:30  → "1:30"
-      4:00  → "4'"
-      9:55  → "9:55"
-    """
-    total_s = int(tenths) // 10
-    mins, secs = divmod(total_s, 60)
-    if secs == 0:
-        return f"{mins}'"
-    if mins == 0:
-        return f'{secs}"'
-    return f"{mins}:{secs:02d}"
 
 
 def wrap_parts(parts: list[str], sep: str, per_row: int = 6) -> list[str]:
@@ -73,6 +41,7 @@ def wrap_parts(parts: list[str], sep: str, per_row: int = 6) -> list[str]:
 # Interval description  (moved verbatim from sessions_chart_builder.py)
 # ---------------------------------------------------------------------------
 
+
 def build_interval_lines(r: dict, compact: bool = False) -> list[str]:
     """
     Return a list of lines that describe the exact interval structure.
@@ -84,7 +53,7 @@ def build_interval_lines(r: dict, compact: bool = False) -> list[str]:
     Parameters
     ----------
     compact:
-        If True, use abbreviated time strings (``fmt_tenths_compact``) and
+        If True, use abbreviated time strings and
         shorten the rest suffix from " rest" to "r".  Intended for compact
         labels in the interval browser.  Default False preserves original
         output used by the session chart detail view.
@@ -119,7 +88,9 @@ def build_interval_lines(r: dict, compact: bool = False) -> list[str]:
     iv_type = (intervals[0].get("type") or "").lower()
 
     # Choose time formatter and rest suffix based on compact flag
-    _ft = fmt_tenths_compact if compact else fmt_tenths
+    def _ft(t):
+        return fmt_tenths(t, compact=compact)
+
     _rest_suffix = "r" if compact else " rest"
 
     # ── Step 1: build blocks ──────────────────────────────────────────────────
@@ -152,9 +123,7 @@ def build_interval_lines(r: dict, compact: bool = False) -> list[str]:
             for b in blocks:
                 t = b[0].get("time") or 0
                 rt = b[0].get("rest_time") or 0
-                parts.append(
-                    f"{_ft(t)}/{_ft(rt)}" if rt else _ft(t)
-                )
+                parts.append(f"{_ft(t)}/{_ft(rt)}" if rt else _ft(t))
             return wrap_parts(parts, sep="  –  ")
 
         else:  # "distance" or unknown
@@ -206,7 +175,8 @@ def interval_totals(work_m: int, rest_m: int) -> str:
 # Pace computation
 # ---------------------------------------------------------------------------
 
-def avg_work_pace_tenths(r: dict) -> float | None:
+
+def avg_workpace_tenths(r: dict) -> float | None:
     """
     Average WORK pace in tenths-of-a-second per 500 m.
 
@@ -258,6 +228,7 @@ def avg_work_spm(r: dict) -> float | None:
 # Structure label
 # ---------------------------------------------------------------------------
 
+
 def interval_structure_label(r: dict, compact: bool = False) -> str:
     """
     Return a canonical one-line structure string for display.
@@ -286,5 +257,3 @@ def interval_structure_key(r: dict, compact: bool = False) -> str:
         _, _, rest = label.partition(" × ")
         return rest
     return label
-
-

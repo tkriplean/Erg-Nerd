@@ -31,7 +31,7 @@ Usage
 
 import hyperdiv as hd
 
-from services.rowing_utils import compress_workouts, decompress_workouts
+from services.local_storage_compression import compress_workouts, decompress_workouts
 
 
 def concept2_sync(client) -> tuple | None:
@@ -48,7 +48,9 @@ def concept2_sync(client) -> tuple | None:
             with hd.box(align="center", padding=4):
                 hd.spinner()
             return None
-        sync_state.initial_workouts = decompress_workouts(ls_wkts.result) if ls_wkts.result else {}
+        sync_state.initial_workouts = (
+            decompress_workouts(ls_wkts.result) if ls_wkts.result else {}
+        )
         sync_state.initial_loaded = True
 
     # ── Step 2: background API sync ──────────────────────────────────────────
@@ -59,6 +61,7 @@ def concept2_sync(client) -> tuple | None:
         def on_progress(pages_fetched, workouts_cached):
             progress.pages = pages_fetched
             progress.total = workouts_cached
+
         return client.get_all_results(initial, on_progress=on_progress)
 
     task.run(_fetch, client, sync_state.initial_workouts, progress)

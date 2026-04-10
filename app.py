@@ -36,7 +36,7 @@ from services.concept2 import (
     parse_callback_query,
     save_token,
 )
-from services.rowing_utils import compress_workouts, decompress_workouts
+from services.local_storage_compression import compress_workouts, decompress_workouts
 from components.intervals_page import intervals_page
 from components.profile_page import profile_page
 from components.performance_page import performance_page

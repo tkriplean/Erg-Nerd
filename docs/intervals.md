@@ -20,7 +20,7 @@ The tab has two main regions:
 | `services/volume_bins.py` | Pace-zone infrastructure: `workout_bin_meters()`, `bin_bar_svg()`, `BIN_NAMES`, `BIN_COLORS`, `Z1/Z2/Z3_BINS`, `get_reference_sbs()`, `compute_bin_thresholds()` |
 | `services/rowing_utils.py` | `INTERVAL_WORKOUT_TYPES` — the set of `workout_type` strings that qualify as interval sessions |
 | `services/concept2.py` | Data loading: `get_client()`, `load_local_workouts()` |
-| `components/ranked_formatters.py` | Shared formatters: `_fmt_date`, `_fmt_distance`, `_fmt_hr`, `fmt_split` |
+| `services/formatters.py` | Shared formatters: `fmt_date`, `fmt_distance`, `fmt_hr`, `fmt_split` |
 | `app.py` | Tab declaration (`hd.tab("Intervals")`) and dispatch (`elif tabs.active == "Intervals": intervals_page()`) |
 
 ---
@@ -35,7 +35,7 @@ _enrich_workouts(all_workouts, thresholds)
     → calls workout_bin_meters() per workout   (from volume_bins.py)
     → calls bin_bar_svg()                      (from volume_bins.py)
     → calls interval_structure_label/key()     (from interval_utils.py)
-    → calls avg_work_pace_tenths()             (from interval_utils.py)
+    → calls avg_workpace_tenths()             (from interval_utils.py)
     → calls avg_work_spm()                     (from interval_utils.py)
     → calls _compute_grid_placement()          (local)
     → attaches _bin_meters, _bar_uri, _z1/_z2/_z3,
@@ -154,7 +154,7 @@ Custom row renderer (not `hd.data_table`, which cannot host SVG cells). All colu
 
 | Column | Source | Notes |
 |---|---|---|
-| Date | `r["date"]` | Formatted by `_fmt_date` |
+| Date | `r["date"]` | Formatted by `fmt_date` |
 | Reps | `r["_reps"]` | Count of non-rest intervals |
 | Structure | `r["_structure_key"]` | Rep-stripped (e.g. `"500m / 2'r"` not `"6 × 500m / 2'r"`) |
 | Stimulus | `r["_stimulus"]` | Grid cell label, italic |
@@ -163,7 +163,7 @@ Custom row renderer (not `hd.data_table`, which cannot host SVG cells). All colu
 | Avg Split | `r["_work_pace"]` | `r["time"] * 500 / r["distance"]`; work-only (C2 API also excludes rest from `time`) |
 | Time | `r["time_formatted"]` | Work-only time, pre-formatted by C2 API |
 | SPM | `r["_work_spm"]` | Work-weighted average; top-level `stroke_rate` is not used (it averages rest periods where SPM = 0) |
-| HR | `r["heart_rate"]["average"]` | Formatted by `_fmt_hr` |
+| HR | `r["heart_rate"]["average"]` | Formatted by `fmt_hr` |
 
 Default sort: date descending. Sort direction flips on repeated clicks; split defaults ascending (fastest = lowest number).
 

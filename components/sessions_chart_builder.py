@@ -23,18 +23,20 @@ from services.rowing_utils import (
     compute_watts,
     get_season,
 )
+
+from services.formatters import fmt_date
+
 from services.interval_utils import (
-    fmt_tenths        as _fmt_tenths,
-    wrap_parts        as _wrap_parts,
-    build_interval_lines  as _build_interval_lines,
-    interval_totals       as _interval_totals,
+    wrap_parts as _wrap_parts,
+    build_interval_lines as _build_interval_lines,
+    interval_totals as _interval_totals,
 )
 from services.critical_power_model import (
     critical_power_model,
     fit_critical_power,
 )
 from components.sessions_chart_plugin import SessionsChart
-from components.ranked_formatters import result_table
+from components.workout_table import result_table
 
 
 # ---------------------------------------------------------------------------
@@ -92,15 +94,6 @@ def _date_to_ms(date_str: str) -> int:
         return int(dt.timestamp() * 1_000)
     except Exception:
         return 0
-
-
-def _fmt_date(date_str: str) -> str:
-    try:
-        return datetime.strptime(date_str[:10], "%Y-%m-%d").strftime("%b %d, %Y")
-    except Exception:
-        return date_str[:10] if date_str else ""
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -353,7 +346,7 @@ def prepare_points(workouts: list, sb_ids: set) -> list:
                 "rest_m": round(rest_m),
                 "ivl_desc": ivl_desc,  # list[str] — one line per block
                 "rest_desc": rest_desc,  # totals summary string
-                "date_str": _fmt_date(r.get("date", "")),
+                "date_str": fmt_date(r.get("date", "")),
                 "dist_str": dist_str,
             }
         )

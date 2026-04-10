@@ -15,6 +15,8 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Optional
 
+from services.formatters import fmt_meters
+
 from services.volume_bins import (
     BIN_NAMES,
     BIN_COLORS,
@@ -331,15 +333,6 @@ def _classify_distribution(
     return "Mixed"
 
 
-def _fmt_meters(m: float) -> str:
-    """Format a meter count: ≥1000 → '10.5k', else '500m'."""
-    v = round(m)
-    if v >= 1000:
-        k = v / 1000
-        return (str(k) if k == int(k) else f"{k:.1f}") + "k"
-    return f"{v}m"
-
-
 def _pct(part: float, total: float) -> str:
     """Return percentage string like '42%', or '—' if total is zero."""
     if total < 1:
@@ -448,11 +441,11 @@ def get_period_rows(
 
         row = {
             "label": label,
-            "total": _fmt_meters(total),
-            "rest": _fmt_meters(rest),
-            "z1_m": _fmt_meters(z1_m),
-            "z2_m": _fmt_meters(z2_m),
-            "z3_m": _fmt_meters(z3_m),
+            "total": fmt_meters(total),
+            "rest": fmt_meters(rest),
+            "z1_m": fmt_meters(z1_m),
+            "z2_m": fmt_meters(z2_m),
+            "z3_m": fmt_meters(z3_m),
             "z1_pct": _pct(z1_m, work),
             "z2_pct": _pct(z2_m, work),
             "z3_pct": _pct(z3_m, work),
@@ -462,9 +455,9 @@ def get_period_rows(
         if z3a_bins is not None and z3b_bins is not None:
             z3a_m = sum(b[i] for i in z3a_bins)
             z3b_m = sum(b[i] for i in z3b_bins)
-            row["z3a_m"] = _fmt_meters(z3a_m)
+            row["z3a_m"] = fmt_meters(z3a_m)
             row["z3a_pct"] = _pct(z3a_m, work)
-            row["z3b_m"] = _fmt_meters(z3b_m)
+            row["z3b_m"] = fmt_meters(z3b_m)
             row["z3b_pct"] = _pct(z3b_m, work)
 
         rows.append(row)

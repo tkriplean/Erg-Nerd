@@ -5,7 +5,8 @@ Exported:
   performance_page()   — top-level HyperDiv component; call from app.py
 
 Helper logic is split across:
-  components/ranked_formatters.py    — formatting helpers + result_table
+  services/formatters.py    — formatting helpers
+  components/workout_table           - result_table
   services/ranked_filters.py         — quality filters + season helpers
   services/ranked_predictions.py     — multi-model prediction computation
   components/performance_chart_builder.py — chart config builder
@@ -136,7 +137,7 @@ from components.concept2_sync import concept2_sync
 from services.critical_power_model import fit_critical_power
 from components.performance_chart_plugin import PerformanceChart
 from components.date_slider_plugin import DateSlider
-from components.ranked_formatters import result_table
+from components.workout_table import result_table
 from services.ranked_filters import (
     is_ranked_noninterval,
     seasons_from,

@@ -260,7 +260,7 @@ When pace cannot be computed, results fall back to date descending.
 | `components/workout_chart_builder.py` | `build_stroke_chart_config()` — pure Python Chart.js config builder |
 | `components/workout_chart_plugin.py` | `StrokeChart` HyperDiv plugin class |
 | `components/chart_assets/workout_chart_plugin.js` | Chart.js rendering, band click-to-zoom, stacked mode, dual Y-axis setup |
-| `components/ranked_formatters.py` | `result_table()` — accepts `on_click` for clickable rows + manual pagination |
+| `components/workout_table.py` | `result_table()` — accepts `on_click` for clickable rows + manual pagination |
 | `services/concept2.py` | `Concept2Client.get_strokes()` — fetches and sanitises the `/strokes` list for a result |
 | `app.py` | `selected_session_id` in `app_state`; overlay dispatch in `_dashboard_view()` |
 
@@ -277,7 +277,7 @@ if app_state.selected_session_id is not None:
 
 ### Clickable result tables
 
-`result_table()` in `ranked_formatters.py` accepts an optional `on_click` callback:
+`result_table()` in `workout_table.py` accepts an optional `on_click` callback:
 
 ```python
 result_table(workouts, on_click=lambda wid: app_state.__setattr__("selected_session_id", wid))

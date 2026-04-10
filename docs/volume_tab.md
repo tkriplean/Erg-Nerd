@@ -171,7 +171,7 @@ volume_page()
 
 **Add a new scope option**: add an `hd.option(...)` inside each scope select and update `_scope_date_range()` in `volume_chart_builder.py`.
 
-**Add a new machine type label**: add an entry to the `_LABELS` dict in `_machine_label()`.
+**Add a new machine type label**: add an entry to the `_LABELS` dict in `machine_label()`.
 
 **Change the zone mode toggle options**: edit the `hd.radio_buttons("Pace", "HR", ...)` call and add a new aggregation branch in `_volume_section`.
 

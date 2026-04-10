@@ -30,13 +30,17 @@ from typing import Optional
 
 import hyperdiv as hd
 
-from components.ranked_formatters import (
-    _fmt_date,
-    _fmt_distance,
-    _pace_tenths,
+from services.formatters import (
+    fmt_date,
+    fmt_distance,
+    pace_tenths,
     fmt_split,
-    result_table,
+    fmt_distance_label,
+    format_time,
 )
+
+from components.workout_table import result_table
+
 from components.workout_chart_builder import (
     build_interval_rows_and_bands,
     build_stroke_chart_config,
@@ -46,7 +50,6 @@ from services.interval_utils import interval_structure_key
 from services.rowing_utils import (
     INTERVAL_WORKOUT_TYPES,
     compute_watts,
-    format_time,
 )
 
 from components.hyperdiv_extensions import radio_group
@@ -74,7 +77,7 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
     """Compact multi-column stat grid."""
     wtype = workout.get("workout_type", "")
     is_interval = wtype in INTERVAL_WORKOUT_TYPES
-    pace = _pace_tenths(workout)
+    pace = pace_tenths(workout)
     pace_sec = (pace / 10.0) if pace else None
     avg_watts = round(compute_watts(pace_sec)) if pace_sec else None
 
@@ -100,7 +103,7 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
     with hd.box(grow=True):
         with hd.hbox(wrap="wrap", gap=0):
             if workout.get("distance"):
-                _stat("Distance", _fmt_distance(workout["distance"]))
+                _stat("Distance", fmt_distance(workout["distance"]))
             if workout.get("time"):
                 _stat("Time", format_time(workout["time"]))
             if pace_sec:
@@ -117,7 +120,7 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
                 _stat("Drag", str(workout["drag_factor"]))
             if is_interval:
                 if rest_dist:
-                    _stat("Rest Distance", _fmt_distance(rest_dist))
+                    _stat("Rest Distance", fmt_distance(rest_dist))
                 if rest_time:
                     _stat("Rest Time", format_time(rest_time))
             if hr_data.get("average"):
@@ -323,12 +326,6 @@ def _recalculate_splits(strokes: list, split_distances_m: list) -> list:
 # ---------------------------------------------------------------------------
 
 
-def _fmt_pace(pace_tenths) -> str:
-    if not pace_tenths:
-        return "—"
-    return fmt_split(pace_tenths)
-
-
 def _splits_table(
     workout: dict,
     strokes: Optional[list],
@@ -432,7 +429,7 @@ def _split_row(i, sp, col_w, ts, has_hr):
 
     cells = [
         (str(i + 1), col_w[0], "neutral-500"),
-        (_fmt_distance(sp.get("distance")), col_w[1], None),
+        (fmt_distance(sp.get("distance")), col_w[1], None),
         (
             format_time(round(sp.get("time_tenths", 0)))
             if sp.get("time_tenths")
@@ -440,7 +437,7 @@ def _split_row(i, sp, col_w, ts, has_hr):
             col_w[2],
             None,
         ),
-        (_fmt_pace(pace_t), col_w[3], None),
+        (fmt_split(pace_t), col_w[3], None),
         (watts_str, col_w[4], None),
         (f"{spm:.0f}" if spm else "—", col_w[5], None),
     ]
@@ -510,9 +507,9 @@ def _interval_row(i, r, col_w, ts, has_hr):
 
     cells = [
         (num_str, col_w[0], "neutral-400" if is_rest else "neutral-500"),
-        (_fmt_distance(d) if d else "—", col_w[1], muted),
+        (fmt_distance(d) if d else "—", col_w[1], muted),
         (format_time(t) if t else "—", col_w[2], muted),
-        (_fmt_pace(pace_t), col_w[3], muted),
+        (fmt_split(pace_t), col_w[3], muted),
         (
             str(r["avg_watts"]) if r.get("avg_watts") is not None else "",
             col_w[4],
@@ -613,7 +610,7 @@ def _find_similar(workout: dict, all_workouts: list, n: int = 8) -> list:
         pool.sort(key=lambda w: w.get("date", ""), reverse=True)
     else:
         ref_dist = workout.get("distance", 0)
-        ref_pace = _pace_tenths(workout)
+        ref_pace = pace_tenths(workout)
         pool = []
         for w in all_workouts:
             if w.get("id") == wid or w.get("workout_type") != wtype:
@@ -623,7 +620,7 @@ def _find_similar(workout: dict, all_workouts: list, n: int = 8) -> list:
                 continue
             pool.append(w)
         if ref_pace:
-            pool.sort(key=lambda w: abs((_pace_tenths(w) or 9999) - ref_pace))
+            pool.sort(key=lambda w: abs((pace_tenths(w) or 9999) - ref_pace))
         else:
             pool.sort(key=lambda w: w.get("date", ""), reverse=True)
 
@@ -684,21 +681,6 @@ def _chart_controls(state, can_stack: bool, has_hr: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _fmt_distance_label(workout: dict) -> str:
-    d = workout.get("distance")
-    if d:
-        return _fmt_distance(d)
-    t = workout.get("time")
-    if t:
-        return format_time(t)
-    return ""
-
-
-# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -708,14 +690,14 @@ def workout_page(session_id: int, client, user_id: str) -> None:
     _theme = hd.theme()
 
     state = hd.state(
-        metric="pace",                        # "pace" | "watts"
-        focused_interval=None,                # int | None  (raw band index)
-        focused_interval_excluding_rest=None, # int | None  (1-based work interval #)
-        custom_splits=None,                   # list[int] | None
-        stack=False,                          # stacked-intervals overlay mode
-        show_pace=True,                       # show pace/watts in stacked mode
-        show_spm=True,                        # show SPM in stacked mode
-        show_hr=True,                         # show HR in stacked mode
+        metric="pace",  # "pace" | "watts"
+        focused_interval=None,  # int | None  (raw band index)
+        focused_interval_excluding_rest=None,  # int | None  (1-based work interval #)
+        custom_splits=None,  # list[int] | None
+        stack=False,  # stacked-intervals overlay mode
+        show_pace=True,  # show pace/watts in stacked mode
+        show_spm=True,  # show SPM in stacked mode
+        show_hr=True,  # show HR in stacked mode
     )
 
     # ── Pre-fetch workout list (task-cached; free on repeat renders) ────────
@@ -754,7 +736,7 @@ def workout_page(session_id: int, client, user_id: str) -> None:
         if not workout.get("workout_type", "") == "VariableInterval":
             title = f"{reps} x {title}"
     else:
-        title = _fmt_distance_label(workout)
+        title = fmt_distance_label(workout)
 
     # ── Callbacks ────────────────────────────────────────────────────────────
 
@@ -775,7 +757,7 @@ def workout_page(session_id: int, client, user_id: str) -> None:
             # ── Header ───────────────────────────────────────────────────────
 
             with hd.box(padding_top=1, gap=0, align="start"):
-                hd.text(_fmt_date(workout.get("date", "")), font_color="neutral-500")
+                hd.text(fmt_date(workout.get("date", "")), font_color="neutral-500")
                 hd.text(title, font_weight="bold", font_size="2x-large")
 
                 if workout.get("comments"):
@@ -814,7 +796,9 @@ def workout_page(session_id: int, client, user_id: str) -> None:
                         padding=2,
                         align="center",
                         border_radius="medium",
-                        background_color="neutral-100" if not _theme.is_dark else "neutral-800",
+                        background_color="neutral-100"
+                        if not _theme.is_dark
+                        else "neutral-800",
                         height=18,
                     ):
                         hd.text(

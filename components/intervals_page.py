@@ -55,10 +55,10 @@ import statistics
 
 import hyperdiv as hd
 
-from services.rowing_utils import format_time, INTERVAL_WORKOUT_TYPES
+from services.rowing_utils import INTERVAL_WORKOUT_TYPES
 from components.concept2_sync import concept2_sync
 from services.interval_utils import (
-    avg_work_pace_tenths,
+    avg_workpace_tenths,
     avg_work_spm,
     interval_structure_key,
 )
@@ -72,12 +72,7 @@ from services.volume_bins import (
     bin_bar_svg,
     swatch_svg,
 )
-from components.ranked_formatters import (
-    _fmt_date,
-    _fmt_distance,
-    _fmt_hr,
-    fmt_split,
-)
+from services.formatters import fmt_date, fmt_distance, fmt_hr, fmt_split, format_time
 from components.hyperdiv_extensions import aligned_button
 
 
@@ -362,7 +357,7 @@ def _enrich_workouts(workouts: list[dict], thresholds) -> list[dict]:
         r["_z3"] = sum(bm[i] for i in Z3_BINS) / work_total if work_total else 0.0
         r["_structure_key"] = interval_structure_key(r, compact=True)
         r["_reps"] = reps
-        r["_work_pace"] = avg_work_pace_tenths(r)
+        r["_work_pace"] = avg_workpace_tenths(r)
         r["_work_spm"] = avg_work_spm(r)
         col, row = _compute_grid_placement(r)
         r["_grid_col"] = col
@@ -843,7 +838,7 @@ def _interval_table(workouts: list[dict], state) -> tuple[int, int]:
                 background_color="neutral-50" if i % 2 else "neutral-0",
             ):
                 hd.text(
-                    _fmt_date(r.get("date", "")),
+                    fmt_date(r.get("date", "")),
                     width=9,
                     font_size="small",
                     font_color="neutral-700",
@@ -886,7 +881,7 @@ def _interval_table(workouts: list[dict], state) -> tuple[int, int]:
                     with hd.tooltip(_zones_tooltip(r["_bin_meters"])):
                         hd.image(src=r["_bar_uri"], width=10, height=0.75)
                 hd.text(
-                    _fmt_distance(r.get("distance")),
+                    fmt_distance(r.get("distance")),
                     width=6,
                     font_size="small",
                     font_color="neutral-700",
@@ -911,7 +906,7 @@ def _interval_table(workouts: list[dict], state) -> tuple[int, int]:
                     font_color="neutral-500",
                 )
                 hd.text(
-                    _fmt_hr(r.get("heart_rate")),
+                    fmt_hr(r.get("heart_rate")),
                     width=6,
                     font_size="small",
                     font_color="neutral-500",
