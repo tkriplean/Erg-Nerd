@@ -40,6 +40,7 @@ from services.local_storage_compression import compress_workouts, decompress_wor
 from components.intervals_page import intervals_page
 from components.profile_page import profile_page
 from components.performance_page import performance_page
+from components.event_page import event_page
 from components.ergnerd_animation import ergnerd_animation
 from components.workout_page import workout_page
 from components.sessions_page import sessions_page
@@ -182,10 +183,11 @@ def _login_view() -> None:
 # Maps tab name → URL path and back.  "/" falls back to the default tab.
 _TAB_ROUTES: dict[str, str] = {
     "Profile": "/profile",
-    "Volume": "/volume",
     "Sessions": "/sessions",
+    "Volume": "/volume",
     "Intervals": "/intervals",
     "Performance": "/performance",
+    "Race": "/race",
 }
 _ROUTE_TABS: dict[str, str] = {v: k for k, v in _TAB_ROUTES.items()}
 _DEFAULT_TAB = "Performance"
@@ -276,6 +278,8 @@ def _dashboard_view(client, user_id: str, app_state) -> None:
             intervals_page(client, user_id)
         elif current_tab == "Performance":
             performance_page(client, user_id)
+        elif current_tab == "Race":
+            event_page(client, user_id)
         else:
             profile_page()
 

@@ -120,3 +120,31 @@ def decompress_workouts(stored: str) -> dict:
         return {k: _decompress_one_workout(v) for k, v in raw.items()}
     except Exception:
         return {}
+
+
+# ---------------------------------------------------------------------------
+# Stroke cache localStorage compression
+# ---------------------------------------------------------------------------
+
+
+def compress_strokes_cache(strokes_dict: dict) -> str:
+    """
+    Compress the stroke cache dict for browser localStorage.
+
+    The stroke cache maps str(workout_id) → [{t: float, d: float}, …].
+    The dict is JSON-serialised, zlib-compressed (level 9), and base64-encoded.
+
+    Typical reduction: ~5–8× vs raw JSON for a set of 2k stroke arrays.
+    """
+    raw = json.dumps(strokes_dict).encode()
+    return base64.b64encode(zlib.compress(raw, level=9)).decode()
+
+
+def decompress_strokes_cache(stored: str) -> dict:
+    """
+    Reverse of compress_strokes_cache(). Returns the dict, or {} on error.
+    """
+    try:
+        return json.loads(zlib.decompress(base64.b64decode(stored)))
+    except Exception:
+        return {}

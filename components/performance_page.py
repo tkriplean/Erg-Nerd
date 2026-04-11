@@ -29,7 +29,7 @@ UI LAYOUT (inside performance_page)
     PerformanceChart (75vh)
 
     Settings Row 1:
-      [ Intensity: [Pace|Watts]  Log Y ]  |  [ Length: [Distance|Duration]  Log X ]
+      [ [log] Intensity: [Pace|Watts] ]  |  [ [log] Length: [Distance|Duration] ]
       |  Power curves: [PBs|SBs|None]
     Settings Row 2:
       Prediction: <custom dropdown>   [Show components]  [predictor description]
@@ -783,18 +783,29 @@ def _chart_section(
                 padding=1,
                 border="1px solid neutral-100",
             ):
-                hd.text("Intensity (y)", font_color="neutral-800", font_size="small")
-                with hd.hbox(align="center", gap=2):
-                    with hd.scope("chart_metric"):
-                        with radio_group(value=state.chart_metric, size="medium") as rg:
-                            hd.radio_button("Pace")
-                            hd.radio_button("Watts")
-                        if rg.changed:
-                            state.chart_metric = rg.value
+                with hd.scope("chart_metric"):
+                    with radio_group(value=state.chart_metric, size="medium") as rg:
+                        hd.radio_button("Pace")
+                        hd.radio_button("Watts")
+                    if rg.changed:
+                        state.chart_metric = rg.value
+
+                with hd.hbox(align="center", gap=0.75):
+                    # hd.text("Intensity", font_color="neutral-800", font_size="small")
                     with hd.scope("chart_log_y"):
-                        sw = hd.switch("Log", checked=state.chart_log_y, size="medium")
-                        if sw.changed:
-                            state.chart_log_y = sw.checked
+                        with hd.button(
+                            size="small",
+                            border_radius="small",
+                            variant="primary" if state.chart_log_y else "default",
+                            pill=True,
+                        ) as _log_y_btn:
+                            with hd.hbox(gap=0.2):
+                                hd.text("Log(")
+                                hd.text(state.chart_metric, font_style="italic")
+                                hd.text(")")
+
+                        if _log_y_btn.clicked:
+                            state.chart_log_y = not state.chart_log_y
 
             # Length group
             with hd.box(
@@ -805,20 +816,31 @@ def _chart_section(
                 padding=1,
                 border="1px solid neutral-100",
             ):
-                hd.text("Length (x)", font_color="neutral-800", font_size="small")
-                with hd.hbox(align="center", gap=2):
-                    with hd.scope("chart_x_mode"):
-                        with radio_group(
-                            value=state.chart_x_mode.capitalize(), size="medium"
-                        ) as rg:
-                            hd.radio_button("Distance")
-                            hd.radio_button("Duration")
-                        if rg.changed:
-                            state.chart_x_mode = rg.value.lower()
+                with hd.scope("chart_x_mode"):
+                    with radio_group(
+                        value=state.chart_x_mode.capitalize(), size="medium"
+                    ) as rg:
+                        hd.radio_button("Distance")
+                        hd.radio_button("Duration")
+                    if rg.changed:
+                        state.chart_x_mode = rg.value.lower()
+
+                with hd.hbox(align="center", gap=0.75):
+                    # hd.text("Length", font_color="neutral-800", font_size="small")
                     with hd.scope("chart_log_x"):
-                        sw = hd.switch("Log", checked=state.chart_log_x, size="medium")
-                        if sw.changed:
-                            state.chart_log_x = sw.checked
+                        with hd.button(
+                            size="small",
+                            border_radius="small",
+                            variant="primary" if state.chart_log_x else "default",
+                            pill=True,
+                        ) as _log_x_btn:
+                            with hd.hbox(gap=0.2):
+                                hd.text("Log(")
+                                hd.text(state.chart_x_mode, font_style="italic")
+                                hd.text(")")
+
+                        if _log_x_btn.clicked:
+                            state.chart_log_x = not state.chart_log_x
 
             # Power curves
             with hd.box(
