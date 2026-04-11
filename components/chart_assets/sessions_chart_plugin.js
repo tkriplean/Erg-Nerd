@@ -16,6 +16,7 @@
  *   target_window_start  ms timestamp — drives the brush
  *   target_window_end    ms timestamp — drives the brush
  *   is_dark              bool
+ *   show_watts           bool — when true, y-axis shows watts instead of pace
  *
  * Props — JS → Python (JS-owned, never written by Python after init):
  *   brush_start  ms timestamp — last brush position after user drag
@@ -30,7 +31,8 @@
  *                     borderWidth = r - r2.  Chart.js strokes centered on
  *                     the circumference so: outer edge = r, inner edge = r2.
  *
- * Y-axis: slower pace (more sec/500m) at top, faster at bottom.
+ * Y-axis: pace mode — slower (larger sec/500m) at top, faster at bottom.
+ *          watts mode — higher watts at top, lower at bottom.
  *
  * Chart area is locked by the lockChartAreaPlugin (afterLayout hook) to
  * prevent any shift as tick density or label content changes.
@@ -91,6 +93,7 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
   let points       = ctx.initialProps.points || [];
 
   let isDark       = !!(ctx.initialProps.is_dark);
+  let showWatts    = !!(ctx.initialProps.show_watts);
   let brushStartMs = ctx.initialProps.target_window_start || 0;
   let brushEndMs   = ctx.initialProps.target_window_end   || 0;
   let changeId     = 0;
@@ -166,6 +169,10 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
     return `${m}:${r}`;
   }
 
+  function formatWatts(w) {
+    return Math.round(w) + "W";
+  }
+
   function fmtM(meters) {
     if (meters >= 1000) {
       const k = meters / 1000;
@@ -189,12 +196,19 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
   }
 
   function yRange() {
-    if (!points.length) return { yMin: 100, yMax: 300 };
+    if (!points.length) return showWatts ? { yMin: 50, yMax: 300 } : { yMin: 100, yMax: 300 };
     let lo = Infinity, hi = -Infinity, hiR = 4;
     for (const p of points) {
       if (p.y < lo) lo = p.y;
       if (p.y > hi) { hi = p.y; hiR = p.r || 4; }
     }
+
+    if (showWatts) {
+      // Watts: higher = faster = top; pad 15% above and below, no hard cap.
+      const pad = Math.max(10, (hi - lo) * 0.08);
+      return { yMin: Math.max(0, lo - pad), yMax: hi + pad };
+    }
+
     const yMin = Math.max(70, lo - 5);
 
     // Convert hiR (px) → pace (sec/500m) so the slowest circle isn't clipped.
@@ -440,11 +454,11 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
       type:    "linear",
       min:     yMin,
       max:     yMax,
-      reverse: false,   // slower pace (larger value) at top, faster at bottom
+      reverse: false,   // pace: larger (slower) at top; watts: larger (faster) at top
       grid:    { color: gridColor() },
       ticks:   {
-        callback: (v) => formatPace(v),
-        stepSize: 5,
+        callback: showWatts ? (v) => formatWatts(v) : (v) => formatPace(v),
+        stepSize: showWatts ? 25 : 5,
       },
     };
   }
@@ -541,8 +555,12 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
                 if (raw.is_ivl) {
                   const lines = [];
 
-                  // Line 1 — avg pace (most important physiological fact)
-                  lines.push(`Avg pace  ${formatPace(raw.y)} / 500m`);
+                  // Line 1 — avg pace / watts (most important physiological fact)
+                  if (showWatts) {
+                    lines.push(`Avg power  ${formatWatts(raw.y)}`);
+                  } else {
+                    lines.push(`Avg pace  ${formatPace(raw.y)} / 500m`);
+                  }
 
                   // Lines 2…N — interval structure (one line per block from Python)
                   // ivl_desc is a list of strings; each describes one structural block.
@@ -560,7 +578,8 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
                 }
 
                 // Non-interval: single compact line
-                const parts = [`${formatPace(raw.y)} / 500m`];
+                const yStr = showWatts ? formatWatts(raw.y) : `${formatPace(raw.y)} / 500m`;
+                const parts = [yStr];
                 if (raw.dist_str) parts.push(raw.dist_str);
                 if (raw.is_sb)    parts.push("★ SB");
                 return parts.join("  ·  ");
@@ -715,6 +734,9 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
       setWindow(brushStartMs, propValue, { rebuild: true, report: false });
     } else if (propName === "is_dark") {
       isDark = !!propValue;
+      initCharts();
+    } else if (propName === "show_watts") {
+      showWatts = !!propValue;
       initCharts();
     }
   });

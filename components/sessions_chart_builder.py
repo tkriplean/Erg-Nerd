@@ -102,7 +102,7 @@ def _date_to_ms(date_str: str) -> int:
 
 _CP_MIN_DIST_M = 500  # exclude sub-500m events from the CP fit (too sprint-y)
 _OUTLIER_FACTOR = 1.75  # drop sessions whose pace > this × predicted 2k pace
-_MIN_DIST_M = 500  # hard floor: anything shorter is never plotted
+_MIN_DIST_M = 100  # hard floor: anything shorter is never plotted
 
 # Duration bracket for brentq when solving for the 2k time [seconds].
 _SOLVE_T_MIN = 10.0
@@ -258,14 +258,14 @@ def compute_sb_ids(workouts: list) -> set:
 # ---------------------------------------------------------------------------
 
 
-def prepare_points(workouts: list, sb_ids: set) -> list:
+def prepare_points(workouts: list, sb_ids: set, show_watts: bool = False) -> list:
     """
     Convert raw workout dicts into the compact point dicts expected by the JS plugin.
     Returns list sorted largest-dist-first so big dots render behind small ones.
 
     Each dict has:
       x         — ms timestamp
-      y         — pace (sec/500m), rounded to 2dp
+      y         — pace (sec/500m) or watts depending on show_watts, rounded to 2dp
       r         — outer dot radius (px)  = ½√total_m
       r2        — inner fill radius (px); equals r for non-intervals
       c         — full-opacity HSLA colour string
@@ -292,6 +292,7 @@ def prepare_points(workouts: list, sb_ids: set) -> list:
         pace = compute_pace(r)
         if pace is None or not (70.0 <= pace <= 420.0):
             continue
+        y_val = round(compute_watts(pace), 1) if show_watts else round(pace, 2)
 
         dist = r.get("distance") or 0
         is_ivl = r.get("workout_type") in INTERVAL_WORKOUT_TYPES
@@ -327,7 +328,7 @@ def prepare_points(workouts: list, sb_ids: set) -> list:
         pts.append(
             {
                 "x": x,
-                "y": round(pace, 2),
+                "y": y_val,
                 "r": radius,
                 "r2": radius2,
                 # Colour variants — each serves a specific visual role;
@@ -409,6 +410,7 @@ def sessions_chart(workouts: list) -> None:
         last_change_id=0,
         filter_10k=False,
         filter_ivl="All",  # "All" | "Intervals Only" | "No Intervals"
+        show_watts=False,  # False = pace (sec/500m), True = watts
     )
 
     workouts = _apply_outlier_filter(workouts)
@@ -442,6 +444,16 @@ def sessions_chart(workouts: list) -> None:
             if cb_10k.changed:
                 state.filter_10k = cb_10k.checked
 
+        with hd.scope("metric"):
+            with hd.radio_group(
+                value="Watts" if state.show_watts else "Pace"
+            ) as metric_rg:
+                hd.radio_button("Pace", size="small")
+                hd.radio_button("Watts", size="small")
+            if metric_rg.changed:
+                state.show_watts = metric_rg.value == "Watts"
+
+
     # ── Apply filters ──────────────────────────────────────────────────────────
 
     filtered = workouts
@@ -463,7 +475,7 @@ def sessions_chart(workouts: list) -> None:
         ]
 
     sb_ids = compute_sb_ids(filtered)
-    pts = prepare_points(filtered, sb_ids)
+    pts = prepare_points(filtered, sb_ids, show_watts=state.show_watts)
 
     if not pts:
         hd.text("No sessions match the selected filters.", font_color="neutral-500")
@@ -482,6 +494,7 @@ def sessions_chart(workouts: list) -> None:
         target_window_start=target_start,
         target_window_end=target_end,
         is_dark=hd.theme().is_dark,
+        show_watts=state.show_watts,
         height="75vh",
     )
 

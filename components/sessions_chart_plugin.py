@@ -49,7 +49,12 @@ class SessionsChart(hd.Plugin):
     target_window_start = hd.Prop(hd.Int, 0)   # Unix ms
     target_window_end   = hd.Prop(hd.Int, 0)   # Unix ms
 
-    is_dark = hd.Prop(hd.Bool, False)
+    is_dark    = hd.Prop(hd.Bool, False)
+
+    # Y-axis metric: False = pace (sec/500m), True = watts.
+    # Python computes y-values using the appropriate metric before passing points;
+    # JS uses this flag only for tick/tooltip formatting and y-range calculation.
+    show_watts = hd.Prop(hd.Bool, False)
 
     # ── JS → Python (never written by Python after initial instantiation) ─────
 
