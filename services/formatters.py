@@ -2,14 +2,19 @@
 Formatting helpers and the shared result-table renderer for ranked workouts.
 
 Exported:
-  MACHINE_LABELS     — dict mapping machine type strings to display labels
-  fmt_date()         — ISO date string → "Mon DD, YYYY"
-  fmt_split()         — tenths-of-a-second → "M:SS.t"
-  pace_tenths()      — compute pace tenths from a workout dict
-  fmt_distance()     — meters → "N,NNNm"
-  fmt_hr()           — heart-rate dict → "NNN bpm"
-  machine_label()    — machine type string → human label
-  fmt_watts()        — compute and format watts from a workout dict
+  MACHINE_LABELS        — dict mapping machine type strings to display labels
+  fmt_date()            — ISO date string → "Mon DD, YYYY"
+  format_time()         — tenths-of-a-second → "M:SS.t" or "H:MM:SS.t"
+  fmt_split()           — tenths-of-a-second → "M:SS.t" pace split
+  fmt_result_duration() — tenths-of-a-second → "M:SS.t" (sub-hour) or "1hr 23m 03.7s" (≥1 hr)
+  fmt_tenths()          — tenths-of-a-second → "M:SS" (optional compact form)
+  pace_tenths()         — compute pace tenths from a workout dict
+  fmt_distance()        — meters → "N,NNNm"
+  fmt_distance_label()  — workout dict → distance or time label string
+  fmt_meters()          — meters → "10.5k" or "500m"
+  fmt_hr()              — heart-rate dict → "NNN bpm"
+  machine_label()       — machine type string → human label
+  fmt_watts()           — compute and format watts from a workout dict
 """
 
 from datetime import datetime
@@ -65,6 +70,30 @@ def format_time(tenths: int) -> str:
     hours = total_m // 60
     if hours:
         return f"{hours}:{mins:02d}:{secs:02d}.{frac}"
+    return f"{mins}:{secs:02d}.{frac}"
+
+
+def fmt_result_duration(tenths: int) -> str:
+    """
+    Format a duration (stored as tenths of a second) as a human-readable result
+    string for prediction table and PB cells.
+
+    Sub-hour:  '7:40.8'         (same as format_time — M:SS.t)
+    >= 1 hour: '1hr 23m 03.7s'  (spelled-out units for readability)
+
+    Examples:
+        4608   → '7:40.8'
+        498370 → '1hr 23m 03.7s'
+    """
+    t = int(tenths)
+    frac = t % 10
+    total_s = t // 10
+    secs = total_s % 60
+    total_m = total_s // 60
+    mins = total_m % 60
+    hours = total_m // 60
+    if hours:
+        return f"{hours}hr {mins}m {secs:02d}.{frac}s"
     return f"{mins}:{secs:02d}.{frac}"
 
 

@@ -38,6 +38,7 @@ from services.rowing_utils import (
     loglog_predict_pace,
 )
 from services.critical_power_model import (
+    critical_power_model,
     critical_power_curve_points,
     critical_power_event_points,
     crossover_point,
@@ -266,14 +267,19 @@ def compute_lifetime_bests(workouts: list) -> tuple[dict, dict]:
 
 
 def _rowinglevel_datasets(
-    rl_predictions, pred_color, y_fn, show_components, lifetime_best_anchor
+    rl_predictions, pred_color, y_fn, show_components, lifetime_best_anchor, x_fn=None
 ) -> list:
     """RowingLevel distance-weighted average curve + optional per-anchor component curves.
 
     At each target distance d_t the average is weighted by proximity of each anchor:
         weight = 1 / (|log₂(d_t / d_anchor)| + 0.5)
     This gives more influence to RL curves anchored close to the prediction point.
+
+    x_fn(dist, pace) → x value; defaults to distance (meters) if None.
     """
+    if x_fn is None:
+        x_fn = lambda d, p: d
+
     out = []
     _rl_all_dists = sorted(
         {int(d) for preds in rl_predictions.values() for d in preds if int(d) != 100}
@@ -297,12 +303,8 @@ def _rowinglevel_datasets(
                 _rl_ws.append(w)
         if _rl_ps:
             total_w = sum(_rl_ws)
-            _rl_avg_pts.append(
-                {
-                    "x": _d,
-                    "y": y_fn(sum(w * p for w, p in zip(_rl_ws, _rl_ps)) / total_w),
-                }
-            )
+            _avg_pace = sum(w * p for w, p in zip(_rl_ws, _rl_ps)) / total_w
+            _rl_avg_pts.append({"x": x_fn(_d, _avg_pace), "y": y_fn(_avg_pace)})
     _rl_avg_pts.sort(key=lambda p: p["x"])
     if len(_rl_avg_pts) >= 2:
         out.append(
@@ -311,14 +313,14 @@ def _rowinglevel_datasets(
             )
         )
     if show_components:
-        _rl_dim = _with_alpha(pred_color, 0.30)
+        _rl_dim = _with_alpha(pred_color, 0.55)
         for cat_key, preds in rl_predictions.items():
             pred_pts = []
             for dist_m, pace_sec in preds.items():
                 d = int(dist_m)
                 if d == 100 or not (PACE_MIN <= pace_sec <= PACE_MAX):
                     continue
-                pred_pts.append({"x": d, "y": y_fn(pace_sec)})
+                pred_pts.append({"x": x_fn(d, pace_sec), "y": y_fn(pace_sec)})
             if len(pred_pts) < 2:
                 continue
             pred_pts.sort(key=lambda p: p["x"])
@@ -341,11 +343,16 @@ def _pauls_law_datasets(
     y_fn,
     show_components,
     pauls_k: float = 5.0,
+    x_fn=None,
 ) -> list:
     """Paul's Law average curve + optional per-anchor component curves.
 
     pauls_k is the personalised pace-increase constant (sec/500m per doubling).
+    x_fn(dist, pace) → x value; defaults to distance (meters) if None.
     """
+    if x_fn is None:
+        x_fn = lambda d, p: d
+
     out = []
     _pl_by_dist: dict = {}
     _pl_per_anchor: dict = {}
@@ -361,11 +368,12 @@ def _pauls_law_datasets(
                 cat_pts.append((d, predicted))
         if len(cat_pts) >= 2:
             _pl_per_anchor[cat] = cat_pts
-    _pl_avg_pts = [
-        {"x": d, "y": y_fn(sum(paces) / len(paces))}
-        for d in RANKED_DIST_VALUES
-        if (paces := _pl_by_dist.get(d))
-    ]
+    _pl_avg_pts = []
+    for d in RANKED_DIST_VALUES:
+        paces = _pl_by_dist.get(d)
+        if paces:
+            avg_p = sum(paces) / len(paces)
+            _pl_avg_pts.append({"x": x_fn(d, avg_p), "y": y_fn(avg_p)})
     _pl_avg_pts.sort(key=lambda p: p["x"])
     if len(_pl_avg_pts) >= 2:
         out.append(
@@ -374,9 +382,9 @@ def _pauls_law_datasets(
             )
         )
     if show_components:
-        _pl_dim = _with_alpha(pred_color, 0.30)
+        _pl_dim = _with_alpha(pred_color, 0.55)
         for cat, cat_pts in _pl_per_anchor.items():
-            pred_pts = [{"x": d, "y": y_fn(p)} for d, p in cat_pts]
+            pred_pts = [{"x": x_fn(d, p), "y": y_fn(p)} for d, p in cat_pts]
             pred_pts.sort(key=lambda p: p["x"])
             out.append(
                 _pred_dataset(
@@ -386,8 +394,14 @@ def _pauls_law_datasets(
     return out
 
 
-def _loglog_dataset(lifetime_best, lifetime_best_anchor, pred_color, y_fn) -> list:
-    """Log-log power law fit curve."""
+def _loglog_dataset(lifetime_best, lifetime_best_anchor, pred_color, y_fn, x_fn=None) -> list:
+    """Log-log power law fit curve.
+
+    x_fn(dist, pace) → x value; defaults to distance (meters) if None.
+    """
+    if x_fn is None:
+        x_fn = lambda d, p: d
+
     fit = loglog_fit(lifetime_best, lifetime_best_anchor)
     if fit is None:
         return []
@@ -396,7 +410,7 @@ def _loglog_dataset(lifetime_best, lifetime_best_anchor, pred_color, y_fn) -> li
     for d in RANKED_DIST_VALUES:
         predicted = loglog_predict_pace(slope, intercept, d)
         if PACE_MIN <= predicted <= PACE_MAX:
-            pred_pts.append({"x": d, "y": y_fn(predicted)})
+            pred_pts.append({"x": x_fn(d, predicted), "y": y_fn(predicted)})
     pred_pts.sort(key=lambda p: p["x"])
     if len(pred_pts) < 2:
         return []
@@ -407,19 +421,55 @@ def _cp_datasets(
     critical_power_params,
     x_min,
     x_max,
+    y_min,
+    y_max,
     pred_color,
     y_fn,
     show_watts,
     show_components,
     is_dark,
-) -> list:
-    """CP curve, event marker dots, crossover dot, and optional fast/slow components."""
-    out = []
+    x_fn=None,
+) -> tuple[list, list]:
+    """CP curve, event marker dots, optional crossover vline + text, optional fast/slow components.
 
-    # Smooth curve
+    Returns (datasets, crossover_canvas_labels):
+      datasets              — list of Chart.js dataset dicts
+      crossover_canvas_labels — list of canvas-label dicts for the crossover annotation
+                                (empty unless show_components=True and crossover found)
+
+    x_fn(dist, pace) → x value; defaults to distance (meters) if None.
+    For duration mode, x_fn = lambda d, p: d*p/500 which equals t (since dist = t*500/pace).
+    """
+    if x_fn is None:
+        x_fn = lambda d, p: d
+
+    def _convert_pts(pts):
+        """Re-map existing {x: dist, y: y_val} points through x_fn.
+        Recovers pace from y (watts→pace or pace directly) to compute x_fn(dist, pace).
+        """
+        result = []
+        for pt in pts:
+            y_val = pt["y"]
+            pace = watts_to_pace(y_val) if show_watts else y_val
+            new_x = x_fn(pt["x"], pace)
+            result.append({**pt, "x": new_x})
+        return result
+
+    out = []
+    crossover_labels = []
+
+    # Smooth curve — critical_power_curve_points produces x=distance, so we
+    # use x_min/x_max in distance-space always, then convert x values after.
+    # (x_min/x_max in duration mode are already pre-converted from performance_page.py,
+    # so we fall back to large safe distance bounds for the CP curve generation itself.)
+    _cp_x_min_dist = 100.0
+    _cp_x_max_dist = 50_000.0
     cp_pts = critical_power_curve_points(
-        critical_power_params, x_min=x_min, x_max=x_max, show_watts=show_watts
+        critical_power_params, x_min=_cp_x_min_dist, x_max=_cp_x_max_dist, show_watts=show_watts
     )
+    cp_pts = _convert_pts(cp_pts)
+    # After conversion, filter to the actual chart x range.
+    cp_pts = [p for p in cp_pts if x_min <= p["x"] <= x_max]
     if len(cp_pts) >= 2:
         out.append(_pred_dataset("_critical_power", cp_pts, pred_color, point_radius=0))
 
@@ -433,6 +483,7 @@ def _cp_datasets(
         selected_times=_cp_sel_times_key,
         show_watts=show_watts,
     )
+    ev_pts = _convert_pts(ev_pts)
     ev_pts = [p for p in ev_pts if x_min <= p["x"] <= x_max]
     if ev_pts:
         out.append(
@@ -451,36 +502,51 @@ def _cp_datasets(
             }
         )
 
-    # Crossover dot
+    # Crossover — only shown when show_components is enabled.
+    # Rendered as a dashed vertical line + bottom-anchored text annotation.
     xo = crossover_point(critical_power_params, show_watts=show_watts)
-    if xo is not None and x_min <= xo["x"] <= x_max:
-        xo_color = "rgba(20, 210, 190, 0.95)" if is_dark else "rgba(0, 160, 145, 0.95)"
-        out.append(
-            {
-                "type": "scatter",
-                "label": "_cp_crossover",
-                "data": [
-                    {
-                        "x": xo["x"],
-                        "y": xo["y"],
-                        "_cp_crossover": True,
-                        "_t_label": xo["t_label"],
-                    }
-                ],
-                "backgroundColor": xo_color,
-                "borderColor": xo_color,
-                "borderWidth": 2,
-                "pointRadius": 8,
-                "pointHoverRadius": 11,
-                "pointHitRadius": 14,
-                "order": 4,
-                "isPrediction": True,
-            }
-        )
+    if show_components and xo is not None:
+        # xo["x"] is distance; xo["t_seconds"] is duration.
+        # In duration mode use t_seconds directly; in distance mode use xo["x"].
+        xo_pace = watts_to_pace(xo["y"]) if show_watts else xo["y"]
+        xo_x = x_fn(xo["x"], xo_pace)
+        if x_min <= xo_x <= x_max:
+            xo_color = "rgba(20, 210, 190, 0.55)" if is_dark else "rgba(0, 160, 145, 0.55)"
+            xo_text_color = "rgba(20, 210, 190, 0.90)" if is_dark else "rgba(0, 140, 128, 0.90)"
+            # Dashed vertical line spanning the full y range
+            out.append(
+                {
+                    "type": "line",
+                    "label": "_cp_crossover_vline",
+                    "data": [
+                        {"x": xo_x, "y": y_min},
+                        {"x": xo_x, "y": y_max},
+                    ],
+                    "borderColor": xo_color,
+                    "backgroundColor": "rgba(0,0,0,0)",
+                    "borderWidth": 1.5,
+                    "borderDash": [6, 4],
+                    "pointRadius": 0,
+                    "tension": 0,
+                    "order": 4,
+                }
+            )
+            # Text annotation at chart bottom (JS positions using _anchor: "bottom")
+            crossover_labels.append(
+                {
+                    "x": xo_x,
+                    "_anchor": "bottom",
+                    "lines": [
+                        f"Crossover: {xo['t_label']}",
+                        "<- sprint | aerobic ->",
+                    ],
+                    "color": xo_text_color,
+                }
+            )
 
     # Fast/slow component curves (optional)
     if show_components:
-        _cp_dim = _with_alpha(pred_color, 0.35)
+        _cp_dim = _with_alpha(pred_color, 0.62)
         Pow1, tau1 = critical_power_params["Pow1"], critical_power_params["tau1"]
         Pow2, tau2 = critical_power_params["Pow2"], critical_power_params["tau2"]
         _fast_pts, _slow_pts = [], []
@@ -492,19 +558,21 @@ def _cp_datasets(
             if not (PACE_MIN <= _pace_combined <= PACE_MAX):
                 continue
             _dist = _t * (500.0 / _pace_combined)
-            if not (x_min <= _dist <= x_max):
+            # x_fn(_dist, pace) = _dist * pace / 500 = _t, so this works for both modes.
+            _xv = x_fn(_dist, _pace_combined)
+            if not (x_min <= _xv <= x_max):
                 continue
             _w_fast = Pow1 / (1.0 + _t / tau1)
             _w_slow = Pow2 / (1.0 + _t / tau2)
             if show_watts:
-                _fast_pts.append({"x": round(_dist, 1), "y": round(_w_fast, 2)})
-                _slow_pts.append({"x": round(_dist, 1), "y": round(_w_slow, 2)})
+                _fast_pts.append({"x": round(_xv, 2), "y": round(_w_fast, 2)})
+                _slow_pts.append({"x": round(_xv, 2), "y": round(_w_slow, 2)})
             else:
                 _pf, _ps = watts_to_pace(_w_fast), watts_to_pace(_w_slow)
                 if PACE_MIN <= _pf <= PACE_MAX:
-                    _fast_pts.append({"x": round(_dist, 1), "y": round(_pf, 4)})
+                    _fast_pts.append({"x": round(_xv, 2), "y": round(_pf, 4)})
                 if PACE_MIN <= _ps <= PACE_MAX:
-                    _slow_pts.append({"x": round(_dist, 1), "y": round(_ps, 4)})
+                    _slow_pts.append({"x": round(_xv, 2), "y": round(_ps, 4)})
         if len(_fast_pts) >= 2:
             out.append(
                 _pred_dataset(
@@ -518,13 +586,195 @@ def _cp_datasets(
                 )
             )
 
+    return out, crossover_labels
+
+
+# ---------------------------------------------------------------------------
+# Average prediction line — ensemble mean of all available models
+# ---------------------------------------------------------------------------
+
+
+def _average_datasets(
+    lifetime_best,
+    lifetime_best_anchor,
+    critical_power_params,
+    rl_predictions,
+    pauls_k,
+    x_min,
+    x_max,
+    pred_color,
+    y_fn,
+    show_watts,
+    show_components=False,
+    x_fn=None,
+) -> list:
+    """Ensemble average of all available prediction models + optional component curves.
+
+    Samples at ~80 log-spaced distances from x_min to x_max.  At each distance,
+    computes available paces from loglog, Paul's Law (per-anchor avg), Critical Power,
+    and RowingLevel (distance-weighted avg), then averages the non-None values.
+
+    When show_components=True, also draws each individual model curve dimly so the
+    user can see which models are pulling the average up or down.
+
+    x_fn(dist, pace) → x value; defaults to distance (meters) if None.
+    In duration mode, samples are still generated at log-spaced distances but
+    x values are converted via x_fn before the points are stored.
+    """
+    from scipy.optimize import brentq as _brentq
+
+    if x_fn is None:
+        x_fn = lambda d, p: d
+
+    out = []
+
+    # ── Log-Log fit ────────────────────────────────────────────────────────────
+    _ll_fit = loglog_fit(lifetime_best, lifetime_best_anchor) if lifetime_best else None
+    _ll_slope, _ll_intercept = _ll_fit if _ll_fit is not None else (None, None)
+
+    # ── CP tuple ───────────────────────────────────────────────────────────────
+    _cp = critical_power_params
+    _cp_valid = _cp is not None and all(k in _cp for k in ("Pow1", "tau1", "Pow2", "tau2"))
+
+    # ── RL string-keyed anchor lookup ─────────────────────────────────────────
+    _str_lba = {str(k): v for k, v in lifetime_best_anchor.items()} if lifetime_best_anchor else {}
+
+    # ── Sample distances ───────────────────────────────────────────────────────
+    # Always sample in distance-space (100m to 42195m) so all models get a
+    # consistent input domain.  x_fn converts to the correct chart x at the end.
+    _n_pts = 80
+    _sample_dists = list(
+        np.logspace(math.log10(100.0), math.log10(42195.0), _n_pts)
+    )
+
+    # Containers for per-model curves (used when show_components)
+    _ll_pts, _pl_pts, _cp_pts_avg, _rl_pts_avg = [], [], [], []
+    _avg_pts = []
+
+    for _d in _sample_dists:
+        _paces = []
+
+        # Log-log
+        _ll_p = None
+        if _ll_slope is not None:
+            _p = loglog_predict_pace(_ll_slope, _ll_intercept, _d)
+            if _p is not None and PACE_MIN <= _p <= PACE_MAX:
+                _ll_p = _p
+                _paces.append(_p)
+
+        # Paul's Law — per-anchor average
+        _pl_p = None
+        if lifetime_best:
+            _pl_paces = []
+            for cat, pb_pace in lifetime_best.items():
+                anchor = lifetime_best_anchor.get(cat)
+                if not anchor:
+                    continue
+                _pp = pauls_law_pace(pb_pace, anchor, _d, k=pauls_k)
+                if PACE_MIN <= _pp <= PACE_MAX:
+                    _pl_paces.append(_pp)
+            if _pl_paces:
+                _pl_p = sum(_pl_paces) / len(_pl_paces)
+                _paces.append(_pl_p)
+
+        # Critical Power — numerically solve for distance
+        _cp_p = None
+        if _cp_valid:
+            Pow1, tau1, Pow2, tau2 = _cp["Pow1"], _cp["tau1"], _cp["Pow2"], _cp["tau2"]
+
+            def _cp_resid(_t, _dist=_d):
+                P = critical_power_model(_t, Pow1, tau1, Pow2, tau2)
+                return (_dist - (_t * (500.0 / watts_to_pace(P)))) if P > 0 else -_dist
+
+            try:
+                _t_star = _brentq(_cp_resid, 10.0, 20_000.0, xtol=0.5)
+                _w = critical_power_model(_t_star, Pow1, tau1, Pow2, tau2)
+                if _w > 0:
+                    _pace_cp = watts_to_pace(_w)
+                    if PACE_MIN <= _pace_cp <= PACE_MAX:
+                        _cp_p = _pace_cp
+                        _paces.append(_cp_p)
+            except Exception:
+                pass
+
+        # RowingLevel — distance-weighted average
+        _rl_p = None
+        if rl_predictions:
+            _rl_ps, _rl_ws = [], []
+            for cat_key, preds in rl_predictions.items():
+                # Nearest available RL distance
+                _p = preds.get(int(_d)) or preds.get(str(int(_d)))
+                if _p is None:
+                    # log-log interpolate within the RL curve for this anchor
+                    from services.ranked_predictions import _rl_interp_pace as _rl_ip
+                    _p = _rl_ip(preds, _d)
+                if _p is not None and PACE_MIN <= _p <= PACE_MAX:
+                    anchor_dist = _str_lba.get(cat_key)
+                    _w = (
+                        1.0 / (abs(math.log2(_d / anchor_dist)) + 0.5)
+                        if anchor_dist and _d > 0
+                        else 1.0
+                    )
+                    _rl_ps.append(_p)
+                    _rl_ws.append(_w)
+            if _rl_ps:
+                total_w = sum(_rl_ws)
+                _rl_p = sum(w * p for w, p in zip(_rl_ws, _rl_ps)) / total_w
+                _paces.append(_rl_p)
+
+        # Store per-model points for component display
+        if _ll_p is not None:
+            _ll_pts.append({"x": x_fn(_d, _ll_p), "y": y_fn(_ll_p)})
+        if _pl_p is not None:
+            _pl_pts.append({"x": x_fn(_d, _pl_p), "y": y_fn(_pl_p)})
+        if _cp_p is not None:
+            _cp_pts_avg.append({"x": x_fn(_d, _cp_p), "y": y_fn(_cp_p)})
+        if _rl_p is not None:
+            _rl_pts_avg.append({"x": x_fn(_d, _rl_p), "y": y_fn(_rl_p)})
+
+        # Average
+        if _paces:
+            _avg_pace = sum(_paces) / len(_paces)
+            _avg_pts.append({"x": x_fn(_d, _avg_pace), "y": y_fn(_avg_pace)})
+
+    # Filter to chart x range and sort
+    def _in_range(pts):
+        return sorted([p for p in pts if x_min <= p["x"] <= x_max], key=lambda p: p["x"])
+
+    _avg_pts = _in_range(_avg_pts)
+
+    # Main averaged curve
+    if len(_avg_pts) >= 2:
+        out.append(
+            _pred_dataset("_avg_ensemble", _avg_pts, pred_color, point_radius=1.5, border_width=2.5)
+        )
+
+    # Component curves at reduced opacity
+    if show_components:
+        _dim = _with_alpha(pred_color, 0.55)
+        for label, pts in [
+            ("_avg_ll", _ll_pts),
+            ("_avg_pl", _pl_pts),
+            ("_avg_cp", _cp_pts_avg),
+            ("_avg_rl", _rl_pts_avg),
+        ]:
+            pts = _in_range(pts)
+            if len(pts) >= 2:
+                out.append(_pred_dataset(label, pts, _dim, point_radius=0, border_width=1.0))
+
     return out
 
 
 def _lifetime_best_datasets(
-    show_lifetime_line, lifetime_best, data_points, pb_color, y_fn
+    show_lifetime_line, lifetime_best, data_points, pb_color, y_fn, x_fn=None
 ) -> list:
-    """Lifetime-best connecting line (order=3)."""
+    """Lifetime-best connecting line (order=3).
+
+    x_fn(dist, pace) → x value; defaults to distance (meters) if None.
+    """
+    if x_fn is None:
+        x_fn = lambda d, p: d
+
     if not show_lifetime_line or not lifetime_best:
         return []
     seen: set = set()
@@ -535,7 +785,7 @@ def _lifetime_best_datasets(
             c not in seen
             and abs(dp["pace"] - lifetime_best.get(c, float("inf"))) < 1e-9
         ):
-            lb_pts.append({"x": dp["dist"], "y": y_fn(dp["pace"])})
+            lb_pts.append({"x": x_fn(dp["dist"], dp["pace"]), "y": y_fn(dp["pace"])})
             seen.add(c)
     lb_pts.sort(key=lambda p: p["x"])
     if not lb_pts:
@@ -556,9 +806,15 @@ def _lifetime_best_datasets(
 
 
 def _season_line_datasets(
-    sorted_seasons, season_lines, data_points, season_best, season_idx, y_fn
+    sorted_seasons, season_lines, data_points, season_best, season_idx, y_fn, x_fn=None
 ) -> list:
-    """Per-season best connecting lines (order=2)."""
+    """Per-season best connecting lines (order=2).
+
+    x_fn(dist, pace) → x value; defaults to distance (meters) if None.
+    """
+    if x_fn is None:
+        x_fn = lambda d, p: d
+
     out = []
     for season in sorted_seasons:
         if season not in season_lines:
@@ -570,7 +826,7 @@ def _season_line_datasets(
             if dp["season"] != season or c in seen:
                 continue
             if abs(dp["pace"] - season_best.get((season, c), float("inf"))) < 1e-9:
-                s_pts.append({"x": dp["dist"], "y": y_fn(dp["pace"])})
+                s_pts.append({"x": x_fn(dp["dist"], dp["pace"]), "y": y_fn(dp["pace"])})
                 seen.add(c)
         if not s_pts:
             continue
@@ -593,19 +849,49 @@ def _season_line_datasets(
 
 
 def _scatter_datasets(
-    sorted_seasons, data_points, season_best, lifetime_best, season_idx, pb_color, y_fn
+    sorted_seasons,
+    data_points,
+    season_best,
+    lifetime_best,
+    season_idx,
+    pb_color,
+    y_fn,
+    x_fn=None,
+    excluded_data_points=(),
 ) -> list:
-    """Per-season scatter point datasets (order=1, topmost)."""
+    """Per-season scatter point datasets (order=1, topmost).
+
+    excluded_data_points — events filtered out by the event toggle, rendered at
+    very low opacity (alpha ≈ 0.18) but not used for season/lifetime best logic.
+    x_fn — optional transform applied to (dist, pace) → x value.  Defaults to
+    the raw distance if None (distance mode).  Pass a function for duration mode.
+    """
+    if x_fn is None:
+        x_fn = lambda dist, pace: dist
+
     by_season: dict = {}
     for dp in data_points:
         by_season.setdefault(dp["season"], []).append(dp)
+
+    # Group excluded points by season too
+    excl_by_season: dict = {}
+    for dp in excluded_data_points:
+        excl_by_season.setdefault(dp["season"], []).append(dp)
+
+    all_seasons_with_pts = set(by_season) | set(excl_by_season)
+
     out = []
     for season in sorted_seasons:
+        if season not in all_seasons_with_pts:
+            continue
         pts = by_season.get(season, [])
-        if not pts:
+        excl_pts = excl_by_season.get(season, [])
+        if not pts and not excl_pts:
             continue
         idx = season_idx.get(season, 0)
         s_data, bg, border, bw, radii = [], [], [], [], []
+
+        # Included points
         for dp in pts:
             c = dp["cat"]
             is_lb = abs(dp["pace"] - lifetime_best.get(c, float("inf"))) < 1e-9
@@ -613,7 +899,7 @@ def _scatter_datasets(
             alpha = 1.0 if (is_lb or is_sb) else 0.40
             s_data.append(
                 {
-                    "x": dp["dist"],
+                    "x": x_fn(dp["dist"], dp["pace"]),
                     "y": y_fn(dp["pace"]),
                     "date": dp["date"],
                     "wtype": dp["wtype"],
@@ -628,6 +914,24 @@ def _scatter_datasets(
                 border.append(_season_hsla(idx, -12, min(alpha + 0.15, 1.0)))
                 bw.append(1)
                 radii.append(5)
+
+        # Excluded points — rendered faintly, same season colour
+        for dp in excl_pts:
+            s_data.append(
+                {
+                    "x": x_fn(dp["dist"], dp["pace"]),
+                    "y": y_fn(dp["pace"]),
+                    "date": dp["date"],
+                    "wtype": dp.get("wtype", ""),
+                }
+            )
+            bg.append(_season_hsla(idx, 0, 0.18))
+            border.append(_season_hsla(idx, -12, 0.25))
+            bw.append(0.5)
+            radii.append(4)
+
+        if not s_data:
+            continue
         out.append(
             {
                 "type": "scatter",
@@ -693,23 +997,47 @@ def _sim_overlay_datasets(sim_overlays, season_idx, y_fn, pb_color, is_dark) -> 
     return out
 
 
-def _canvas_labels_list(overlay_labels, y_fn) -> list:
-    """Canvas annotation labels for simulation overlay text."""
-    if not overlay_labels:
-        return []
-    return [
-        {
-            "x": _ol["x"],
-            "y": y_fn(_ol["y_raw"]),
-            "line_event": _ol["line_event"],
-            "pct_pace": round(_ol.get("pct_pace", 0.0), 1),
-            "pct_watts": round(_ol.get("pct_watts", 0.0), 1),
-            "line_label": _ol["line_label"],
-            "color": _ol["color"],
-            "bold": _ol.get("bold", False),
-        }
-        for _ol in overlay_labels
-    ]
+def _canvas_labels_list(overlay_labels, y_fn, crossover_labels=None) -> list:
+    """Canvas annotation labels for simulation overlays and crossover annotations.
+
+    Two entry formats are supported:
+
+    1. Simulation overlay (PB/upcoming badges) — dict with y_raw, line_event, etc.
+       JS positions relative to the data point.
+
+    2. Crossover annotation — dict with _anchor="bottom" and a lines list.
+       JS positions at a fixed offset from the chart bottom regardless of y data.
+    """
+    result = []
+
+    # Simulation overlay entries (standard format)
+    for _ol in (overlay_labels or []):
+        result.append(
+            {
+                "x": _ol["x"],
+                "y": y_fn(_ol["y_raw"]),
+                "line_event": _ol["line_event"],
+                "pct_pace": round(_ol.get("pct_pace", 0.0), 1),
+                "pct_watts": round(_ol.get("pct_watts", 0.0), 1),
+                "line_label": _ol["line_label"],
+                "color": _ol["color"],
+                "bold": _ol.get("bold", False),
+            }
+        )
+
+    # Crossover annotation entries (bottom-anchored format)
+    for _cl in (crossover_labels or []):
+        result.append(
+            {
+                "x": _cl["x"],
+                "y": None,  # ignored by JS when _anchor == "bottom"
+                "_anchor": "bottom",
+                "lines": _cl["lines"],
+                "color": _cl["color"],
+            }
+        )
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -738,8 +1066,30 @@ def build_chart_config(
     lifetime_best=None,  # pre-computed from compute_lifetime_bests(); derived if None
     lifetime_best_anchor=None,  # pre-computed; derived alongside lifetime_best
     pauls_k: float = 5.0,  # personalised Paul's Law constant (sec/500m per doubling)
+    excluded_workouts=(),  # workouts for deselected events — plotted faintly
+    x_mode: str = "distance",  # "distance" | "duration"
 ):
-    """Build a Chart.js config dict for the ranked-workouts chart."""
+    """Build a Chart.js config dict for the ranked-workouts chart.
+
+    x_mode="duration" switches the x-axis from distance (meters) to duration (seconds).
+    excluded_workouts are plotted at very low opacity and do not influence bests/predictions.
+    """
+    _use_duration = x_mode == "duration"
+
+    # ── Helper to compute x value for a data point ───────────────────────────
+    # distance mode: x = distance in meters
+    # duration mode: x = time in seconds (workout["time"] / 10)
+    def _x_from_workout(w) -> float | None:
+        if _use_duration:
+            t = w.get("time")
+            return t / 10.0 if t else None
+        return w.get("distance")
+
+    def _x_from_dp(dist: float, pace: float) -> float:
+        """Convert (dist_m, pace_sec_per_500m) → x in current mode."""
+        if _use_duration:
+            return round(dist * pace / 500.0, 2)
+        return dist
 
     # ── Collect valid data points ─────────────────────────────────────────────
     data_points = []
@@ -756,10 +1106,14 @@ def build_chart_config(
         cat = workout_cat_key(w)
         if cat is None:
             continue
+        x_val = _x_from_workout(w)
+        if x_val is None:
+            continue
         data_points.append(
             {
                 "pace": pace,
                 "dist": dist,
+                "x": x_val,
                 "date": date_str,
                 "cat": cat,
                 "season": get_season(w.get("date", "")),
@@ -770,14 +1124,44 @@ def build_chart_config(
     if not data_points:
         return {}
 
+    # ── Collect excluded data points (same validation, separate list) ─────────
+    excluded_data_points = []
+    for w in excluded_workouts:
+        pace = compute_pace(w)
+        if pace is None or pace < PACE_MIN or pace > PACE_MAX:
+            continue
+        dist = w.get("distance")
+        if not dist:
+            continue
+        date_str = (w.get("date") or "")[:10]
+        if len(date_str) < 10:
+            continue
+        cat = workout_cat_key(w)
+        if cat is None:
+            continue
+        x_val = _x_from_workout(w)
+        if x_val is None:
+            continue
+        excluded_data_points.append(
+            {
+                "pace": pace,
+                "dist": dist,
+                "x": x_val,
+                "date": date_str,
+                "cat": cat,
+                "season": get_season(w.get("date", "")),
+                "wtype": w.get("workout_type", ""),
+            }
+        )
+
     # ── X-axis bounds ─────────────────────────────────────────────────────────
     # Use caller-supplied override (simulation mode) so the axis stays fixed at the
-    # end-state range; otherwise auto-compute from data.
+    # end-state range; otherwise auto-compute from data (including excluded points).
     if x_bounds is not None:
         x_min, x_max = x_bounds
     else:
-        _dists = [dp["dist"] for dp in data_points]
-        _x_min_raw, _x_max_raw = min(_dists), max(_dists)
+        _all_x = [dp["x"] for dp in data_points + excluded_data_points]
+        _x_min_raw, _x_max_raw = min(_all_x), max(_all_x)
         if log_x:
             _pad = 1.45
             x_min, x_max = _x_min_raw / _pad, _x_max_raw * _pad
@@ -810,8 +1194,24 @@ def build_chart_config(
     # Warm amber — clearly distinct from gray gridlines and colored prediction curves.
     pred_color = "rgba(220,160,55,0.80)" if is_dark else "rgba(185,120,20,0.80)"
 
+    # Y bounds for crossover vertical line span
+    _y_min = y_bounds[0] if y_bounds is not None else None
+    _y_max = y_bounds[1] if y_bounds is not None else None
+    if _y_min is None or _y_max is None:
+        _all_y = [_y(dp["pace"]) for dp in data_points]
+        if _all_y:
+            _y_min = _y_min if _y_min is not None else min(_all_y)
+            _y_max = _y_max if _y_max is not None else max(_all_y)
+        else:
+            _y_min, _y_max = 60.0, 200.0
+
     # ── Assemble datasets (back to front) ─────────────────────────────────────
     datasets: list = []
+    _crossover_labels: list = []  # collected from _cp_datasets when show_components
+
+    # x_fn: maps (dist_m, pace_sec_per_500m) → chart x value.
+    # Distance mode: identity. Duration mode: dist * pace / 500 = time in seconds.
+    _x_fn = _x_from_dp if _use_duration else None
 
     # 0. Prediction curves (order=4, furthest back)
     if predictor == "rowinglevel" and rl_predictions:
@@ -822,6 +1222,7 @@ def build_chart_config(
                 _y,
                 show_components,
                 lifetime_best_anchor or {},
+                x_fn=_x_fn,
             )
         )
     if predictor == "pauls_law":
@@ -833,11 +1234,12 @@ def build_chart_config(
                 _y,
                 show_components,
                 pauls_k=pauls_k,
+                x_fn=_x_fn,
             )
         )
     if predictor == "loglog":
         datasets.extend(
-            _loglog_dataset(lifetime_best, lifetime_best_anchor, pred_color, _y)
+            _loglog_dataset(lifetime_best, lifetime_best_anchor, pred_color, _y, x_fn=_x_fn)
         )
     if predictor == "critical_power" and critical_power_params is not None:
         # Inject active event sets so _cp_datasets can pass them to critical_power_event_points
@@ -848,30 +1250,51 @@ def build_chart_config(
         _cp_with_sel["_sel_times"] = {
             cat[1] for cat in lifetime_best if cat[0] == "time"
         }
+        _cp_ds, _cp_xover_labels = _cp_datasets(
+            _cp_with_sel,
+            x_min,
+            x_max,
+            _y_min,
+            _y_max,
+            pred_color,
+            _y,
+            show_watts,
+            show_components,
+            is_dark,
+            x_fn=_x_fn,
+        )
+        datasets.extend(_cp_ds)
+        _crossover_labels.extend(_cp_xover_labels)
+
+    if predictor == "average":
         datasets.extend(
-            _cp_datasets(
-                _cp_with_sel,
+            _average_datasets(
+                lifetime_best,
+                lifetime_best_anchor,
+                critical_power_params,
+                rl_predictions,
+                pauls_k,
                 x_min,
                 x_max,
                 pred_color,
                 _y,
                 show_watts,
-                show_components,
-                is_dark,
+                show_components=show_components,
+                x_fn=_x_fn,
             )
         )
 
     # 1. Lifetime-best line (order=3)
     datasets.extend(
         _lifetime_best_datasets(
-            show_lifetime_line, lifetime_best, data_points, pb_color, _y
+            show_lifetime_line, lifetime_best, data_points, pb_color, _y, x_fn=_x_fn
         )
     )
 
     # 2. Season-best lines (order=2)
     datasets.extend(
         _season_line_datasets(
-            sorted_seasons, season_lines, data_points, season_best, season_idx, _y
+            sorted_seasons, season_lines, data_points, season_best, season_idx, _y, x_fn=_x_fn
         )
     )
 
@@ -885,6 +1308,8 @@ def build_chart_config(
             season_idx,
             pb_color,
             _y,
+            x_fn=_x_from_dp if _use_duration else None,
+            excluded_data_points=excluded_data_points,
         )
     )
 
@@ -895,12 +1320,16 @@ def build_chart_config(
         )
 
     # Canvas labels drawn by canvasLabelsPlugin in performance_chart.js
-    canvas_labels = _canvas_labels_list(overlay_labels, _y)
+    canvas_labels = _canvas_labels_list(overlay_labels, _y, crossover_labels=_crossover_labels)
+
+    # X-axis title and label mode
+    _x_title = "Duration (s)" if _use_duration else "Distance (m)"
 
     return {
         "type": "scatter",
         "data": {"datasets": datasets},
         "_canvas_labels": canvas_labels,
+        "_x_mode": x_mode,  # read by JS for tick formatter and gridline positions
         "options": {
             "responsive": True,
             "maintainAspectRatio": False,
@@ -911,7 +1340,7 @@ def build_chart_config(
                     "max": round(x_max, 1),
                     "title": {
                         "display": True,
-                        "text": "Distance (m)",
+                        "text": _x_title,
                         "font": {"size": 12},
                     },
                     "grid": {"color": "rgba(180,180,180,0.35)"},

@@ -490,17 +490,6 @@ def sessions_chart(workouts: list) -> None:
         state.last_change_id = chart.change_id
         state.window_end_ms = chart.brush_end
 
-    # ── Date range label ──────────────────────────────────────────────────────
-    n_in = sum(1 for p in pts if target_start <= p["x"] <= target_end)
-    start_lbl = datetime.fromtimestamp(target_start / 1_000).strftime("%b %Y")
-    end_lbl = datetime.fromtimestamp(target_end / 1_000).strftime("%b %Y")
-    hd.text(
-        f"{start_lbl} – {end_lbl}  ·  {n_in} session{'s' if n_in != 1 else ''}",
-        font_color="neutral-500",
-        font_size="small",
-        padding_top=1,
-    )
-
     # ── Workouts-in-view table ────────────────────────────────────────────────
     in_window = [
         r

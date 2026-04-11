@@ -4,6 +4,10 @@ Prediction table data builder for the ranked-events view.
 Exported:
   build_prediction_table_data() — compute all four predictor columns for every
                                   ranked event, returning a list of row dicts.
+                                  Rows are sorted by expected duration so that
+                                  distance and timed events are interleaved in
+                                  power-duration order (e.g. 1 min falls between
+                                  100m and 500m).
 
 Private helpers:
   _rl_interp_pace()   — log-log interpolation between RowingLevel distance→pace pairs
@@ -29,7 +33,7 @@ from services.rowing_utils import (
     watts_to_pace,
 )
 from services.critical_power_model import critical_power_model
-from services.formatters import fmt_split
+from services.formatters import fmt_split, fmt_result_duration
 
 
 # ---------------------------------------------------------------------------
@@ -96,8 +100,10 @@ def _fmt_pred(
     """
     Format a predicted pace into a (pace_str, result_str) tuple.
 
-      distance event  → ("M:SS.t", "M:SS.t")   pace per 500m, predicted total time
-      timed event     → ("M:SS.t", "N,NNNm")    pace per 500m, predicted meters
+      distance event  → ("M:SS.t", result)   pace per 500m, predicted total time
+                        result uses fmt_result_duration for readability:
+                        sub-hour → "M:SS.t", ≥1 hour → "1hr 23m 03.7s"
+      timed event     → ("M:SS.t", "N,NNNm")  pace per 500m, predicted meters
 
     Returns None if pace is unavailable or outside [PACE_MIN, PACE_MAX].
     """
@@ -106,7 +112,7 @@ def _fmt_pred(
     pace_str = fmt_split(round(pace * 10))
     if event_type == "dist":
         time_tenths = round(pace * event_value / 500.0 * 10)
-        return (pace_str, fmt_split(time_tenths))
+        return (pace_str, fmt_result_duration(time_tenths))
     else:
         T = event_value / 10.0
         dist_m = round(T * 500.0 / pace)
@@ -405,4 +411,18 @@ def build_prediction_table_data(
             }
         )
 
+    # ── Sort all rows by expected duration (mixes distance and timed events) ─────
+    # Distance event duration: derived from log-log prediction if available, else
+    # uses a typical default pace of 110 sec/500m as a fallback.
+    # Timed event duration: event_value / 10 (tenths → seconds, direct).
+    _FALLBACK_PACE = 110.0  # sec/500m — reasonable middle-of-road estimate
+
+    def _expected_duration_s(row: dict) -> float:
+        if row["event_type"] == "time":
+            return row["event_value"] / 10.0
+        # Distance event
+        pace = row.get("loglog_raw") or _FALLBACK_PACE
+        return row["event_value"] * pace / 500.0
+
+    rows.sort(key=_expected_duration_s)
     return rows

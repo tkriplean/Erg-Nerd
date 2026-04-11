@@ -5,10 +5,15 @@ arbitrary canvas overlays.
 
 Usage:
     from components.performance_chart_plugin import PerformanceChart
-    PerformanceChart(config=chart_cfg, show_watts=False, height="75vh")
+    PerformanceChart(config=chart_cfg, show_watts=False, x_mode="distance", height="75vh")
 
 The `config` prop is the same Chart.js dict produced by build_chart_config.
 The JS layer applies pace/watts tick formatters and a custom tooltip on top.
+
+Props:
+    config     — full Chart.js config dict from build_chart_config()
+    show_watts — True → Y-axis in watts; False → pace (sec/500m)
+    x_mode     — "distance" (meters, default) or "duration" (seconds)
 """
 
 import os
@@ -36,3 +41,6 @@ class PerformanceChart(hd.Plugin):
 
     # Controls Y-axis formatting: True = watts, False = pace (sec/500m).
     show_watts = hd.Prop(hd.Bool, False)
+
+    # X-axis mode: "distance" (meters) or "duration" (seconds).
+    x_mode = hd.Prop(hd.String, "distance")

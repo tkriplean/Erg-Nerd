@@ -1,15 +1,19 @@
 """
-Ranked Events tab — UI and orchestration for the ranked-events view.
+Performance Page — UI and orchestration for the ranked-events view.
 
 Exported:
   performance_page()   — top-level HyperDiv component; call from app.py
 
+See docs/performance_page.md for a full reference.
+
 Helper logic is split across:
-  services/formatters.py    — formatting helpers
-  components/workout_table           - result_table
-  services/ranked_filters.py         — quality filters + season helpers
-  services/ranked_predictions.py     — multi-model prediction computation
-  components/performance_chart_builder.py — chart config builder
+  services/formatters.py              — formatting helpers
+  components/workout_table            — result_table
+  services/ranked_filters.py          — quality filters + season helpers
+  services/ranked_predictions.py      — multi-model prediction computation
+  components/performance_chart_builder.py  — chart config builder
+  services/critical_power_model.py    — CP model fitting
+  services/ranked_predictions.py      — build_prediction_table_data
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 UI LAYOUT (inside performance_page)
@@ -19,16 +23,20 @@ UI LAYOUT (inside performance_page)
     Include [All|PBs|SBs]  |  Events [dropdown]  |  Season [dropdown]
 
   Chart box:
-    Header: "Qualifying Performances" / date label
-    RowingLevel warning/spinner (only when predictor == "rowinglevel")
+    Header: "Qualifying Performances through <date>"
+    RowingLevel warning (only when predictor == "rowinglevel" and profile incomplete)
     Transport bar: ▶/⏸  speed-cycle-button  ──── DateSlider ────
-    PerformanceChart (85vh)
-    Log Y / Log X switches
-    Centered settings row:
-      [Pace|Watts]  |  Power curves: [PBs|SBs|None]
-      |  Prediction: <select>  |  Log Y  |  Log X
-      # commented-out MP4 export button (see services/mp4_export.py)
+    PerformanceChart (75vh)
 
+    Settings Row 1:
+      [ Intensity: [Pace|Watts]  Log Y ]  |  [ Length: [Distance|Duration]  Log X ]
+      |  Power curves: [PBs|SBs|None]
+    Settings Row 2:
+      Prediction: <custom dropdown>   [Show components]  [predictor description]
+      Paul's Law richer description (when PL selected and personalised K available)
+
+  RowingLevel profile notice (when profile incomplete, dismissible)
+  Prediction table (CP, Log-Log, Paul's Law, RowingLevel, Average columns)
   Workout count / result_table()
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -40,15 +48,23 @@ STATE VARIABLES  (declared at the top of performance_page())
   excluded_seasons   tuple[str]    seasons hidden from the view (sorted)
   best_filter        str           "All" | "PBs" | "SBs" — row filter for display/table
   chart_metric       str           "Pace" | "Watts"
+  chart_x_mode       str           "distance" | "duration"
   chart_predictor    str           "none" | "pauls_law" | "loglog" | "rowinglevel"
-                                   (lowercase/underscore; match hd.option value= kwarg)
+                                   | "critical_power" | "average"
   chart_lines        str           "PBs" | "SBs" | "None" — which best-curves to draw
   chart_log_x        bool          log scale on x-axis
   chart_log_y        bool          log scale on y-axis
+  chart_show_components bool       show component sub-curves for supported predictors
   sim_week           int           day offset from sim_start; _SIM_TODAY (999999) = end
   sim_speed          str           one of _SPEED_OPTIONS: "0.5x"|"1x"|"4x"|"16x"
   sim_playing        bool          whether the animation ticker is running
   sim_tick_id        int           monotonically increasing; increment to advance animation
+  sim_last_pb_label  str           display text for the "New PB!" badge
+  sim_pb_set_at_day  int           day index when most recent PB was set
+  sim_pb_stored_labels_json str    JSON list of PB overlay labels captured at detection time
+  last_ds_change_id  int           tracks DateSlider changes to avoid stale scrubs
+  cp_fit_key         str           hash of CP input data; used to cache the CP fit
+  cp_fit_result      dict|None     cached CP fit params from fit_critical_power()
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SIMULATION / TIMELINE
@@ -63,13 +79,14 @@ SIMULATION / TIMELINE
   _SPEED_OPTIONS = ("0.5x", "1x", "4x", "16x")
   _SPEED_DAYS    = {"0.5x": 1, "1x": 7, "4x": 30, "16x": 91}  — days per tick
 
-  Playback speed UI: cycling variant="text" button (no border, no caret).
+  Play button: when pressed at end-of-timeline, rewinds to 30 days before the
+  first qualifying event so something appears immediately.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SEASONS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  Format: "YYYY-YY"  e.g. "2024-25", spanning May 1 → Apr 30.
+  Format: "YYYY-YY"  e.g. "2024-25", spanning May 1 -> Apr 30.
   all_seasons: sorted newest-first (seasons_from uses sorted(..., reverse=True)).
   Use services/rowing_utils.py:get_season() to compute from an ISO date string.
 
@@ -85,11 +102,16 @@ CHART / PREDICTION
       "${x}|${line_label}" — positions never move once assigned.
     - isPrediction: true  dataset property — controls tooltip and point styling.
     - Prediction line style: amber, borderDash: [5, 4], small hoverable points.
-    - Gridlines: x-axis at every ranked distance; y-axis every 5s/pace or 50W.
+    - Gridlines: x-axis at every ranked distance/duration; y-axis every 5s/pace or 50W.
+    - CP crossover: dashed teal vertical line + bottom-anchored text (show_components only).
 
   Prediction colors:
     dark:   rgba(220, 160, 55, 0.80)
     light:  rgba(185, 120, 20, 0.80)
+
+  x_mode "duration": x-axis is time in seconds instead of meters.  Scatter
+  points use workout["time"]/10; prediction curves are transformed via
+  dist * pace / 500.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 HYPERDIV QUIRKS APPLIED HERE
@@ -99,11 +121,6 @@ HYPERDIV QUIRKS APPLIED HERE
   adds it (see below). Even then, group size doesn't shrink button padding;
   use label_style on each radio_button:
     hd.radio_button("X", label_style=hd.style(padding=(0, "0.5rem", 0, "0.5rem")))
-
-  hd.option() value= kwarg: hd.option() replaces spaces with underscores
-  internally. Always pass value= explicitly:
-    hd.option("Paul's Law", value="pauls_law")
-  Then compare state.chart_predictor against "pauls_law" etc. everywhere.
 """
 
 import hashlib
@@ -165,6 +182,34 @@ _SIM_TODAY = 999999  # sentinel: sim_week value meaning "end of timeline / today
 _SPEED_OPTIONS = ("0.5x", "1x", "4x", "16x")
 _SPEED_DAYS = {"0.5x": 1, "1x": 7, "4x": 30, "16x": 91}
 _SIM_LOOKAHEAD_STEPS = 4  # ghost/arrow lookahead = this many sim steps ahead
+
+# ---------------------------------------------------------------------------
+# Predictor descriptions — shared by the dropdown and the prediction table.
+# Paul's Law description is dynamic (personalised K) and built at render time.
+# ---------------------------------------------------------------------------
+
+_DESC_CP = (
+    "Two-component power-duration model (veloclinic). "
+    "Requires 5 or more PBs spanning a 10:1 duration ratio. Method from rowsandall.com."
+)
+_DESC_LL = (
+    "Fits a power law (log watts vs log distance) across all scoped PBs. "
+    "Similar to the Free Spirits Pace Predictor (freespiritsrowing.com) "
+    "but uses all PBs, not just two."
+)
+_DESC_RL = (
+    "Predictions from rowinglevel.com based on your profile (gender, age, bodyweight). "
+    "Distance-weighted average across all anchor PBs. Distance events only."
+)
+_DESC_AVG = "Mean of all available predictions for this event."
+
+# Predictors that support the "Show components" toggle, and their descriptions.
+_COMP_DESCRIPTIONS = {
+    "pauls_law": "Shows one curve per PB anchor, before averaging.",
+    "rowinglevel": "Shows the RL curve from each PB anchor, before distance-weighted averaging.",
+    "critical_power": "Shows the fast-twitch and slow-twitch power components separately.",
+    "average": "Shows all individual model curves that were averaged.",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -451,39 +496,34 @@ def _filter_bar(state, all_seasons: list) -> None:
                     if _ev_btn.clicked:
                         _ev_dd.opened = not _ev_dd.opened
                     with hd.box(padding=1, gap=0.5, background_color="neutral-50"):
-                        with hd.hbox(gap=1, padding_bottom=0.5):
-                            with hd.tooltip("Select all"):
-                                if hd.icon_button(
-                                    "check2-all", font_size="small"
-                                ).clicked:
-                                    state.dist_enabled = tuple(
-                                        True for _ in RANKED_DISTANCES
-                                    )
-                                    state.time_enabled = tuple(
-                                        True for _ in RANKED_TIMES
-                                    )
-                            with hd.tooltip("Clear all"):
-                                if hd.icon_button(
-                                    "dash-square", font_size="small"
-                                ).clicked:
-                                    state.dist_enabled = tuple(
-                                        False for _ in RANKED_DISTANCES
-                                    )
-                                    state.time_enabled = tuple(
-                                        False for _ in RANKED_TIMES
-                                    )
+                        with hd.hbox(gap=0.5, padding_bottom=0.5):
+                            if hd.button(
+                                "Select all", size="small", variant="text"
+                            ).clicked:
+                                state.dist_enabled = tuple(
+                                    True for _ in RANKED_DISTANCES
+                                )
+                                state.time_enabled = tuple(True for _ in RANKED_TIMES)
+                            if hd.button(
+                                "Clear all", size="small", variant="text"
+                            ).clicked:
+                                state.dist_enabled = tuple(
+                                    False for _ in RANKED_DISTANCES
+                                )
+                                state.time_enabled = tuple(False for _ in RANKED_TIMES)
                         with hd.scope(str(state.dist_enabled)):
-                            for i, (dist, label) in enumerate(RANKED_DISTANCES):
-                                with hd.scope(f"dist_{dist}"):
-                                    cb = hd.checkbox(
-                                        label, checked=state.dist_enabled[i]
-                                    )
-                                    if cb.changed:
-                                        flags = list(state.dist_enabled)
-                                        flags[i] = cb.checked
-                                        state.dist_enabled = tuple(flags)
-                                    if cb.checked != state.dist_enabled[i]:
-                                        cb.checked = state.dist_enabled[i]
+                            with hd.hbox(gap=0.5, wrap="wrap"):
+                                for i, (dist, label) in enumerate(RANKED_DISTANCES):
+                                    with hd.scope(f"dist_{dist}"):
+                                        cb = hd.checkbox(
+                                            label, checked=state.dist_enabled[i]
+                                        )
+                                        if cb.changed:
+                                            flags = list(state.dist_enabled)
+                                            flags[i] = cb.checked
+                                            state.dist_enabled = tuple(flags)
+                                        if cb.checked != state.dist_enabled[i]:
+                                            cb.checked = state.dist_enabled[i]
                         hd.text(
                             "— timed —",
                             font_color="neutral-300",
@@ -491,17 +531,18 @@ def _filter_bar(state, all_seasons: list) -> None:
                             padding_top=0.25,
                         )
                         with hd.scope(str(state.time_enabled)):
-                            for i, (tenths, label) in enumerate(RANKED_TIMES):
-                                with hd.scope(f"time_{tenths}"):
-                                    cb = hd.checkbox(
-                                        label, checked=state.time_enabled[i]
-                                    )
-                                    if cb.changed:
-                                        flags = list(state.time_enabled)
-                                        flags[i] = cb.checked
-                                        state.time_enabled = tuple(flags)
-                                    if cb.checked != state.time_enabled[i]:
-                                        cb.checked = state.time_enabled[i]
+                            with hd.hbox(gap=0.5, wrap="wrap"):
+                                for i, (tenths, label) in enumerate(RANKED_TIMES):
+                                    with hd.scope(f"time_{tenths}"):
+                                        cb = hd.checkbox(
+                                            label, checked=state.time_enabled[i]
+                                        )
+                                        if cb.changed:
+                                            flags = list(state.time_enabled)
+                                            flags[i] = cb.checked
+                                            state.time_enabled = tuple(flags)
+                                        if cb.checked != state.time_enabled[i]:
+                                            cb.checked = state.time_enabled[i]
 
             hd.text("|", font_color="neutral-300")
 
@@ -521,54 +562,60 @@ def _filter_bar(state, all_seasons: list) -> None:
                         if _se_btn.clicked:
                             _se_dd.opened = not _se_dd.opened
                         with hd.box(padding=1, gap=0.5, background_color="neutral-50"):
-                            with hd.hbox(gap=1, padding_bottom=0.5):
-                                with hd.tooltip("Select all"):
-                                    if hd.icon_button(
-                                        "check2-all", font_size="small"
-                                    ).clicked:
-                                        state.excluded_seasons = ()
-                                with hd.tooltip("Clear all"):
-                                    if hd.icon_button(
-                                        "dash-square", font_size="small"
-                                    ).clicked:
-                                        state.excluded_seasons = tuple(all_seasons)
-                            _convenience = [
-                                (1, "Last season"),
-                                (2, "Last 2 seasons"),
-                                (5, "Last 5 seasons"),
-                                (10, "Last 10 seasons"),
-                            ]
-                            _shown = [
-                                (n, lbl)
-                                for n, lbl in _convenience
-                                if len(all_seasons) >= n
-                            ]
-                            if _shown:
-                                with hd.hbox(gap=0.5, padding_bottom=0.5, wrap="wrap"):
-                                    for _cn, _clbl in _shown:
-                                        with hd.scope(f"conv_{_cn}"):
-                                            if hd.button(
-                                                _clbl, size="medium", variant="text"
-                                            ).clicked:
-                                                state.excluded_seasons = tuple(
-                                                    sorted(all_seasons[_cn:])
-                                                )
-                            with hd.scope(str(state.excluded_seasons)):
-                                for season in all_seasons:
-                                    with hd.scope(f"season_{season}"):
-                                        _is_sel = season not in state.excluded_seasons
-                                        cb = hd.checkbox(season, checked=_is_sel)
-                                        if cb.changed:
-                                            _excl = set(state.excluded_seasons)
-                                            if cb.checked:
-                                                _excl.discard(season)
-                                            else:
-                                                _excl.add(season)
-                                            state.excluded_seasons = tuple(
-                                                sorted(_excl)
+                            with hd.hbox(gap=0.5, padding_bottom=0.5):
+                                if hd.button(
+                                    "Select all", size="small", variant="text"
+                                ).clicked:
+                                    state.excluded_seasons = ()
+                                if hd.button(
+                                    "Clear all", size="small", variant="text"
+                                ).clicked:
+                                    state.excluded_seasons = tuple(all_seasons)
+
+                            with hd.hbox(gap=0.5):
+                                _convenience = [
+                                    (1, "Last season"),
+                                    (2, "Last 2 seasons"),
+                                    (5, "Last 5 seasons"),
+                                    (10, "Last 10 seasons"),
+                                ]
+                                _shown = [
+                                    (n, lbl)
+                                    for n, lbl in _convenience
+                                    if len(all_seasons) >= n
+                                ]
+                                if _shown:
+                                    with hd.hbox(
+                                        gap=0.5, padding_bottom=0.5, wrap="wrap"
+                                    ):
+                                        for _cn, _clbl in _shown:
+                                            with hd.scope(f"conv_{_cn}"):
+                                                if hd.button(
+                                                    _clbl, size="medium", variant="text"
+                                                ).clicked:
+                                                    state.excluded_seasons = tuple(
+                                                        sorted(all_seasons[_cn:])
+                                                    )
+
+                            with hd.hbox(gap=0.75):
+                                with hd.scope(str(state.excluded_seasons)):
+                                    for season in all_seasons:
+                                        with hd.scope(f"season_{season}"):
+                                            _is_sel = (
+                                                season not in state.excluded_seasons
                                             )
-                                        if cb.checked != _is_sel:
-                                            cb.checked = _is_sel
+                                            cb = hd.checkbox(season, checked=_is_sel)
+                                            if cb.changed:
+                                                _excl = set(state.excluded_seasons)
+                                                if cb.checked:
+                                                    _excl.discard(season)
+                                                else:
+                                                    _excl.add(season)
+                                                state.excluded_seasons = tuple(
+                                                    sorted(_excl)
+                                                )
+                                            if cb.checked != _is_sel:
+                                                cb.checked = _is_sel
 
 
 # ---------------------------------------------------------------------------
@@ -603,7 +650,7 @@ def _chart_section(
     is_dark = hd.theme().is_dark
 
     with shadowed_box(
-        gap=0,
+        gap=1,
         padding=2,
         box_shadow="0 1px 2px rgba(255,255,255,.1)"
         if is_dark
@@ -652,7 +699,24 @@ def _chart_section(
                             state.sim_playing = False
                         else:
                             if _at_today:
-                                state.sim_week = 0
+                                # Start 30 days before the first qualifying event
+                                # so something appears almost immediately.
+                                _earliest = [
+                                    parse_date(w.get("date", ""))
+                                    for w in all_ranked_raw
+                                    if (
+                                        w.get("distance") in selected_dists
+                                        or w.get("time") in selected_times
+                                    )
+                                    and get_season(w.get("date", ""))
+                                    not in set(state.excluded_seasons)
+                                ]
+                                if _earliest:
+                                    state.sim_week = max(
+                                        0, (min(_earliest) - sim_start).days - 30
+                                    )
+                                else:
+                                    state.sim_week = 0
                             state.sim_tick_id += 1
                             state.sim_playing = True
 
@@ -697,77 +761,213 @@ def _chart_section(
 
         # ---- chart ----
         if chart_cfg:
-            PerformanceChart(config=chart_cfg, show_watts=show_watts, height="75vh")
+            PerformanceChart(
+                config=chart_cfg,
+                show_watts=show_watts,
+                x_mode=state.chart_x_mode,
+                height="75vh",
+            )
         else:
             hd.text("No chart data available.", font_color="neutral-500")
 
-        # ---- settings row ----
+        # ---- Settings Row 1: axis controls + power curves ----
         with hd.hbox(
-            gap=1, align="center", justify="center", padding_top=0.5, wrap="wrap"
+            gap=1.5, align="start", justify="center", padding_top=0.75, wrap="wrap"
         ):
-            with hd.scope("chart_metric"):
-                with radio_group(value=state.chart_metric, size="medium") as rg:
-                    hd.radio_button("Pace")
-                    hd.radio_button("Watts")
-                if rg.changed:
-                    state.chart_metric = rg.value
+            # Intensity group
+            with hd.box(
+                gap=0.5,
+                align="center",
+                background_color="neutral-50",
+                border_radius="large",
+                padding=1,
+                border="1px solid neutral-100",
+            ):
+                hd.text("Intensity (y)", font_color="neutral-800", font_size="small")
+                with hd.hbox(align="center", gap=2):
+                    with hd.scope("chart_metric"):
+                        with radio_group(value=state.chart_metric, size="medium") as rg:
+                            hd.radio_button("Pace")
+                            hd.radio_button("Watts")
+                        if rg.changed:
+                            state.chart_metric = rg.value
+                    with hd.scope("chart_log_y"):
+                        sw = hd.switch("Log", checked=state.chart_log_y, size="medium")
+                        if sw.changed:
+                            state.chart_log_y = sw.checked
 
-            hd.text("|", font_color="neutral-300")
+            # Length group
+            with hd.box(
+                gap=0.5,
+                align="center",
+                background_color="neutral-50",
+                border_radius="large",
+                padding=1,
+                border="1px solid neutral-100",
+            ):
+                hd.text("Length (x)", font_color="neutral-800", font_size="small")
+                with hd.hbox(align="center", gap=2):
+                    with hd.scope("chart_x_mode"):
+                        with radio_group(
+                            value=state.chart_x_mode.capitalize(), size="medium"
+                        ) as rg:
+                            hd.radio_button("Distance")
+                            hd.radio_button("Duration")
+                        if rg.changed:
+                            state.chart_x_mode = rg.value.lower()
+                    with hd.scope("chart_log_x"):
+                        sw = hd.switch("Log", checked=state.chart_log_x, size="medium")
+                        if sw.changed:
+                            state.chart_log_x = sw.checked
 
-            hd.text("Power curves:", font_color="neutral-600", font_size="small")
-            with hd.scope("chart_lines"):
-                with radio_group(value=state.chart_lines, size="medium") as rg:
-                    hd.radio_button("PBs")
-                    hd.radio_button("SBs")
-                    hd.radio_button("None")
-                if rg.changed:
-                    state.chart_lines = rg.value
+            # Power curves
+            with hd.box(
+                gap=0.5,
+                align="center",
+                background_color="neutral-50",
+                border_radius="large",
+                padding=1,
+                border="1px solid neutral-100",
+            ):
+                hd.text("Power curves", font_color="neutral-800", font_size="small")
+                with hd.scope("chart_lines"):
+                    with radio_group(value=state.chart_lines, size="medium") as rg:
+                        hd.radio_button("PBs")
+                        hd.radio_button("SBs")
+                        hd.radio_button("None")
+                    if rg.changed:
+                        state.chart_lines = rg.value
 
-            hd.text("|", font_color="neutral-300")
+            # ---- Settings Row 2: prediction dropdown + show components ----
+            # Build the dynamic Paul's Law tip (depends on personalized K).
+            if pauls_k_fit is not None:
+                _pl_tip = (
+                    f"Predicts +{pauls_k_fit:.1f} s/500m for each doubling of distance "
+                    f"(your personalised value), applied from each anchor PB and averaged."
+                )
+            else:
+                _pl_tip = (
+                    "Predicts +5.0 s/500m for each doubling of distance "
+                    "(population default — needs 2 or more PBs to personalise), "
+                    "applied from each anchor PB and averaged."
+                )
 
-            hd.text("Prediction line:", font_color="neutral-600", font_size="small")
-            with hd.scope("chart_predictor"):
-                sel = hd.select(value=state.chart_predictor, size="medium")
-                with sel:
-                    hd.option("None", value="none")
-                    hd.option("Paul's Law", value="pauls_law")
-                    hd.option("Log-Log Watts Fit", value="loglog")
-                    hd.option("Critical Power", value="critical_power")
-                    hd.option("RowingLevel", value="rowinglevel")
-                if sel.changed:
-                    state.chart_predictor = sel.value
+            _PRED_OPTIONS = [
+                ("none", "None", "Hide the prediction curve."),
+                ("loglog", "Log-Log Watts Fit", _DESC_LL),
+                ("pauls_law", "Paul's Law (average)", _pl_tip),
+                ("critical_power", "Critical Power", _DESC_CP),
+                ("rowinglevel", "RowingLevel (average)", _DESC_RL),
+                ("average", "Average", _DESC_AVG),
+            ]
+            _pred_name = next(
+                (
+                    name
+                    for val, name, _ in _PRED_OPTIONS
+                    if val == state.chart_predictor
+                ),
+                state.chart_predictor,
+            )
 
-            hd.text("|", font_color="neutral-300")
+            with hd.box(
+                gap=0.5,
+                align="center",
+                background_color="neutral-50",
+                border_radius="large",
+                padding=1,
+                border="1px solid neutral-100",
+                justify="center",
+                grow=True,
+            ):
+                hd.text("Prediction line", font_color="neutral-800", font_size="small")
 
-            with hd.scope("chart_log_y"):
-                sw = hd.switch("Log Y", checked=state.chart_log_y, size="medium")
-                if sw.changed:
-                    state.chart_log_y = sw.checked
-            with hd.scope("chart_log_x"):
-                sw = hd.switch("Log X", checked=state.chart_log_x, size="medium")
-                if sw.changed:
-                    state.chart_log_x = sw.checked
+                # Custom prediction dropdown (name + description per option).
+                with hd.scope("pred_dd"):
+                    with hd.dropdown(_pred_name, grow=True) as _pred_dd:
+                        with hd.box(
+                            background_color="neutral-0", align="start", gap=0.2
+                        ):
+                            for _pval, _pname, _pdesc in _PRED_OPTIONS:
+                                with hd.scope(f"pred_{_pval}"):
+                                    _is_active = state.chart_predictor == _pval
+                                    with hd.box(
+                                        grow=True,
+                                        gap=0,
+                                        border="none",
+                                        padding_bottom=0.25,
+                                        border_bottom="1px solid neutral-200",
+                                        background_color="primary-50"
+                                        if _is_active
+                                        else "neutral-0",
+                                        width="100%",
+                                        height="100%",
+                                    ):
+                                        _opt_button = hd.button(
+                                            _pname,
+                                            variant="text",
+                                            font_weight="bold",
+                                            font_size="medium",
+                                            font_color="primary",
+                                            padding=(0, 1, 0, 1),
+                                        )
 
-            # MP4 export is parked in services/experimental/mp4_export.py for future re-enablement.
+                                        hd.text(
+                                            _pdesc,
+                                            font_color="neutral-600",
+                                            font_size="small",
+                                            max_width=40,
+                                            padding=(0, 2, 0, 2),
+                                        )
+                                    if _opt_button.clicked:
+                                        state.chart_predictor = _pval
+                                        _pred_dd.opened = False
 
-        # ---- "Show components" row (only when predictor supports it) ----
-        if state.chart_predictor in ("pauls_law", "rowinglevel", "critical_power"):
-            with hd.hbox(gap=1, align="center", justify="center", padding_top=1):
-                with hd.scope("chart_show_components"):
-                    _sw_comp = hd.switch(
-                        "Show component lines",
-                        checked=state.chart_show_components,
-                        size="medium",
-                    )
-                    if _sw_comp.changed:
-                        state.chart_show_components = _sw_comp.checked
+                # Show components toggle (only when predictor supports it).
+                if state.chart_predictor in _COMP_DESCRIPTIONS:
+                    with hd.scope("chart_show_components"):
+                        with hd.box(gap=0.5, align="center"):
+                            with hd.hbox(align="center", gap=1):
+                                _sw_comp = hd.switch(
+                                    "Show component lines",
+                                    checked=state.chart_show_components,
+                                    size="medium",
+                                )
+                                if _sw_comp.changed:
+                                    state.chart_show_components = _sw_comp.checked
 
-                if pauls_k_fit is not None:
-                    hd.text(
-                        f"Your Paul's Value: +{pauls_k_fit:.1f}s per doubling",
-                        font_color="neutral-400",
-                        font_size="small",
-                    )
+                                with hd.tooltip(
+                                    _COMP_DESCRIPTIONS[state.chart_predictor]
+                                ):
+                                    hd.icon(
+                                        "question-circle",
+                                        font_size="small",
+                                        font_color="neutral-700",
+                                    )
+                            # ---- Paul's Law personalised K description ----
+                            if (
+                                state.chart_predictor == "pauls_law"
+                                and pauls_k_fit is not None
+                            ):
+                                with hd.box(align="center", padding_top=0.25):
+                                    hd.text(
+                                        f"Your Paul's constant: {pauls_k_fit:.1f}s/500m per distance doubling.",
+                                        font_color="neutral-900",
+                                        font_size="small",
+                                        max_width=25,
+                                    )
+
+                                    hd.text(
+                                        "Population default is 5.0s/500m. Lower values suggest aerobic dominance; "
+                                        "higher values suggest sprint dominance.",
+                                        font_color="neutral-600",
+                                        font_size="x-small",
+                                        max_width=22,
+                                    )
+
+                else:
+                    # Keep show_components False when predictor doesn't support it.
+                    if state.chart_show_components:
+                        state.chart_show_components = False
 
 
 # ---------------------------------------------------------------------------
@@ -855,36 +1055,19 @@ def _prediction_table(
     )
     _PRED_COLS = [
         ("pb", "Your PB", "Your personal best for each event."),
-        (
-            "cp",
-            "Critical Power",
-            "Two-component power-duration model (veloclinic). "
-            "Requires ≥ 5 PBs spanning a 10:1 duration ratio. Method from rowsandall.com.",
-        ),
-        (
-            "loglog",
-            "Log-Log Watts Fit",
-            "Fits a power law (log watts vs log distance) across all scoped PBs. "
-            "Similar to the Free Spirits Pace Predictor (freespiritsrowing.com) but uses all PBs, not just two.",
-        ),
-        ("pl", "Avg. Paul's Law", _pl_tip),
+        ("cp", "Critical Power", _DESC_CP),
+        ("loglog", "Log-Log Watts Fit", _DESC_LL),
+        ("pl", "Paul's Law (average)", _pl_tip),
     ]
     if rl_available:
-        _PRED_COLS.append(
-            (
-                "rl",
-                "Avg. RowingLevel",
-                "Predictions from rowinglevel.com based on your profile (gender, age, bodyweight). "
-                "Distance-weighted average across all anchor PBs. Distance events only.",
-            )
-        )
-    _PRED_COLS.append(
-        ("avg", "Average", "Mean of all available predictions for this event.")
-    )
+        _PRED_COLS.append(("rl", "RowingLevel (average)", _DESC_RL))
+    _PRED_COLS.append(("avg", "Average", _DESC_AVG))
 
     _HEADER_BG = "neutral-100"
     _COL_PROPS = dict(
-        grow=True, width=0, padding=0.5, border_right="1px solid neutral-200"
+        grow=True,
+        width=0,
+        padding=0.5,  # border_right="1px solid neutral-200"
     )
 
     with hd.box(padding=(2, 0, 0, 0)):
@@ -919,7 +1102,7 @@ def _prediction_table(
                                     hd.icon(
                                         "question-circle",
                                         font_size="small",
-                                        font_color="neutral-300",
+                                        font_color="neutral-500",
                                     )
 
             # ── data rows ─────────────────────────────────────────────────────
@@ -952,9 +1135,14 @@ def _prediction_table(
                         ):
                             with hd.hbox(gap=0.5, align="center"):
                                 with hd.scope(f"ev_toggle_{_row['label']}"):
-                                    _ev_sw = hd.switch(
-                                        "", checked=_ev_enabled, size="small"
-                                    )
+                                    with hd.tooltip(
+                                        "Include this event's PB in prediction "
+                                        "calculations? More accurate predictions "
+                                        "when you include only current, max-effort results."
+                                    ):
+                                        _ev_sw = hd.switch(
+                                            "", checked=_ev_enabled, size="small"
+                                        )
                                     if _ev_sw.changed:
                                         if _row["event_type"] == "dist":
                                             _flags = list(state.dist_enabled)
@@ -1009,7 +1197,7 @@ def _prediction_table(
                                         with hd.hbox(gap=0.5):
                                             hd.text(
                                                 _pace_val,
-                                                font_size="medium",
+                                                font_size="large",
                                                 font_weight="semibold",
                                                 font_color=_pace_color,
                                             )
@@ -1087,11 +1275,11 @@ def _prediction_table(
                             hd.icon(
                                 "question-circle",
                                 font_size="small",
-                                font_color="neutral-300",
+                                font_color="neutral-600",
                             )
 
                 with hd.box(**_COL_PROPS, background_color=_ACC_BG):
-                    hd.text("—", font_size="small", font_color="neutral-300")
+                    hd.text("—", font_size="small", font_color="neutral-600")
 
                 for _ck, _cl, _ct in _PRED_COLS[1:]:
                     with hd.scope(f"acc_{_ck}"):
@@ -1100,24 +1288,24 @@ def _prediction_table(
                             if _av["rmse"] is not None:
                                 hd.text(
                                     f"{_av['rmse']:.2f}s",
-                                    font_size="small",
+                                    font_size="large",
                                     font_weight="semibold",
-                                    font_color="neutral-600",
+                                    font_color="neutral-800",
                                 )
                                 if _av["r2"] is not None:
                                     hd.text(
                                         f"R²={_av['r2']:.3f}",
-                                        font_size="x-small",
-                                        font_color="neutral-400",
+                                        font_size="small",
+                                        font_color="neutral-600",
                                     )
                                 hd.text(
                                     f"n={_av['n']}",
-                                    font_size="x-small",
-                                    font_color="neutral-400",
+                                    font_size="small",
+                                    font_color="neutral-600",
                                 )
                             else:
                                 hd.text(
-                                    "—", font_size="small", font_color="neutral-300"
+                                    "—", font_size="small", font_color="neutral-600"
                                 )
 
 
@@ -1140,7 +1328,8 @@ def performance_page(client, user_id: str) -> None:
         chart_log_y=False,
         chart_show_lifetime_line=True,
         chart_metric="Pace",  # "Pace" | "Watts"
-        chart_predictor="loglog",  # "none" | "pauls_law" | "loglog" | "rowinglevel" | "critical_power"
+        chart_x_mode="distance",  # "distance" | "duration"
+        chart_predictor="loglog",  # "none" | "pauls_law" | "loglog" | "rowinglevel" | "critical_power" | "average"
         chart_show_components=False,
         chart_season_lines=(),
         chart_lines="PBs",  # "PBs" | "SBs" | "None"
@@ -1239,22 +1428,33 @@ def performance_page(client, user_id: str) -> None:
 
     # ---- stable axis bounds ----
     show_watts = state.chart_metric == "Watts"
+    _use_duration = state.chart_x_mode == "duration"
     _show_lb_line = state.chart_lines == "PBs"
     _season_lines_set = set(all_seasons) if state.chart_lines == "SBs" else set()
+    # Bounds use ALL ranked events (not just selected ones) so that toggling an
+    # event off doesn't cause the chart to rescale.
     _bounds_src = [
         w
         for w in all_ranked_raw
-        if (w.get("distance") in selected_dists or w.get("time") in selected_times)
-        and get_season(w.get("date", "")) not in set(state.excluded_seasons)
+        if get_season(w.get("date", "")) not in set(state.excluded_seasons)
+        and (w.get("distance") in RANKED_DIST_SET or w.get("time") in RANKED_TIME_SET)
     ]
     _bounds_bests = apply_best_only(_bounds_src)
     _sim_x_bounds = None
     _sim_y_bounds = None
     if _bounds_bests:
         _bp = [p for w in _bounds_bests if (p := compute_pace(w)) and 60 < p < 400]
-        _bd = [w.get("distance") for w in _bounds_bests if w.get("distance")]
-        if _bp and _bd:
-            _xr, _xR = min(_bd), max(_bd)
+        if _use_duration:
+            # X axis in seconds: duration = dist * pace / 500
+            _bx = [
+                w.get("distance") * p / 500
+                for w in _bounds_bests
+                if w.get("distance") and (p := compute_pace(w)) and 60 < p < 400
+            ]
+        else:
+            _bx = [w.get("distance") for w in _bounds_bests if w.get("distance")]
+        if _bp and _bx:
+            _xr, _xR = min(_bx), max(_bx)
             _sim_x_bounds = (
                 (_xr / 1.45, _xR * 1.45)
                 if state.chart_log_x
@@ -1277,6 +1477,27 @@ def performance_page(client, user_id: str) -> None:
         set(state.excluded_seasons),
         state.best_filter,
     )
+
+    # ---- excluded-event workouts (plotted faintly, not used in model fits) ----
+    _excluded_cats = set()
+    for i, (dist, _) in enumerate(RANKED_DISTANCES):
+        if not state.dist_enabled[i]:
+            _excluded_cats.add(("dist", dist))
+    for i, (tenths, _) in enumerate(RANKED_TIMES):
+        if not state.time_enabled[i]:
+            _excluded_cats.add(("time", tenths))
+
+    _excluded_wkts: list = []
+    if _excluded_cats:
+        _excl_src = [
+            w
+            for w in all_ranked_raw
+            if workout_cat_key(w) in _excluded_cats
+            and parse_date(w.get("date", "")) <= sim_date
+            and get_season(w.get("date", "")) not in set(state.excluded_seasons)
+        ]
+        _excluded_wkts = apply_best_only(_excl_src)
+
     _lb, _lb_anchor = compute_lifetime_bests(sim_wkts)
     _lb_all, _lb_all_anchor = compute_lifetime_bests(
         [
@@ -1425,6 +1646,8 @@ def performance_page(client, user_id: str) -> None:
         lifetime_best=_lb,
         lifetime_best_anchor=_lb_anchor,
         pauls_k=_pauls_k,
+        excluded_workouts=_excluded_wkts,
+        x_mode=state.chart_x_mode,
     )
 
     # ---- render chart section ----

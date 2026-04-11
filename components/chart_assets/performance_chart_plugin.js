@@ -48,13 +48,25 @@ window.hyperdiv.registerPlugin("PerformanceChart", (ctx) => {
     return rounded + "m";
   }
 
+  /** Format a duration in seconds as "M:SS" or "H:MM:SS". */
+  function formatDuration(seconds) {
+    const s = Math.round(seconds);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+    return `${m}:${String(sec).padStart(2, "0")}`;
+  }
+
   // -----------------------------------------------------------------------
   // Config post-processing: attach JS callbacks that can't be serialised
   // -----------------------------------------------------------------------
 
-  function buildOptions(options, showWatts) {
+  function buildOptions(options, showWatts, xMode) {
     // Deep-clone so we never mutate the prop value.
     const opts = JSON.parse(JSON.stringify(options));
+    const useDuration = xMode === "duration";
+    const xLabelFn = useDuration ? formatDuration : distLabel;
 
     // Y-axis: formatter + gridline interval (≥1 per 5 sec pace, ≥1 per 50 W)
     if (opts.scales && opts.scales.y) {
@@ -65,17 +77,26 @@ window.hyperdiv.registerPlugin("PerformanceChart", (ctx) => {
       opts.scales.y.ticks.stepSize = showWatts ? 50 : 5;
     }
 
-    // X-axis: formatter + gridlines pinned to ranked distances only.
+    // X-axis: formatter + gridlines pinned to ranked distances or durations.
     if (opts.scales && opts.scales.x) {
       opts.scales.x.ticks = opts.scales.x.ticks || {};
-      opts.scales.x.ticks.callback = (val) => distLabel(val);
+      opts.scales.x.ticks.callback = (val) => xLabelFn(val);
       const _xMin = opts.scales.x.min || 0;
       const _xMax = opts.scales.x.max || Infinity;
-      opts.scales.x.afterBuildTicks = (axis) => {
-        axis.ticks = [100, 500, 1000, 2000, 5000, 6000, 10000, 21097, 42195]
-          .filter(v => v >= _xMin && v <= _xMax)
-          .map(v => ({ value: v }));
-      };
+      if (useDuration) {
+        // Gridlines at standard ranked durations (seconds).
+        opts.scales.x.afterBuildTicks = (axis) => {
+          axis.ticks = [10, 60, 120, 240, 600, 1800, 3600, 7200]
+            .filter(v => v >= _xMin && v <= _xMax)
+            .map(v => ({ value: v }));
+        };
+      } else {
+        opts.scales.x.afterBuildTicks = (axis) => {
+          axis.ticks = [100, 500, 1000, 2000, 5000, 6000, 10000, 21097, 42195]
+            .filter(v => v >= _xMin && v <= _xMax)
+            .map(v => ({ value: v }));
+        };
+      }
     }
 
     // Custom tooltip
@@ -94,20 +115,20 @@ window.hyperdiv.registerPlugin("PerformanceChart", (ctx) => {
         label(context) {
           const label = context.dataset.label || "";
           const raw = context.raw;
-          const distStr = distLabel(raw.x);
+          const xStr = xLabelFn(raw.x);
           const valStr = showWatts
             ? raw.y.toFixed(1) + " W"
             : formatPace(raw.y) + " /500m";
 
-          // Prediction points: show event label (if present) or distance + value.
+          // Prediction points: show event label (if present) or x-axis label + value.
           if (context.dataset.isPrediction) {
-            const evLabel = raw._event_label ? raw._event_label : distStr;
+            const evLabel = raw._event_label ? raw._event_label : xStr;
             return `${evLabel}  ·  ${valStr}`;
           }
           // Suppress tooltips for other internal overlay datasets.
           if (label.startsWith("_")) return null;
 
-          return `${distStr}  ·  ${valStr}`;
+          return `${xStr}  ·  ${valStr}`;
         },
         afterLabel(context) {
           const raw = context.raw;
@@ -149,6 +170,10 @@ window.hyperdiv.registerPlugin("PerformanceChart", (ctx) => {
         return;
       }
 
+      // Split into standard PB-overlay labels and bottom-anchored crossover labels.
+      const standardRawLabels = rawLabels.filter(l => !l._anchor);
+      const bottomRawLabels   = rawLabels.filter(l => l._anchor === "bottom");
+
       const ctx2d   = chart.ctx;
       const xScale  = chart.scales.x;
       const yScale  = chart.scales.y;
@@ -166,11 +191,11 @@ window.hyperdiv.registerPlugin("PerformanceChart", (ctx) => {
       // Watts mode → labels float above the dot; pace mode → below.
       const above = showW;
 
-      // ---- Build placed-label objects ----
+      // ---- Build placed-label objects (standard labels only) ----
       // offsetY is signed distance from dot-centre to label top edge.
       // Labels already in _offsets reuse their stored position (anchors).
       // Labels appearing for the first time start at the default position.
-      const placed = rawLabels.map(({ x, y, line_event, pct_pace, pct_watts, line_label, color, bold }) => {
+      const placed = standardRawLabels.map(({ x, y, line_event, pct_pace, pct_watts, line_label, color, bold }) => {
         const pctStr = showW
           ? (pct_watts > 0 ? `+${pct_watts.toFixed(1)}% power` : null)
           : (pct_pace  > 0 ? `${pct_pace.toFixed(1)}% faster` : null);
@@ -246,7 +271,7 @@ window.hyperdiv.registerPlugin("PerformanceChart", (ctx) => {
         if (!currentKeys.has(key)) this._offsets.delete(key);
       }
 
-      // ---- Draw ----
+      // ---- Draw standard labels ----
       placed.forEach(({ px, py, lines, color, bold, offsetY }) => {
         lines.forEach((line, i) => {
           ctx2d.font      = fontFor(bold, i === lines.length - 1);
@@ -254,6 +279,22 @@ window.hyperdiv.registerPlugin("PerformanceChart", (ctx) => {
           ctx2d.fillText(line, px, py + offsetY + i * LINE_H);
         });
       });
+
+      // ---- Draw bottom-anchored labels (crossover annotation) ----
+      // These are pinned to the chart bottom and never participate in overlap logic.
+      if (bottomRawLabels.length) {
+        const bottomY = chart.chartArea.bottom - 8;
+        ctx2d.font = `12px ${_UI_FONT}`;
+        bottomRawLabels.forEach(({ x, lines, color }) => {
+          const px = xScale.getPixelForValue(x);
+          // Draw lines from the bottom up: last line at bottomY, first line highest.
+          lines.forEach((line, i) => {
+            const yPos = bottomY - (lines.length - 1 - i) * LINE_H;
+            ctx2d.fillStyle = color || "rgba(180,180,180,0.9)";
+            ctx2d.fillText(line, px, yPos);
+          });
+        });
+      }
 
       ctx2d.restore();
     },
@@ -265,7 +306,8 @@ window.hyperdiv.registerPlugin("PerformanceChart", (ctx) => {
 
   function applyConfig(config, showWatts) {
     if (!config) return;
-    const processedOpts = buildOptions(config.options, showWatts);
+    const xMode = (config._x_mode) || "distance";
+    const processedOpts = buildOptions(config.options, showWatts, xMode);
     const canvasLabels = config._canvas_labels || [];
 
     if (chartInstance) {
