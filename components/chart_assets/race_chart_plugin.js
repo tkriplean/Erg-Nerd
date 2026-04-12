@@ -397,6 +397,10 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   let rafHandle      = null;
   let changeId       = 0;
 
+  // Fraction of the stroke cycle occupied by the drive phase (catch → finish).
+  // Recovery fills the remaining (1 - DRIVE_FRAC) of each cycle.
+  const DRIVE_FRAC = 0.38;
+
   // ── Canvas height sizing ───────────────────────────────────────────────────
   // Keep these in sync with the HEADER_H / LANE_H values used in renderFrame().
   const IDEAL_HEADER_H = 26;
@@ -550,6 +554,29 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     return a.t + frac * (b.t - a.t);
   }
 
+  // ── Stroke-phase helper ───────────────────────────────────────────────────
+  // Returns a value in [0, 1) representing position in the current stroke
+  // cycle, where 0 = catch and DRIVE_FRAC = finish.  Computed by finding the
+  // two surrounding recorded strokes and interpolating.  Each stroke record
+  // represents one stroke, so the time gap between consecutive records is the
+  // stroke period (60 / gap = SPM), giving naturally SPM-proportional speed.
+  function getStrokePhase(boat, timeSec) {
+    const strokes = boat.strokes;
+    if (!strokes || strokes.length < 2) return 0.5;
+    if (timeSec <= strokes[0].t) return 0;
+    const last = strokes[strokes.length - 1];
+    if (timeSec >= last.t) return 0.5;   // after race ends — show resting pose
+
+    let lo = 0, hi = strokes.length - 1;
+    while (lo < hi - 1) {
+      const mid = (lo + hi) >> 1;
+      if (strokes[mid].t <= timeSec) lo = mid; else hi = mid;
+    }
+    const dt = strokes[hi].t - strokes[lo].t;
+    if (dt < 0.1) return 0;   // guard against duplicate timestamps
+    return Math.min(0.99, (timeSec - strokes[lo].t) / dt);
+  }
+
   // ── Colors ─────────────────────────────────────────────────────────────────
   function bgColor()        { return isDark ? "#1a1a2e" : "#f0f4ff"; }
   function laneLineColor()  { return isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.07)"; }
@@ -596,6 +623,147 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     //   ctx2d.strokeStyle = darkMode ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.95)";
     //   ctx2d.stroke();
     // }
+
+    ctx2d.restore();
+  }
+
+  // ── Sculling oars ─────────────────────────────────────────────────────────
+  // Two symmetric oars, each pivoting at the hull gunwale (hull edge).
+  // Oar angle θ is measured from perpendicular-to-boat (= vertical on canvas),
+  // positive toward bow (right).  During the drive the blade is in the water
+  // (bright, thick, blade mark shown); during recovery it is feathered (dim).
+  //
+  // Top oar pivot: (boatCx, midY - hullHW)  →  tip up-and-sideways
+  //   tip = (boatCx + sinθ·L,  midY - hullHW - cosθ·L)
+  //   blade perp direction = (cosθ, sinθ)
+  // Bottom oar pivot: (boatCx, midY + hullHW)  →  tip down-and-sideways (mirror)
+  //   tip = (boatCx + sinθ·L,  midY + hullHW + cosθ·L)
+  //   blade perp direction = (−cosθ, sinθ)
+  function drawOars(ctx2d, boatCx, midY, hullHL, hullHW, laneH, phase, color) {
+    const CATCH_ANG  =  Math.PI * 0.185;  // ~33° toward bow
+    const FINISH_ANG = -Math.PI * 0.130;  // ~23° toward stern
+
+    let theta;
+    if (phase <= DRIVE_FRAC) {
+      theta = CATCH_ANG + (phase / DRIVE_FRAC) * (FINISH_ANG - CATCH_ANG);
+    } else {
+      const t = (phase - DRIVE_FRAC) / (1 - DRIVE_FRAC);
+      theta = FINISH_ANG + t * (CATCH_ANG - FINISH_ANG);
+    }
+
+    const inWater  = phase < DRIVE_FRAC;
+    // Reach: fill most of the space between hull edge and lane edge
+    const oarLen   = Math.min((laneH * 0.5 - hullHW) * 0.80, hullHL * 0.85);
+    const bladeHW  = Math.max(2.0, hullHW * 0.44);
+    const sinT = Math.sin(theta), cosT = Math.cos(theta);
+
+    ctx2d.save();
+    ctx2d.strokeStyle = hexWithAlpha(color, inWater ? 0.92 : 0.38);
+    ctx2d.lineWidth   = inWater ? 1.5 : 1.0;
+    ctx2d.lineCap     = "round";
+
+    // ── Top oar shaft ──────────────────────────────────────────────────────
+    const topPY = midY - hullHW;
+    const topTX = boatCx + sinT * oarLen;
+    const topTY = topPY - cosT * oarLen;
+    ctx2d.beginPath();
+    ctx2d.moveTo(boatCx, topPY);
+    ctx2d.lineTo(topTX, topTY);
+    ctx2d.stroke();
+    if (inWater) {
+      ctx2d.lineWidth = 2.5;
+      ctx2d.beginPath();
+      ctx2d.moveTo(topTX - cosT * bladeHW, topTY - sinT * bladeHW);
+      ctx2d.lineTo(topTX + cosT * bladeHW, topTY + sinT * bladeHW);
+      ctx2d.stroke();
+    }
+
+    // ── Bottom oar shaft (vertical mirror) ────────────────────────────────
+    ctx2d.lineWidth = inWater ? 1.5 : 1.0;
+    const botPY = midY + hullHW;
+    const botTX = boatCx + sinT * oarLen;
+    const botTY = botPY + cosT * oarLen;
+    ctx2d.beginPath();
+    ctx2d.moveTo(boatCx, botPY);
+    ctx2d.lineTo(botTX, botTY);
+    ctx2d.stroke();
+    if (inWater) {
+      ctx2d.lineWidth = 2.5;
+      ctx2d.beginPath();
+      ctx2d.moveTo(botTX + cosT * bladeHW, botTY - sinT * bladeHW);
+      ctx2d.lineTo(botTX - cosT * bladeHW, botTY + sinT * bladeHW);
+      ctx2d.stroke();
+    }
+
+    ctx2d.restore();
+  }
+
+  // ── Stick-figure rower ────────────────────────────────────────────────────
+  // Tiny top-view side silhouette: head (circle) + torso (line) + arm (line).
+  // Rower faces LEFT (stern direction, the backward rowing direction).
+  //
+  // Body lean (angle from vertical, + = toward bow/right):
+  //   catch  → leaning toward stern  (~−21°)
+  //   finish → leaning toward bow    (~+13°)
+  //   recovery: smoothstep back to catch lean
+  //
+  // Arm angle sweeps from reaching-forward-left at catch (arms extended) to
+  // pulled-in at finish (elbows behind body, hands near torso).
+  function drawRower(ctx2d, boatCx, midY, hullHL, hullHW, phase, isDark) {
+    const CATCH_LEAN   = -Math.PI * 0.115;  // ~21° toward stern
+    const FINISH_LEAN  =  Math.PI * 0.073;  // ~13° toward bow
+    const ARM_CATCH    = -Math.PI * 0.620;  // arms reaching left-and-slightly-down
+    const ARM_FINISH   =  Math.PI * 0.720;  // arms pulled in (hands near torso/bow-side)
+
+    // Body lean angle
+    let leanAngle;
+    if (phase <= DRIVE_FRAC) {
+      leanAngle = CATCH_LEAN + (phase / DRIVE_FRAC) * (FINISH_LEAN - CATCH_LEAN);
+    } else {
+      const t    = (phase - DRIVE_FRAC) / (1 - DRIVE_FRAC);
+      const ease = t * t * (3 - 2 * t);   // smoothstep
+      leanAngle  = FINISH_LEAN + ease * (CATCH_LEAN - FINISH_LEAN);
+    }
+
+    // Arm angle (same interpolation logic)
+    let armAngle;
+    if (phase <= DRIVE_FRAC) {
+      armAngle = ARM_CATCH + (phase / DRIVE_FRAC) * (ARM_FINISH - ARM_CATCH);
+    } else {
+      const t    = (phase - DRIVE_FRAC) / (1 - DRIVE_FRAC);
+      const ease = t * t * (3 - 2 * t);
+      armAngle   = ARM_FINISH + ease * (ARM_CATCH - ARM_FINISH);
+    }
+
+    const figH  = Math.min(hullHW * 1.55, 8.5);    // torso length
+    const headR = Math.max(1.8, hullHW * 0.38);    // head radius
+    const armL  = figH * 0.65;                     // arm length
+
+    const sinL = Math.sin(leanAngle), cosL = Math.cos(leanAngle);
+
+    // Hip at hull centre (slightly below midline)
+    const hipX = boatCx, hipY = midY + hullHW * 0.20;
+    // Shoulder = hip displaced along lean vector (up = −y in canvas)
+    const shlX = hipX + sinL * figH, shlY = hipY - cosL * figH;
+    // Head = further along lean
+    const hdX  = shlX + sinL * (headR + 1), hdY = shlY - cosL * (headR + 1);
+    // Hand = from shoulder along arm angle  (convention: 0=up, +π/2=right, +π=down)
+    const handX = shlX + Math.sin(armAngle) * armL;
+    const handY = shlY - Math.cos(armAngle) * armL;
+
+    const fc = isDark ? "rgba(255,255,255,0.82)" : "rgba(20,20,40,0.75)";
+    ctx2d.save();
+    ctx2d.strokeStyle = fc;
+    ctx2d.fillStyle   = fc;
+    ctx2d.lineWidth   = 1.2;
+    ctx2d.lineCap     = "round";
+
+    // Torso
+    ctx2d.beginPath(); ctx2d.moveTo(hipX, hipY); ctx2d.lineTo(shlX, shlY); ctx2d.stroke();
+    // Arm
+    ctx2d.beginPath(); ctx2d.moveTo(shlX, shlY); ctx2d.lineTo(handX, handY); ctx2d.stroke();
+    // Head
+    ctx2d.beginPath(); ctx2d.arc(hdX, hdY, headR, 0, Math.PI * 2); ctx2d.fill();
 
     ctx2d.restore();
   }
@@ -838,8 +1006,14 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
         ctx2d.fill();
       }
 
-      // ── Scull (elongated hull, bow pointing right) ──
+      // ── Oars (behind hull), hull, rower (on top of hull) ──
+      // Phase is [0,1) through the stroke cycle, derived from real stroke timing:
+      // the time gap between consecutive stroke records = 60/SPM seconds, so
+      // animation speed is naturally proportional to each boat's actual stroke rate.
+      const strokePhase = getStrokePhase(boat, timeMs / 1000);
+      drawOars(ctx2d, boatCx, midY, hullHL, hullHW, LANE_H, strokePhase, boat.color);
       drawScull(ctx2d, boatCx, midY, hullHL, hullHW, boat.color, boat.is_pb, isDark);
+      drawRower(ctx2d, boatCx, midY, hullHL, hullHW, strokePhase, isDark);
 
       // ── Label (left zone) — always shows date ──
       ctx2d.fillStyle = boat.color;
