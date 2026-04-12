@@ -177,20 +177,20 @@ def _login_view() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tab routing
+# Page routing
 # ---------------------------------------------------------------------------
 
-# Maps tab name → URL path and back.  "/" falls back to the default tab.
-_TAB_ROUTES: dict[str, str] = {
-    "Profile": "/profile",
+# Maps page name → URL path and back.  "/" falls back to the default page.
+_PAGES_ROUTES: dict[str, str] = {
     "Sessions": "/sessions",
     "Volume": "/volume",
     "Intervals": "/intervals",
     "Performance": "/performance",
     "Race": "/race",
+    "Profile": "/profile",
 }
-_ROUTE_TABS: dict[str, str] = {v: k for k, v in _TAB_ROUTES.items()}
-_DEFAULT_TAB = "Performance"
+_ROUTES_PAGES: dict[str, str] = {v: k for k, v in _PAGES_ROUTES.items()}
+_DEFAULT_PAGE = "Performance"
 
 
 # ---------------------------------------------------------------------------
@@ -209,9 +209,9 @@ def _dashboard_view(client, user_id: str, app_state) -> None:
     _theme = hd.theme()
     loc = hd.location()
 
-    # Derive active tab from URL; unknown/session paths fall back to default.
+    # Derive active page from URL; unknown/session paths fall back to default.
     in_session = loc.path.startswith("/session/")
-    current_tab = _ROUTE_TABS.get(loc.path, None if in_session else _DEFAULT_TAB)
+    current_page = _ROUTES_PAGES.get(loc.path, None if in_session else _DEFAULT_PAGE)
 
     with hd.box(padding=2, gap=1, padding_top=0):
         with hd.hbox(
@@ -219,11 +219,13 @@ def _dashboard_view(client, user_id: str, app_state) -> None:
         ):
             ergnerd_animation(width=10, theme="dark" if _theme.is_dark else "light")
             with hd.nav(direction="horizontal", gap=0, align="end"):
-                for tab_name, path in _TAB_ROUTES.items():
-                    with hd.scope(f"{tab_name, loc.path}"):
-                        is_active = tab_name == current_tab
+                for page_name, path in _PAGES_ROUTES.items():
+                    if page_name in ["Profile"]:
+                        continue
+                    with hd.scope(f"{page_name, loc.path}"):
+                        is_active = page_name == current_page
                         hd.link(
-                            tab_name,
+                            page_name,
                             href=path,
                             target="_self",
                             underline=False,
@@ -248,7 +250,12 @@ def _dashboard_view(client, user_id: str, app_state) -> None:
                     display_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or user.get(
                         "username", ""
                     )
-                    hd.text(display_name, font_color="neutral-400", font_size="small")
+                    hd.link(
+                        display_name,
+                        href="profile",
+                        font_color="primary",
+                        font_size="small",
+                    )
 
                 if hd.button("Disconnect", variant="neutral", size="small").clicked:
                     clear_token(user_id)
@@ -270,15 +277,15 @@ def _dashboard_view(client, user_id: str, app_state) -> None:
                         client,
                         user_id,
                     )
-        elif current_tab == "Volume":
+        elif current_page == "Volume":
             volume_page(client, user_id)
-        elif current_tab == "Sessions":
+        elif current_page == "Sessions":
             sessions_page(client, user_id)
-        elif current_tab == "Intervals":
+        elif current_page == "Intervals":
             intervals_page(client, user_id)
-        elif current_tab == "Performance":
+        elif current_page == "Performance":
             performance_page(client, user_id)
-        elif current_tab == "Race":
+        elif current_page == "Race":
             event_page(client, user_id)
         else:
             profile_page()
