@@ -245,15 +245,12 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   const style = document.createElement("style");
   style.textContent = `
     :host {
-      display: flex;
-      flex-direction: column;
+      display: block;
       width: 100%;
-      height: 100%;
     }
     .canvas-wrap {
-      flex: 1;
-      min-height: 0;
       position: relative;
+      width: 100%;
     }
     canvas {
       display: block;
@@ -265,6 +262,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       align-items: center;
       gap: 2rem;
       flex-direction: column;
+      width: 100%;
     }
     .controls {
       flex-shrink: 0;
@@ -320,7 +318,8 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   canvasWrap.className = "canvas-wrap";
   const canvas = document.createElement("canvas");
   canvasWrap.appendChild(canvas);
-  wrapper.appendChild(canvasWrap);
+
+
 
   const controls = document.createElement("div");
   controls.className = "controls";
@@ -334,6 +333,8 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
 
   playBtn.appendChild(playBtnLabel)
 
+  wrapper.appendChild(controls);
+  wrapper.appendChild(canvasWrap);
 
 
   // const timeDisplay = document.createElement("span");
@@ -373,7 +374,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   controls.appendChild(seekInput);
   // controls.appendChild(totalDisplay);
   controls.appendChild(speedSelect);
-  wrapper.appendChild(controls);
+  
 
   // ── State ──────────────────────────────────────────────────────────────────
   let races       = ctx.initialProps.races || [];
@@ -395,6 +396,20 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   let lastTs         = null;
   let rafHandle      = null;
   let changeId       = 0;
+
+  // ── Canvas height sizing ───────────────────────────────────────────────────
+  // Keep these in sync with the HEADER_H / LANE_H values used in renderFrame().
+  const IDEAL_HEADER_H = 26;
+  const IDEAL_LANE_H   = 44;   // maximum lane height (matches Math.min cap)
+  const CANVAS_PAD_B   = 6;    // extra breathing room below last lane border
+
+  function updateCanvasHeight() {
+    const n = races.length;
+    const h = n > 0
+      ? IDEAL_HEADER_H + n * IDEAL_LANE_H + CANVAS_PAD_B
+      : 120;  // placeholder height when there are no boats
+    canvasWrap.style.height = h + "px";
+  }
 
   // Per-boat wake ring buffers: Map<id, {buf: [{x,y}], head: int}>
   const wakeBuffers = new Map();
@@ -423,7 +438,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
 
   // ── Compute race duration from stroke data ─────────────────────────────────
   function rebuildMaxTime() {
-    if (!races || races.length === 0) { maxTimeMs = 0; return; }
+    if (!races || races.length === 0) { maxTimeMs = 0; updateCanvasHeight(); return; }
 
     if (eventType === "dist") {
       // Use the official finish_time_s when available (Python-guaranteed); fall
@@ -462,6 +477,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     seekInput.max = maxTimeMs;
     // totalDisplay.textContent = fmtTime(maxTimeMs);
     // Speed is computed dynamically via playbackSpeed() — no static calibration needed.
+    updateCanvasHeight();
   }
 
   // ── Boat distance at a given race time ─────────────────────────────────────
