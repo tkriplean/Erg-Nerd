@@ -9,7 +9,7 @@ from components.concept2_sync import concept2_sync
 
 
 # ---------------------------------------------------------------------------
-# Tab entry point
+# Entry point
 # ---------------------------------------------------------------------------
 
 
@@ -29,6 +29,3 @@ def sessions_page(client, user_id: str) -> None:
     # ── Pace-vs-date scatter + windowed workouts table ────────────────────────
     with hd.box(padding=(2, 2, 2, 2), gap=2):
         sessions_chart(all_workouts)
-        from components.workout_table import result_table
-
-        result_table(all_workouts)

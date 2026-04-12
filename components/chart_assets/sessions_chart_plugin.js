@@ -6,8 +6,8 @@
  *   ┌─────────────────────────────────────────────────┐  flex: 1
  *   │  Main (focus) chart — windowed view             │
  *   ├─────────────────────────────────────────────────┤  1px separator
+ *   │  ██████▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓████  ← brush rect       │
  *   │  Overview (context) chart — full history (88px) │  fixed height
- *   │  ██████▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓████  ← brush rect      │
  *   └─────────────────────────────────────────────────┘
  *
  * Props — Python → JS (Python-owned, never written by JS):
@@ -62,7 +62,7 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
       height: 88px;
       flex-shrink: 0;
       position: relative;
-      border-top: 1px solid rgba(128,128,128,0.20);
+      border-bottom: 1px solid rgba(128,128,128,0.20);
       margin-top: 3px;
       cursor: grab;
       user-select: none;
@@ -77,17 +77,18 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
   ctx.domElement.appendChild(style);
 
   // ── DOM ────────────────────────────────────────────────────────────────────
+  const overviewWrap = document.createElement("div");
+  overviewWrap.className = "overview-wrap";
+  const overviewCanvas = document.createElement("canvas");
+  overviewWrap.appendChild(overviewCanvas);
+  ctx.domElement.appendChild(overviewWrap);
+
   const mainWrap = document.createElement("div");
   mainWrap.className = "main-wrap";
   const mainCanvas = document.createElement("canvas");
   mainWrap.appendChild(mainCanvas);
   ctx.domElement.appendChild(mainWrap);
 
-  const overviewWrap = document.createElement("div");
-  overviewWrap.className = "overview-wrap";
-  const overviewCanvas = document.createElement("canvas");
-  overviewWrap.appendChild(overviewCanvas);
-  ctx.domElement.appendChild(overviewWrap);
 
   // ── State ──────────────────────────────────────────────────────────────────
   let points       = ctx.initialProps.points || [];
@@ -524,6 +525,31 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
     if (mainChart)     { mainChart.destroy();     mainChart     = null; }
     if (overviewChart) { overviewChart.destroy(); overviewChart = null; }
 
+
+    overviewChart = new Chart(overviewCanvas, {
+      type: "scatter",
+      data: { datasets: buildOverviewDatasets(brushStartMs, brushEndMs) },
+      options: {
+        responsive:          true,
+        maintainAspectRatio: false,
+        animation:           false,
+        scales: {
+          x: buildOverviewXScale(),
+          y: {
+            display: false,
+            type:    "linear",
+            reverse: false,
+            ...(() => { const { yMin, yMax } = yRange(); return { min: yMin, max: yMax }; })(),
+          },
+        },
+        plugins: {
+          legend:  { display: false },
+          tooltip: { enabled: false },
+        },
+      },
+      plugins: [brushPlugin],
+    });
+
     mainChart = new Chart(mainCanvas, {
       type: "scatter",
       data: { datasets: buildMainDatasets(brushStartMs, brushEndMs) },
@@ -593,29 +619,6 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
       plugins: [lockChartAreaPlugin],
     });
 
-    overviewChart = new Chart(overviewCanvas, {
-      type: "scatter",
-      data: { datasets: buildOverviewDatasets(brushStartMs, brushEndMs) },
-      options: {
-        responsive:          true,
-        maintainAspectRatio: false,
-        animation:           false,
-        scales: {
-          x: buildOverviewXScale(),
-          y: {
-            display: false,
-            type:    "linear",
-            reverse: false,
-            ...(() => { const { yMin, yMax } = yRange(); return { min: yMin, max: yMax }; })(),
-          },
-        },
-        plugins: {
-          legend:  { display: false },
-          tooltip: { enabled: false },
-        },
-      },
-      plugins: [brushPlugin],
-    });
   }
 
   // ── Window update ─────────────────────────────────────────────────────────

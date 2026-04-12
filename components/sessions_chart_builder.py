@@ -405,7 +405,7 @@ def sessions_chart(workouts: list) -> None:
     session filters, and an in-window workouts table.
     """
     state = hd.state(
-        window_size="Season",
+        window_size="Year",
         window_end_ms=0,  # 0 = uninitialised → defaults to latest session
         last_change_id=0,
         filter_10k=False,
@@ -414,45 +414,6 @@ def sessions_chart(workouts: list) -> None:
     )
 
     workouts = _apply_outlier_filter(workouts)
-
-    # ── Controls ───────────────────────────────────────────────────────────────
-
-    with hd.hbox(gap=2, align="center", wrap="wrap", padding_bottom=1):
-        with hd.scope("ws"):
-            with hd.radio_group(value=state.window_size) as rg:
-                hd.radio_button("Week", size="small")
-                hd.radio_button("Month", size="small")
-                hd.radio_button("Quarter", size="small")
-                hd.radio_button("Season", size="small")
-                hd.radio_button("Year", size="small")
-                hd.radio_button("2 Years", size="small")
-                hd.radio_button("All", size="small")
-
-            if rg.changed:
-                state.window_size = rg.value
-                state.window_end_ms = 0  # snap to latest when window size changes
-
-        with hd.scope("ivl_filter"):
-            with hd.radio_group(value=state.filter_ivl) as ivl_rg:
-                hd.radio_button("All", size="small")
-                hd.radio_button("Intervals Only", size="small")
-                hd.radio_button("No Intervals", size="small")
-            if ivl_rg.changed:
-                state.filter_ivl = ivl_rg.value
-        with hd.scope("filter_10k"):
-            cb_10k = hd.checkbox("10k+", checked=state.filter_10k)
-            if cb_10k.changed:
-                state.filter_10k = cb_10k.checked
-
-        with hd.scope("metric"):
-            with hd.radio_group(
-                value="Watts" if state.show_watts else "Pace"
-            ) as metric_rg:
-                hd.radio_button("Pace", size="small")
-                hd.radio_button("Watts", size="small")
-            if metric_rg.changed:
-                state.show_watts = metric_rg.value == "Watts"
-
 
     # ── Apply filters ──────────────────────────────────────────────────────────
 
@@ -465,11 +426,13 @@ def sessions_chart(workouts: list) -> None:
             if (r.get("distance") or 0) + (r.get("rest_distance") or 0) >= 10_000
         ]
 
-    if state.filter_ivl == "Intervals Only":
+    print(state.filter_ivl)
+
+    if state.filter_ivl == "Intervals":
         filtered = [
             r for r in filtered if r.get("workout_type") in INTERVAL_WORKOUT_TYPES
         ]
-    elif state.filter_ivl == "No Intervals":
+    elif state.filter_ivl == "Continuous":
         filtered = [
             r for r in filtered if r.get("workout_type") not in INTERVAL_WORKOUT_TYPES
         ]
@@ -488,29 +451,99 @@ def sessions_chart(workouts: list) -> None:
         all_ms, state.window_size, state.window_end_ms
     )
 
-    # ── Plugin ────────────────────────────────────────────────────────────────
-    chart = SessionsChart(
-        points=pts,
-        target_window_start=target_start,
-        target_window_end=target_end,
-        is_dark=hd.theme().is_dark,
-        show_watts=state.show_watts,
-        height="75vh",
-    )
 
-    # ── Sync window_end_ms from brush drags ───────────────────────────────────
-    if chart.change_id != state.last_change_id:
-        state.last_change_id = chart.change_id
-        state.window_end_ms = chart.brush_end
 
-    # ── Workouts-in-view table ────────────────────────────────────────────────
-    in_window = [
-        r
-        for r in filtered
-        if target_start <= _date_to_ms(r.get("date", "")) <= target_end
-    ]
-    in_window.sort(key=lambda r: r.get("date", ""), reverse=True)
-    if in_window:
-        with hd.box(padding=(2, 0, 0, 0)):
-            hd.h3(f"Workouts in View  ({len(in_window)})")
-            result_table(in_window[:250])
+
+
+    with hd.box(gap=1, justify="center", align="center"):
+        with hd.h1():
+            with hd.hbox(gap=.6, align="center"):
+                hd.text("Take a Gander at ")
+                with hd.dropdown() as _sessions_dd:
+                    _sessions_label = f"All Your{" Long " if state.filter_10k else " "} {" " if state.filter_ivl == "All" else state.filter_ivl} Work"
+                    _sessions_btn = hd.button(
+                        _sessions_label, caret=True, size="medium", font_color="neutral-800", font_size=2, font_weight="bold", slot=_sessions_dd.trigger
+                    )
+                    if _sessions_btn.clicked:
+                        _sessions_dd.opened = not _sessions_dd.opened
+
+                    with hd.hbox(gap=1, padding=1,background_color="neutral-50", align="center"):  
+                        with hd.scope("ivl_filter"):
+                            with hd.radio_group(value=state.filter_ivl) as ivl_rg:
+                                hd.radio_button("All", size="small")
+                                hd.radio_button("Intervals", size="small")
+                                hd.radio_button("Continuous", size="small")
+                            if ivl_rg.changed:
+                                state.filter_ivl = ivl_rg.value
+                        with hd.scope("filter_10k"):
+                            cb_10k = hd.checkbox("10k+", checked=state.filter_10k)
+                            if cb_10k.changed:
+                                state.filter_10k = cb_10k.checked
+
+
+        # with hd.hbox(gap=2, align="center", wrap="wrap", padding_bottom=1):
+        #     with hd.scope("ws"):
+        #         with hd.radio_group(value=state.window_size) as rg:
+        #             hd.radio_button("Month", size="small")
+        #             hd.radio_button("Quarter", size="small")
+        #             hd.radio_button("Season", size="small")
+        #             hd.radio_button("Year", size="small")
+        #             hd.radio_button("2 Years", size="small")
+        #             hd.radio_button("All", size="small")
+
+        #         if rg.changed:
+        #             state.window_size = rg.value
+        #             state.window_end_ms = 0  # snap to latest when window size changes
+
+            # with hd.scope("ivl_filter"):
+            #     with hd.radio_group(value=state.filter_ivl) as ivl_rg:
+            #         hd.radio_button("All", size="small")
+            #         hd.radio_button("Intervals Only", size="small")
+            #         hd.radio_button("No Intervals", size="small")
+            #     if ivl_rg.changed:
+            #         state.filter_ivl = ivl_rg.value
+            # with hd.scope("filter_10k"):
+            #     cb_10k = hd.checkbox("10k+", checked=state.filter_10k)
+            #     if cb_10k.changed:
+            #         state.filter_10k = cb_10k.checked
+
+
+        # ── Plugin ────────────────────────────────────────────────────────────────
+        chart = SessionsChart(
+            points=pts,
+            target_window_start=target_start,
+            target_window_end=target_end,
+            is_dark=hd.theme().is_dark,
+            show_watts=state.show_watts,
+            height="75vh",
+        )
+
+        # ── Controls ───────────────────────────────────────────────────────────────
+
+        with hd.hbox(gap=2, align="center", wrap="wrap", padding_bottom=1):
+
+            with hd.scope("metric"):
+                with hd.radio_group(
+                    value="Watts" if state.show_watts else "Pace"
+                ) as metric_rg:
+                    hd.radio_button("Pace", size="small")
+                    hd.radio_button("Watts", size="small")
+                if metric_rg.changed:
+                    state.show_watts = metric_rg.value == "Watts"
+
+        # ── Sync window_end_ms from brush drags ───────────────────────────────────
+        if chart.change_id != state.last_change_id:
+            state.last_change_id = chart.change_id
+            state.window_end_ms = chart.brush_end
+
+        # ── Workouts-in-view table ────────────────────────────────────────────────
+        in_window = [
+            r
+            for r in filtered
+            if target_start <= _date_to_ms(r.get("date", "")) <= target_end
+        ]
+        in_window.sort(key=lambda r: r.get("date", ""), reverse=True)
+        if in_window:
+            with hd.box(padding=(2, 0, 0, 0)):
+                hd.h3(f"Workouts in View  ({len(in_window)})")
+                result_table(in_window)
