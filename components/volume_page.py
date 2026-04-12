@@ -125,6 +125,7 @@ def _distribution_table(rows: list, view: str, zone_mode: str = "pace") -> None:
     col_dist = tuple(r["distribution"] for r in rows)
 
     if zone_mode == "hr":
+        print(rows)
         col_z1 = tuple(f"{r['z1_m']}  ({r['z1_pct']})" for r in rows)
         col_z2 = tuple(f"{r['z2_m']}  ({r['z2_pct']})" for r in rows)
         col_z3a = tuple(f"{r['z3a_m']}  ({r['z3a_pct']})" for r in rows)
@@ -235,131 +236,136 @@ def _volume_section(all_workouts: list, profile: dict) -> None:
         machine="All",
         zone_mode="pace",  # "pace" | "hr"
     )
+    view = state.view
+    current_scope = getattr(state, f"{view}_scope")
 
-    # ── Controls row ─────────────────────────────────────────────────────────
-    with hd.hbox(gap=3, align="center", padding=(0, 0, 1, 0), wrap="wrap"):
-        # View radio group (Weekly / Monthly / Seasonal)
-        view_rg = hd.radio_buttons(
-            "Weekly",
-            "Monthly",
-            "Seasonal",
-            value=state.view.capitalize(),
-            font_size="small",
-        )
-        if view_rg.changed:
-            state.view = view_rg.value.lower()
-        view = state.view
+    with hd.box(gap=1, align="center"):
+        hd.h1("How Does Your Work Stack Up?")
 
-        # Scope dropdown — per-view state.
-        current_scope = getattr(state, f"{view}_scope")
-        with hd.scope(f"scope_{view}"):
-            scope_sel = hd.select(value=current_scope, size="small")
-            with scope_sel:
-                hd.option("Past Year", value="past_year")
-                hd.option("This Season", value="this_season")
-                hd.option("Past 2 Years", value="past_2_years")
-                hd.option("Past 5 Years", value="past_5_years")
-                hd.option("All Time", value="all_time")
-            if scope_sel.changed:
-                if view == "weekly":
-                    state.weekly_scope = scope_sel.value
-                elif view == "monthly":
-                    state.monthly_scope = scope_sel.value
-                else:
-                    state.seasonal_scope = scope_sel.value
-                current_scope = scope_sel.value
+        # ── Compute chart data ────────────────────────────────────────────────────
+        machine_filter = None if state.machine == "All" else {state.machine}
 
-        # Machine filter — only show when the user has more than one machine type.
-        machine_types = sorted({w.get("type") for w in all_workouts if w.get("type")})
-        if len(machine_types) > 1:
-            with hd.scope("machine_filter"):
-                machine_sel = hd.select(value=state.machine, size="small")
-                with machine_sel:
-                    hd.option("All Machines", value="All")
-                    for mt in machine_types:
-                        hd.option(machine_label(mt), value=mt)
-                if machine_sel.changed:
-                    state.machine = machine_sel.value
+        if state.zone_mode == "hr" and hr_ok:
+            aggregated = aggregate_workouts(
+                all_workouts,
+                machine_filter=machine_filter,
+                bin_fn=lambda w: workout_hr_meters(w, max_hr),
+            )
+            chart_config = build_volume_chart_config(
+                aggregated,
+                view=view,
+                scope=current_scope,
+                today=date.today(),
+                bin_names=HR_ZONE_NAMES,
+                bin_colors=HR_ZONE_COLORS,
+                draw_order=HR_ZONE_DRAW_ORDER,
+            )
+            rows = get_period_rows(
+                aggregated,
+                view,
+                current_scope,
+                today=date.today(),
+                z1_bins=HR_Z1_BINS,
+                z2_bins=HR_Z2_BINS,
+                z3_bins=HR_Z3_BINS,
+                z3a_bins=_HR_Z3A_BINS,
+                z3b_bins=_HR_Z3B_BINS,
+                no_data_bins=_HR_NO_DATA_BINS,
+            )
+        elif state.zone_mode == "hr" and not hr_ok:
+            # No max HR — skip chart and table; callout already rendered above.
+            return
         else:
-            # Single machine type — force filter off
-            state.machine = "All"
+            ref_sbs = get_reference_sbs(all_workouts)
+            thresholds = compute_bin_thresholds(ref_sbs, all_workouts)
+            aggregated = aggregate_workouts(all_workouts, thresholds, machine_filter)
+            chart_config = build_volume_chart_config(
+                aggregated,
+                view=view,
+                scope=current_scope,
+                today=date.today(),
+            )
+            rows = get_period_rows(aggregated, view, current_scope, today=date.today())
 
-        # Zone mode radio group (Pace / HR)
-        mode_rg = hd.radio_buttons(
-            "Pace",
-            "HR",
-            value="Pace" if state.zone_mode == "pace" else "HR",
-            font_size="small",
-        )
-        if mode_rg.changed:
-            state.zone_mode = mode_rg.value.lower()
+        # ── Chart ────────────────────────────────────────────────────────────────
+        if chart_config:
+            with hd.box(height="42vh", width="100%"):
+                VolumeChart(config=chart_config)
+        else:
+            with hd.box(padding=3, align="center"):
+                hd.text(
+                    "Not enough data for the selected scope.",
+                    font_color="neutral-500",
+                    font_size="small",
+                )
 
-    # ── HR callout (only in HR mode) ─────────────────────────────────────────
-    max_hr = None
-    hr_ok = True
-    if state.zone_mode == "hr":
-        max_hr, hr_ok = _hr_callout(all_workouts, profile)
-
-    # ── Compute chart data ────────────────────────────────────────────────────
-    machine_filter = None if state.machine == "All" else {state.machine}
-
-    if state.zone_mode == "hr" and hr_ok:
-        aggregated = aggregate_workouts(
-            all_workouts,
-            machine_filter=machine_filter,
-            bin_fn=lambda w: workout_hr_meters(w, max_hr),
-        )
-        chart_config = build_volume_chart_config(
-            aggregated,
-            view=view,
-            scope=current_scope,
-            today=date.today(),
-            bin_names=HR_ZONE_NAMES,
-            bin_colors=HR_ZONE_COLORS,
-            draw_order=HR_ZONE_DRAW_ORDER,
-        )
-        rows = get_period_rows(
-            aggregated,
-            view,
-            current_scope,
-            today=date.today(),
-            z1_bins=HR_Z1_BINS,
-            z2_bins=HR_Z2_BINS,
-            z3_bins=HR_Z3_BINS,
-            z3a_bins=_HR_Z3A_BINS,
-            z3b_bins=_HR_Z3B_BINS,
-            no_data_bins=_HR_NO_DATA_BINS,
-        )
-    elif state.zone_mode == "hr" and not hr_ok:
-        # No max HR — skip chart and table; callout already rendered above.
-        return
-    else:
-        ref_sbs = get_reference_sbs(all_workouts)
-        thresholds = compute_bin_thresholds(ref_sbs, all_workouts)
-        aggregated = aggregate_workouts(all_workouts, thresholds, machine_filter)
-        chart_config = build_volume_chart_config(
-            aggregated,
-            view=view,
-            scope=current_scope,
-            today=date.today(),
-        )
-        rows = get_period_rows(aggregated, view, current_scope, today=date.today())
-
-    # ── Chart ────────────────────────────────────────────────────────────────
-    if chart_config:
-        with hd.box(height="42vh", width="100%"):
-            VolumeChart(config=chart_config)
-    else:
-        with hd.box(padding=3, align="center"):
-            hd.text(
-                "Not enough data for the selected scope.",
-                font_color="neutral-500",
+        # ── Controls row ─────────────────────────────────────────────────────────
+        with hd.hbox(gap=3, align="center", padding=(0, 0, 1, 0), wrap="wrap"):
+            # View radio group (Weekly / Monthly / Seasonal)
+            view_rg = hd.radio_buttons(
+                "Weekly",
+                "Monthly",
+                "Seasonal",
+                value=state.view.capitalize(),
                 font_size="small",
             )
+            if view_rg.changed:
+                state.view = view_rg.value.lower()
 
-    # ── Distribution table ───────────────────────────────────────────────────
-    if rows:
-        _distribution_table(rows, view, zone_mode=state.zone_mode)
+            # Scope dropdown — per-view state.
+            with hd.scope(f"scope_{view}"):
+                scope_sel = hd.select(value=current_scope, size="small")
+                with scope_sel:
+                    hd.option("Past Year", value="past_year")
+                    hd.option("This Season", value="this_season")
+                    hd.option("Past 2 Years", value="past_2_years")
+                    hd.option("Past 5 Years", value="past_5_years")
+                    hd.option("All Time", value="all_time")
+                if scope_sel.changed:
+                    if view == "weekly":
+                        state.weekly_scope = scope_sel.value
+                    elif view == "monthly":
+                        state.monthly_scope = scope_sel.value
+                    else:
+                        state.seasonal_scope = scope_sel.value
+                    current_scope = scope_sel.value
+
+            # Machine filter — only show when the user has more than one machine type.
+            machine_types = sorted(
+                {w.get("type") for w in all_workouts if w.get("type")}
+            )
+            if len(machine_types) > 1:
+                with hd.scope("machine_filter"):
+                    machine_sel = hd.select(value=state.machine, size="small")
+                    with machine_sel:
+                        hd.option("All Machines", value="All")
+                        for mt in machine_types:
+                            hd.option(machine_label(mt), value=mt)
+                    if machine_sel.changed:
+                        state.machine = machine_sel.value
+            else:
+                # Single machine type — force filter off
+                state.machine = "All"
+
+            # Zone mode radio group (Pace / HR)
+            mode_rg = hd.radio_buttons(
+                "Pace",
+                "HR",
+                value="Pace" if state.zone_mode == "pace" else "HR",
+                font_size="small",
+            )
+            if mode_rg.changed:
+                state.zone_mode = mode_rg.value.lower()
+
+        # ── HR callout (only in HR mode) ─────────────────────────────────────────
+        max_hr = None
+        hr_ok = True
+        if state.zone_mode == "hr":
+            max_hr, hr_ok = _hr_callout(all_workouts, profile)
+
+        # ── Distribution table ───────────────────────────────────────────────────
+        if rows:
+            _distribution_table(rows, view, zone_mode=state.zone_mode)
 
 
 # ---------------------------------------------------------------------------

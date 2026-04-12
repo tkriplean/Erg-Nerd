@@ -972,51 +972,60 @@ def intervals_page(client, user_id: str) -> None:
         structure_filter=None,  # str | None — filter table to this structure key
     )
 
-    with hd.box(padding=(2, 2, 2, 2)):
-        # Pre-compute non-cell filters so the grid counts stay in sync with
-        # the active pace-zone and structure filters.
-        pre_filtered = _filter_by_bins(all_intervals, set(state.active_bins))
-        if state.structure_filter:
-            pre_filtered = [
-                r for r in pre_filtered if r["_structure_key"] == state.structure_filter
-            ]
+    with hd.box(align="center", gap=1, padding=(2, 2, 2, 2)):
+        hd.h1("Relive Your Fondest Interval Sessions")
 
-        # 2D grid browser — counts reflect pace-zone + structure filters
-        _grid_browser(pre_filtered, state)
+        with hd.box():
+            # Pre-compute non-cell filters so the grid counts stay in sync with
+            # the active pace-zone and structure filters.
+            pre_filtered = _filter_by_bins(all_intervals, set(state.active_bins))
+            if state.structure_filter:
+                pre_filtered = [
+                    r
+                    for r in pre_filtered
+                    if r["_structure_key"] == state.structure_filter
+                ]
 
-        hd.divider()
+            # 2D grid browser — counts reflect pace-zone + structure filters
+            _grid_browser(pre_filtered, state)
 
-        # Pace-zone legend / conjunctive filter
-        _zone_filter_legend(state)
+            hd.divider()
 
-        # Apply cell filter on top of already pace/structure filtered workouts
-        active_cells = frozenset(state.active_cells)
-        filtered = _filter_by_cells(pre_filtered, active_cells)
+            # Pace-zone legend / conjunctive filter
+            _zone_filter_legend(state)
 
-        # Clamp page if filter changed total
-        total_filtered = len(filtered)
-        total_pages = max(1, (total_filtered + _ROWS_PER_PAGE - 1) // _ROWS_PER_PAGE)
-        if state.page >= total_pages:
-            state.page = max(0, total_pages - 1)
+            # Apply cell filter on top of already pace/structure filtered workouts
+            active_cells = frozenset(state.active_cells)
+            filtered = _filter_by_cells(pre_filtered, active_cells)
 
-        # Structure filter chip
-        if state.structure_filter:
-            with hd.hbox(gap=0.75, wrap="wrap", align="center", padding=(0.5, 0, 0, 0)):
-                hd.text("Structure:", font_size="small", font_color="neutral-500")
-                if hd.button(
-                    f"{state.structure_filter}  ×",
-                    variant="primary",
-                    size="small",
-                ).clicked:
-                    state.structure_filter = None
-                    state.page = 0
-
-        with hd.hbox(align="center", justify="space-between", padding=(0.5, 0)):
-            hd.text(
-                f"{total_filtered} workout{'s' if total_filtered != 1 else ''}",
-                font_size="small",
-                font_color="neutral-500",
+            # Clamp page if filter changed total
+            total_filtered = len(filtered)
+            total_pages = max(
+                1, (total_filtered + _ROWS_PER_PAGE - 1) // _ROWS_PER_PAGE
             )
+            if state.page >= total_pages:
+                state.page = max(0, total_pages - 1)
 
-        total, total_pages = _interval_table(filtered, state)
-        _pagination(state, total, total_pages)
+            # Structure filter chip
+            if state.structure_filter:
+                with hd.hbox(
+                    gap=0.75, wrap="wrap", align="center", padding=(0.5, 0, 0, 0)
+                ):
+                    hd.text("Structure:", font_size="small", font_color="neutral-500")
+                    if hd.button(
+                        f"{state.structure_filter}  ×",
+                        variant="primary",
+                        size="small",
+                    ).clicked:
+                        state.structure_filter = None
+                        state.page = 0
+
+            with hd.hbox(align="center", justify="space-between", padding=(0.5, 0)):
+                hd.text(
+                    f"{total_filtered} workout{'s' if total_filtered != 1 else ''}",
+                    font_size="small",
+                    font_color="neutral-500",
+                )
+
+            total, total_pages = _interval_table(filtered, state)
+            _pagination(state, total, total_pages)
