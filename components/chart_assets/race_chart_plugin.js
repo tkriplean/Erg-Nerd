@@ -212,14 +212,19 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     } else {
       // Time event: event_value is in tenths of seconds
       maxTimeMs = Math.round(eventValue * 100); // tenths → ms
-      // Compute the max distance any boat rows across the whole race.
-      // Used as a fixed normalizer so boats animate smoothly left-to-right
-      // instead of snapping to the right edge when the leader's early distance is tiny.
+      // Use the official finish_dist_m (Python-authoritative) when available,
+      // otherwise fall back to the last stroke's recorded distance.
+      // This is the fixed normalizer — computed once so boats don't snap to the
+      // right edge at t=0 when dividing by a near-zero instantaneous leader dist.
       maxDistForTimeEvent = 1;
       for (const boat of races) {
-        const s = boat.strokes;
-        if (s && s.length > 0) {
-          maxDistForTimeEvent = Math.max(maxDistForTimeEvent, s[s.length - 1].d);
+        if (boat.finish_dist_m != null) {
+          maxDistForTimeEvent = Math.max(maxDistForTimeEvent, boat.finish_dist_m);
+        } else {
+          const s = boat.strokes;
+          if (s && s.length > 0) {
+            maxDistForTimeEvent = Math.max(maxDistForTimeEvent, s[s.length - 1].d);
+          }
         }
       }
     }
@@ -302,9 +307,9 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   // ── Colors ─────────────────────────────────────────────────────────────────
   function bgColor()        { return isDark ? "#1a1a2e" : "#f0f4ff"; }
   function laneLineColor()  { return isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.07)"; }
-  function textColor()      { return isDark ? "rgba(255,255,255,0.82)" : "rgba(0,0,0,0.78)"; }
-  function dimTextColor()   { return isDark ? "rgba(255,255,255,0.40)" : "rgba(0,0,0,0.38)"; }
-  function finishLineColor(){ return isDark ? "rgba(255,255,255,0.30)" : "rgba(0,0,0,0.28)"; }
+  function textColor()      { return isDark ? "rgba(255,255,255,1)" : "rgba(0,0,0,1)"; }
+  function dimTextColor()   { return isDark ? "rgba(255,255,255,1)" : "rgba(0,0,0,1)"; }
+  function finishLineColor(){ return isDark ? "rgba(255,255,255,1)" : "rgba(0,0,0,1)"; }
   function waterColor()     { return isDark ? "rgba(30,60,120,0.25)" : "rgba(180,210,255,0.30)"; }
 
   // ── Canvas DPR helper ──────────────────────────────────────────────────────
@@ -340,11 +345,11 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     ctx2d.fillStyle = color;
     ctx2d.fill();
 
-    if (isPb) {
-      ctx2d.lineWidth = 2;
-      ctx2d.strokeStyle = darkMode ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.95)";
-      ctx2d.stroke();
-    }
+    // if (isPb) {
+    //   ctx2d.lineWidth = 2;
+    //   ctx2d.strokeStyle = darkMode ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.95)";
+    //   ctx2d.stroke();
+    // }
 
     ctx2d.restore();
   }
@@ -383,136 +388,149 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     const TRACK_W  = TRACK_R - TRACK_L;
     const LANE_H   = Math.max(20, Math.min(44, (H - HEADER_H) / numBoats));
     const BOAT_R   = 6;   // half-width of scull hull
-    const PB_R     = 8;   // half-width of PB scull hull
+    const PB_R     = BOAT_R;   // half-width of PB scull hull
 
     // ── Header row ──
-    const eventLabel = _fmtEventLabel();
-    ctx2d.fillStyle = textColor();
-    ctx2d.font = "bold 13px sans-serif";
-    ctx2d.textAlign = "left";
-    ctx2d.fillText(eventLabel, LABEL_W + 6, 17);
+    // const eventLabel = _fmtEventLabel();
+    // ctx2d.fillStyle = textColor();
+    // ctx2d.font = "bold 13px sans-serif";
+    // ctx2d.textAlign = "left";
+    // ctx2d.fillText(eventLabel, LABEL_W + 6, 17);
 
     ctx2d.font = "bold 13px monospace";
     ctx2d.textAlign = "right";
     ctx2d.fillStyle = dimTextColor();
     ctx2d.fillText(fmtTime(timeMs), W - RESULT_W - 6, 17);
 
-    // ── Hull geometry (shared across all boats) ──
-    // hullHL = half-length; stern (back) is at boatCx - hullHL.
-    // Boats are positioned STERN-first: the stern tracks from TRACK_L → TRACK_R.
-    // This means the date label (in the fixed label zone, left of TRACK_L) is
-    // never covered by the boat body, and boats sit fully past the finish line
-    // when they complete the race.
+    // ── Hull geometry constants (used throughout render) ──
     const BASE_HW = BOAT_R;
     const BASE_HL = BASE_HW * 3.2;
-    const PB_HW   = PB_R;
-    const PB_HL   = PB_HW * 3.2;
+    const PB_HW   = BASE_HW;
+    const PB_HL   = BASE_HL;
+    // TRACK_INNER_BASE: the distance the BASE hull centre travels (stern→bow span)
+    // Used to map "metres into race" → canvas X for split lines, consistent with
+    // the per-boat position formula below.
+    const TRACK_INNER_BASE = TRACK_W - 2 * BASE_HL;
 
-    // Precompute finish ranks for medal display (dist events only).
+    // ── Distance normalizer (how far "right edge" represents) ──
+    const normDist = eventType === "dist" ? eventValue : maxDistForTimeEvent;
+
+    // ── Helper: metres → canvas X (BOW position of BASE hull) ──
+    // Consistent with the corrected per-boat boatCx formula:
+    //   centre = TRACK_L + BASE_HL + frac * TRACK_INNER_BASE
+    //   bow    = centre + BASE_HL = TRACK_L + 2*BASE_HL + frac * TRACK_INNER_BASE
+    // At metres=0       → TRACK_L + 2*BASE_HL  (bow starts 2 hull-lengths from track edge)
+    // At metres=normDist → TRACK_R              (bow exactly touches finish/right edge)
+    function distToX(metres) {
+      const frac = Math.min(1, metres / normDist);
+      return TRACK_L + 2 * BASE_HL + frac * TRACK_INNER_BASE;
+    }
+
+    // ── Precompute finish ranks for medal display ──
+    // Dist events: ranked by finish time as boats cross the line.
+    // Time events: ranked by final distance, shown only at end of race.
     const finishRanks = new Map(); // boatId → rank (1 = gold, 2 = silver, 3 = bronze)
+    const atEnd = timeMs >= maxTimeMs - 50;
     if (eventType === "dist") {
       const finishedNow = races
         .filter(b => getBoatDistance(b, timeMs) >= eventValue)
         .map(b => ({ id: b.id, fms: finishTimeMs(b) }))
         .sort((a, b) => a.fms - b.fms);
       finishedNow.forEach(({ id }, idx) => finishRanks.set(id, idx + 1));
+    } else if (atEnd) {
+      // Time event: rank by official final distance (highest = 1st)
+      const ranked = races
+        .map(b => ({
+          id: b.id,
+          d: b.finish_dist_m != null ? b.finish_dist_m : getBoatDistance(b, maxTimeMs),
+        }))
+        .sort((a, b) => b.d - a.d);
+      ranked.forEach(({ id }, idx) => finishRanks.set(id, idx + 1));
     }
 
-    // ── Split interval (distance events) ──
-    // Choose a sensible interval: 500m for ≤2k, 1k for ≤10k, 2k for ≤20k, 5k beyond.
+    // ── Split interval ──
+    // Choose an interval that gives AT LEAST 3 interior checkpoints.
     function getSplitInterval(targetDist) {
-      if (targetDist <= 2000)  return 500;
-      if (targetDist <= 10000) return 1000;
-      if (targetDist <= 20000) return 2000;
-      return 5000;
+      const candidates = [5000, 2000, 1000, 500, 250, 100];
+      for (const c of candidates) {
+        if (Math.floor((targetDist - 1) / c) >= 3) return c;
+      }
+      return Math.max(1, Math.floor(targetDist / 4));
     }
-    const splitInterval = eventType === "dist" ? getSplitInterval(eventValue) : 0;
+    const splitInterval = getSplitInterval(normDist);
 
-    // ── Finish line + split markers (distance events) ──
-    if (eventType === "dist") {
-      // Intermediate split lines
+    // ── Split lines + finish marker ──
+    {
       ctx2d.save();
       ctx2d.setLineDash([3, 5]);
       ctx2d.lineWidth = 1;
       ctx2d.strokeStyle = finishLineColor();
-      ctx2d.font = "9px sans-serif";
+      ctx2d.font = "11px sans-serif";
       ctx2d.textAlign = "center";
       ctx2d.fillStyle = dimTextColor();
-      for (let sd = splitInterval; sd < eventValue; sd += splitInterval) {
-        const sx = TRACK_L + (sd / eventValue) * TRACK_W;
+      for (let sd = splitInterval; sd < normDist; sd += splitInterval) {
+        const sx = distToX(sd);
         ctx2d.beginPath();
         ctx2d.moveTo(sx, HEADER_H);
         ctx2d.lineTo(sx, H);
         ctx2d.stroke();
         const splitLbl = sd >= 1000 ? (sd / 1000) + "k" : sd + "m";
-        ctx2d.fillText(splitLbl, sx, HEADER_H + 10);
+        ctx2d.fillText(splitLbl, sx, HEADER_H - 4);
       }
       ctx2d.setLineDash([]);
       ctx2d.restore();
 
-      // Finish line (solid, slightly more prominent)
-      ctx2d.save();
-      ctx2d.setLineDash([5, 4]);
-      ctx2d.strokeStyle = finishLineColor();
-      ctx2d.lineWidth = 1.5;
-      ctx2d.beginPath();
-      ctx2d.moveTo(TRACK_R, HEADER_H);
-      ctx2d.lineTo(TRACK_R, H);
-      ctx2d.stroke();
-      ctx2d.setLineDash([]);
-      ctx2d.restore();
-
-      ctx2d.fillStyle = dimTextColor();
-      ctx2d.font = "10px sans-serif";
-      ctx2d.textAlign = "center";
-      ctx2d.fillText("FINISH", TRACK_R, HEADER_H + 10);
-    }
-
-    // ── Time event: best-distance marker label ──
-    if (eventType === "time") {
-      ctx2d.fillStyle = dimTextColor();
-      ctx2d.font = "10px sans-serif";
-      ctx2d.textAlign = "right";
-      const bestLabel = maxDistForTimeEvent >= 1000
-        ? (maxDistForTimeEvent / 1000).toFixed(2) + " km"
-        : Math.round(maxDistForTimeEvent) + " m";
-      ctx2d.fillText("best: " + bestLabel, TRACK_R - 4, HEADER_H + 10);
-    }
-
-    // ── Compute per-boat gap at each split (dist events only) ──
-    // gapAtSplit[boatIndex][splitIndex] = gap in seconds behind leader (null = not yet reached)
-    const splitPositions = []; // canvas X for each split line
-    const gapLabels = [];      // [{boatIdx, splitIdx, gapSec}] to render after boats
-    if (eventType === "dist" && splitInterval > 0) {
-      const numSplits = Math.floor((eventValue - 1) / splitInterval); // excludes finish
-      for (let si = 0; si < numSplits; si++) {
-        const splitDist = (si + 1) * splitInterval;
-        splitPositions.push(TRACK_L + (splitDist / eventValue) * TRACK_W);
+      if (eventType === "dist") {
+        // Finish line: bow of BASE hull reaches TRACK_R at dist = normDist
+        const finishX = TRACK_R;
+        ctx2d.save();
+        ctx2d.setLineDash([5, 4]);
+        ctx2d.strokeStyle = finishLineColor();
+        ctx2d.lineWidth = 1.5;
+        ctx2d.beginPath();
+        ctx2d.moveTo(finishX, HEADER_H);
+        ctx2d.lineTo(finishX, H);
+        ctx2d.stroke();
+        ctx2d.setLineDash([]);
+        ctx2d.restore();
+        ctx2d.fillStyle = dimTextColor();
       }
+    }
 
-      // Find the fastest boat's time to each split
-      const leaderTimes = splitPositions.map((_, si) => {
-        const splitDist = (si + 1) * splitInterval;
-        let best = Infinity;
-        for (const boat of races) {
-          const t = timeToReachDist(boat, splitDist);
-          if (t !== null && t < best) best = t;
-        }
-        return best === Infinity ? null : best;
-      });
+    // ── Compute per-boat gap labels at each split ──
+    // A label appears only after the boat's stern has fully cleared the split line
+    // plus a few pixels of padding so it never overlaps the hull in motion.
+    // "Clearance metres" = hull full-length (2 × BASE_HL mapped back to metres) + 8px pad.
+    const splitPositions = [];
+    const numSplitLines = Math.floor((normDist - 1) / splitInterval);
+    for (let si = 0; si < numSplitLines; si++) {
+      splitPositions.push((si + 1) * splitInterval); // metres, not canvas X
+    }
 
-      for (let i = 0; i < numBoats; i++) {
-        for (let si = 0; si < splitPositions.length; si++) {
-          const splitDist = (si + 1) * splitInterval;
-          const boatDist = getBoatDistance(races[i], timeMs);
-          if (boatDist < splitDist) continue; // not reached yet
-          const leaderT = leaderTimes[si];
-          if (leaderT === null) continue;
-          const boatT = timeToReachDist(races[i], splitDist);
-          if (boatT === null) continue;
-          const gap = boatT - leaderT;
-          gapLabels.push({ boatIdx: i, splitIdx: si, gapSec: gap });
-        }
+    // metres that correspond to one hull-length + 8px padding on canvas
+    const clearanceMetres = (2 * BASE_HL + 8) / TRACK_INNER_BASE * normDist;
+
+    const leaderTimes = splitPositions.map(sd => {
+      let best = Infinity;
+      for (const boat of races) {
+        const t = timeToReachDist(boat, sd);
+        if (t !== null && t < best) best = t;
+      }
+      return best === Infinity ? null : best;
+    });
+
+    const gapLabels = [];
+    for (let i = 0; i < numBoats; i++) {
+      const boatDist = getBoatDistance(races[i], timeMs);
+      for (let si = 0; si < splitPositions.length; si++) {
+        const sd = splitPositions[si];
+        // Show only after stern has cleared: boat's bow must be > sd + hull + padding
+        if (boatDist < sd + clearanceMetres) continue;
+        const leaderT = leaderTimes[si];
+        if (leaderT === null) continue;
+        const boatT = timeToReachDist(races[i], sd);
+        if (boatT === null) continue;
+        gapLabels.push({ boatIdx: i, splitIdx: si, gapSec: boatT - leaderT });
       }
     }
 
@@ -542,23 +560,15 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       const hullHL = boat.is_pb ? PB_HL : BASE_HL;
 
       // ── Boat position ──
-      // The hull centre travels from (TRACK_L + hullHL) to (TRACK_R - hullHL).
-      // This guarantees:
-      //   dist = 0           → stern exactly on TRACK_L  (start line)
-      //   dist = eventValue  → bow   exactly on TRACK_R  (finish line)
-      // The label zone (left of TRACK_L) and result zone (right of TRACK_R) are
-      // never overlapped by the boat hull at any point during the race.
-      const TRACK_INNER = TRACK_W - 2 * hullHL; // centre-travel distance
+      // boatCx travels from (TRACK_L + hullHL) to (TRACK_R - hullHL).
+      //   dist = 0         → boatCx = TRACK_L + hullHL  → stern = TRACK_L  (start line)
+      //   dist = normDist  → boatCx = TRACK_R - hullHL  → bow   = TRACK_R  (finish line)
+      // The label zone (left of TRACK_L) is never overlapped by the hull at any point.
       const dist = getBoatDistance(boat, timeMs);
       const finished = eventType === "dist" && dist >= eventValue;
-      let boatCx; // hull centre X
-      if (eventType === "dist") {
-        const clampedDist = Math.min(dist, eventValue);
-        boatCx = TRACK_L + hullHL + (clampedDist / eventValue) * TRACK_INNER;
-      } else {
-        // Time event: same logic, normalised by the best boat's final distance.
-        boatCx = TRACK_L + hullHL + (dist / maxDistForTimeEvent) * TRACK_INNER;
-      }
+      const clampedDist = Math.min(dist, normDist);
+      const TRACK_INNER = TRACK_W - 2 * hullHL;
+      const boatCx = TRACK_L + hullHL + (clampedDist / normDist) * TRACK_INNER;
 
       // ── Wake trail (follows hull centre) ──
       if (!wakeBuffers.has(boat.id)) {
@@ -587,37 +597,34 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
 
       // ── Label (left zone) — always shows date ──
       ctx2d.fillStyle = boat.color;
-      ctx2d.font = `${boat.is_pb ? "bold " : ""}11px sans-serif`;
+      ctx2d.font = `${boat.is_pb ? "bold " : ""}13px sans-serif`;
       ctx2d.textAlign = "right";
       ctx2d.fillText(boat.label, LABEL_W - 8, midY + 4);
 
       // ── Result zone (right of finish line) ──
-      const rank = finishRanks.get(boat.id);
+      // rank is defined for: all finished dist boats, and top-3 time boats at end of race.
+      const rank = finishRanks.get(boat.id); // undefined if not yet ranked
+      const medal = rank === 1 ? " 🥇" : rank === 2 ? " 🥈" : rank === 3 ? " 🥉" : "";
+
       if (eventType === "dist" && finished) {
-        // Medal emoji (top 3) + result time, just past the finish line
-        const medal = rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : null;
         let textX = TRACK_R + 5;
-        if (medal) {
-          const medalSize = Math.max(10, Math.min(14, LANE_H - 6));
-          ctx2d.font = `${medalSize}px sans-serif`;
-          ctx2d.textAlign = "left";
-          ctx2d.fillText(medal, textX, midY + medalSize * 0.38);
-          textX += medalSize + 2;
-        }
         const fms = finishTimeMs(boat);
         ctx2d.fillStyle = boat.is_pb ? "#ffc107" : (rank && rank <= 3 ? textColor() : dimTextColor());
-        ctx2d.font = `${boat.is_pb || (rank && rank <= 3) ? "bold " : ""}10px monospace`;
+        ctx2d.font = `${boat.is_pb || (rank && rank <= 3) ? "bold " : ""}13px monospace`;
         ctx2d.textAlign = "left";
-        ctx2d.fillText(fmtTime(fms), textX, midY + 4);
+        ctx2d.fillText(fmtTime(fms)+medal, textX, midY + 4);
       } else if (eventType === "time") {
-        // Show each boat's current distance
-        const dStr = dist >= 1000
-          ? (dist / 1000).toFixed(2) + "k"
-          : Math.round(dist) + "m";
-        ctx2d.fillStyle = boat.is_pb ? "#ffc107" : dimTextColor();
-        ctx2d.font = "11px monospace";
+        // Show running distance; at end snap to official value and show medals.
+        const displayDist = (atEnd && boat.finish_dist_m != null) ? boat.finish_dist_m : dist;
+        const dStr = displayDist >= 1000
+          ? (displayDist / 1000).toFixed(2) + "k"
+          : Math.round(displayDist) + "m";
+        let textX = TRACK_R + 5;
+        ctx2d.fillStyle = boat.is_pb ? "#ffc107" : (rank && rank <= 3 ? textColor() : dimTextColor());
+        ctx2d.font = `${boat.is_pb || (rank && rank <= 3) ? "bold " : ""}13px monospace`;
         ctx2d.textAlign = "left";
-        ctx2d.fillText(dStr, TRACK_R + 6, midY + 4);
+        ctx2d.fillText(dStr+medal, textX, midY + 4);
+        console.log(textX)
       }
     }
 
@@ -638,20 +645,21 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       const boat = races[boatIdx];
       const laneY = HEADER_H + boatIdx * LANE_H;
       const midY  = laneY + LANE_H / 2;
-      const sx    = splitPositions[splitIdx];
+      const sx    = distToX(splitPositions[splitIdx]); // metres → canvas X
       const label = "+" + gapSec.toFixed(1) + "s";
 
       // Tiny pill background so label is readable over the split line
       ctx2d.font = "9px sans-serif";
       const tw = ctx2d.measureText(label).width;
       const px = 3, py = 2;
-      ctx2d.fillStyle = isDark ? "rgba(20,20,40,0.72)" : "rgba(240,244,255,0.80)";
+      ctx2d.fillStyle = isDark ? "rgba(20,20,40,1)" : "rgba(240,244,255,1)";
       ctx2d.beginPath();
       ctx2d.roundRect(sx - tw / 2 - px, midY - 7 - py, tw + px * 2, 10 + py * 2, 3);
       ctx2d.fill();
 
       ctx2d.fillStyle = hexWithAlpha(boat.color, 0.9);
       ctx2d.textAlign = "center";
+      ctx2d.font = "13px monospace";
       ctx2d.fillText(label, sx, midY + 3);
     }
 

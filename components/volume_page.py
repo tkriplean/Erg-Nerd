@@ -102,7 +102,9 @@ _PERIOD_HEADERS = {
 }
 
 
-def _distribution_table(rows: list, view: str, zone_mode: str = "pace") -> None:
+def _distribution_table(
+    rows: list, view: str, zone_mode: str = "pace intensity"
+) -> None:
     """
     Render a data table with one row per period showing zone breakdowns
     and a training distribution classification.
@@ -125,7 +127,6 @@ def _distribution_table(rows: list, view: str, zone_mode: str = "pace") -> None:
     col_dist = tuple(r["distribution"] for r in rows)
 
     if zone_mode == "hr":
-        print(rows)
         col_z1 = tuple(f"{r['z1_m']}  ({r['z1_pct']})" for r in rows)
         col_z2 = tuple(f"{r['z2_m']}  ({r['z2_pct']})" for r in rows)
         col_z3a = tuple(f"{r['z3a_m']}  ({r['z3a_pct']})" for r in rows)
@@ -234,7 +235,7 @@ def _volume_section(all_workouts: list, profile: dict) -> None:
         monthly_scope="past_year",
         seasonal_scope="all_time",
         machine="All",
-        zone_mode="pace",  # "pace" | "hr"
+        zone_mode="pace intensity",  # "pace" | "hr"
     )
     view = state.view
     current_scope = getattr(state, f"{view}_scope")
@@ -349,9 +350,11 @@ def _volume_section(all_workouts: list, profile: dict) -> None:
 
             # Zone mode radio group (Pace / HR)
             mode_rg = hd.radio_buttons(
-                "Pace",
-                "HR",
-                value="Pace" if state.zone_mode == "pace" else "HR",
+                "Pace Intensity",
+                "HR Intensity",
+                value="Pace Intensity"
+                if state.zone_mode == "pace intensity"
+                else "HR Intensity",
                 font_size="small",
             )
             if mode_rg.changed:

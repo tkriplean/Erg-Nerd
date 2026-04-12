@@ -797,129 +797,132 @@ def _interval_table(workouts: list[dict], state) -> tuple[int, int]:
             hd.text("No workouts match the selected filters.", font_color="neutral-500")
         return total, total_pages
 
-    # Header row
-    with hd.hbox(
-        gap=1,
-        padding=(0.25, 1),
-        border_bottom="1px solid neutral-200",
-        align="center",
-    ):
-        _sort_header("Date", "date", 9, state)
-        _sort_header("Reps", "reps", 4, state)
-        hd.text(
-            "Structure",
-            grow=True,
-            font_size="small",
-            font_weight="bold",
-            font_color="neutral-500",
-        )
-        hd.text(
-            "Stimulus",
-            width=10,
-            font_size="small",
-            font_weight="bold",
-            font_color="neutral-500",
-        )
-        _sort_header("Intensity zones", "zones", 10, state)
-        _sort_header("Work", "work", 6, state)
-        _sort_header("Avg Split", "split", 7, state)
-        _sort_header("Time", "time", 7, state)
-        _sort_header("SPM", "spm", 4, state)
-        _sort_header("HR", "hr", 6, state)
-        hd.box(width=2.5)  # view link column
+    with hd.box():
+        # Header row
+        with hd.hbox(
+            gap=1,
+            padding=(0.25, 1),
+            border_bottom="1px solid neutral-200",
+            align="center",
+        ):
+            _sort_header("Date", "date", 9, state)
+            _sort_header("Reps", "reps", 4, state)
+            hd.text(
+                "Structure",
+                grow=True,
+                font_size="small",
+                font_weight="bold",
+                font_color="neutral-500",
+            )
+            hd.text(
+                "Stimulus",
+                width=10,
+                font_size="small",
+                font_weight="bold",
+                font_color="neutral-500",
+            )
+            _sort_header("Intensity zones", "zones", 10, state)
+            _sort_header("Work", "work", 6, state)
+            _sort_header("Avg Split", "split", 7, state)
+            _sort_header("Time", "time", 7, state)
+            _sort_header("SPM", "spm", 4, state)
+            _sort_header("HR", "hr", 6, state)
+            hd.box(width=2.5)  # view link column
 
-    # Data rows
-    for i, r in enumerate(page_rows):
-        with hd.scope(i):
-            with hd.hbox(
-                gap=1,
-                padding=(0.5, 1),
-                align="center",
-                background_color="neutral-50" if i % 2 else "neutral-0",
-            ):
-                hd.text(
-                    fmt_date(r.get("date", "")),
-                    width=9,
-                    font_size="small",
-                    font_color="neutral-700",
-                )
-                hd.text(
-                    str(r["_reps"]) if r["_reps"] else "—",
-                    width=4,
-                    font_size="small",
-                    font_color="neutral-500",
-                )
-                with hd.box(grow=True):
-                    # _structure_key strips the leading "N × " rep count.
-                    # Clicking it sets a structure filter; click again to clear.
-                    is_struct_active = state.structure_filter == r["_structure_key"]
-                    struct_btn = hd.button(
-                        r["_structure_key"],
-                        variant="text",
-                        size="small",
-                        padding=(0, 0),
-                        font_weight="semibold" if is_struct_active else "normal",
-                        font_color="primary-500" if is_struct_active else "neutral-700",
+        # Data rows
+        for i, r in enumerate(page_rows):
+            with hd.scope(i):
+                with hd.hbox(
+                    gap=1,
+                    padding=(0.5, 1),
+                    align="center",
+                    background_color="neutral-50" if i % 2 else "neutral-0",
+                ):
+                    hd.text(
+                        fmt_date(r.get("date", "")),
+                        width=9,
+                        font_size="small",
+                        font_color="neutral-700",
                     )
-                    if struct_btn.clicked:
-                        if is_struct_active:
-                            state.structure_filter = None
-                        else:
-                            state.structure_filter = r["_structure_key"]
-                        state.page = 0
-                # Stimulus label (from grid classification)
-                stimulus = r.get("_stimulus", "")
-                with hd.box(width=10):
-                    if stimulus and stimulus != "—":
-                        hd.text(
-                            stimulus,
-                            font_size="x-small",
-                            font_color="neutral-500",
-                            font_style="italic",
+                    hd.text(
+                        str(r["_reps"]) if r["_reps"] else "—",
+                        width=4,
+                        font_size="small",
+                        font_color="neutral-500",
+                    )
+                    with hd.box(grow=True):
+                        # _structure_key strips the leading "N × " rep count.
+                        # Clicking it sets a structure filter; click again to clear.
+                        is_struct_active = state.structure_filter == r["_structure_key"]
+                        struct_btn = hd.button(
+                            r["_structure_key"],
+                            variant="text",
+                            size="small",
+                            padding=(0, 0),
+                            font_weight="semibold" if is_struct_active else "normal",
+                            font_color="primary-500"
+                            if is_struct_active
+                            else "neutral-700",
                         )
-                with hd.box(width=10, align="start"):
-                    with hd.tooltip(_zones_tooltip(r["_bin_meters"])):
-                        hd.image(src=r["_bar_uri"], width=10, height=0.75)
-                hd.text(
-                    fmt_distance(r.get("distance")),
-                    width=6,
-                    font_size="small",
-                    font_color="neutral-700",
-                )
-                hd.text(
-                    fmt_split(r["_work_pace"]) if r["_work_pace"] else "—",
-                    width=7,
-                    font_size="small",
-                )
-                hd.text(
-                    r.get("time_formatted")
-                    or (format_time(r["time"]) if r.get("time") else "—"),
-                    width=7,
-                    font_size="small",
-                    font_color="neutral-500",
-                )
-                spm = r.get("_work_spm")
-                hd.text(
-                    f"{spm:.0f}" if spm else "—",
-                    width=4,
-                    font_size="small",
-                    font_color="neutral-500",
-                )
-                hd.text(
-                    fmt_hr(r.get("heart_rate")),
-                    width=6,
-                    font_size="small",
-                    font_color="neutral-500",
-                )
-                hd.link(
-                    "↗",
-                    href=f"/session/{r.get('id')}",
-                    font_size="small",
-                    font_color="neutral-400",
-                    underline=False,
-                    width=2.5,
-                    text_align="center",
-                )
+                        if struct_btn.clicked:
+                            if is_struct_active:
+                                state.structure_filter = None
+                            else:
+                                state.structure_filter = r["_structure_key"]
+                            state.page = 0
+                    # Stimulus label (from grid classification)
+                    stimulus = r.get("_stimulus", "")
+                    with hd.box(width=10):
+                        if stimulus and stimulus != "—":
+                            hd.text(
+                                stimulus,
+                                font_size="x-small",
+                                font_color="neutral-500",
+                                font_style="italic",
+                            )
+                    with hd.box(width=10, align="start"):
+                        with hd.tooltip(_zones_tooltip(r["_bin_meters"])):
+                            hd.image(src=r["_bar_uri"], width=10, height=0.75)
+                    hd.text(
+                        fmt_distance(r.get("distance")),
+                        width=6,
+                        font_size="small",
+                        font_color="neutral-700",
+                    )
+                    hd.text(
+                        fmt_split(r["_work_pace"]) if r["_work_pace"] else "—",
+                        width=7,
+                        font_size="small",
+                    )
+                    hd.text(
+                        r.get("time_formatted")
+                        or (format_time(r["time"]) if r.get("time") else "—"),
+                        width=7,
+                        font_size="small",
+                        font_color="neutral-500",
+                    )
+                    spm = r.get("_work_spm")
+                    hd.text(
+                        f"{spm:.0f}" if spm else "—",
+                        width=4,
+                        font_size="small",
+                        font_color="neutral-500",
+                    )
+                    hd.text(
+                        fmt_hr(r.get("heart_rate")),
+                        width=6,
+                        font_size="small",
+                        font_color="neutral-500",
+                    )
+                    hd.link(
+                        "↗",
+                        href=f"/session/{r.get('id')}",
+                        font_size="small",
+                        font_color="neutral-400",
+                        underline=False,
+                        width=2.5,
+                        text_align="center",
+                    )
 
     return total, total_pages
 
@@ -973,7 +976,7 @@ def intervals_page(client, user_id: str) -> None:
     )
 
     with hd.box(align="center", gap=1, padding=(2, 2, 2, 2)):
-        hd.h1("Relive Your Fondest Interval Sessions")
+        hd.h1("Review Your Fondest Interval Sessions")
 
         with hd.box():
             # Pre-compute non-cell filters so the grid counts stay in sync with

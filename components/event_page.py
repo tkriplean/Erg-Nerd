@@ -2,56 +2,38 @@
 Event Page — Regatta-style race animation for a single ranked event.
 
 Exported:
-    event_page(client, user_id)  — top-level HyperDiv component; call from app.py
+    event_page(client, user_id, excluded_seasons=(), machine="All")
+        Top-level HyperDiv component; call from app.py.
+        excluded_seasons / machine come from the global filter in app.py.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 UI LAYOUT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  Event selector + Filter bar:
-    Event: [2000m ▾]  Include [All|PBs|SBs]  Season [▾]  Machine [▾]
+  Race title:   "A [2k ▾] Race Between [Season Bests ▾]!"  (inline dropdowns)
+                Both dropdowns are interactive — clicking changes event / filter.
+                include_filter options: All Great Efforts | Personal Bests | Season Bests
+                Default include_filter: Season Bests (SBs)
+  Loading bar:  "Fetching stroke data… N / M"  (while fetching)
+  Race canvas:  RaceChart plugin (70vh)
+  Sort toggle:  Sort lanes by [Date | Result]  (below race canvas)
+  Results table (all qualifying workouts; include_filter ignored)
 
-  Race area:
-    [  RaceChart plugin  height="58vh"  ]
-    (while loading: spinner overlay + "Fetching stroke data…")
-
-  Results table:
-    All qualifying workouts in season + machine scope (ignores include_filter).
-    Sorted ascending by time (dist events) or descending by distance (time events).
-    PB row highlighted.
+Season and machine filtering are applied globally via app.py params.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STATE VARIABLES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  event_type             str    "dist" | "time" — selected event category
-  event_value            int    meters (dist) or tenths-of-sec (time)
-
-  excluded_seasons       tuple  seasons hidden from view (sorted)
-  machine                str    "All" or machine type string (e.g. "rower")
-  include_filter         str    "All" | "PBs" | "SBs" — governs race boats
-  sort_mode              str    "date" (newest lane 1) | "result" (best lane 1)
-
-  strokes_cache_loaded   bool   True after localStorage read completes
-  strokes_by_id          dict   {str(workout_id): [{t, d}, …]} in-memory cache
-  fetch_queue            tuple  Workout IDs (int) still waiting to be fetched
-  fetch_total            int    Total IDs in current fetch batch (for % bar)
-  fetch_done             int    How many have been fetched so far
-  last_batch_key         str    Identifies the current fetch batch; changes when
-                                filters change so a new batch is initialised
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-DATA FLOW
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  concept2_sync() → all_workouts
-      ↓  filter by event + season + machine + include_filter
-  qualifying_wkts (race boats)
-      ↓  check strokes_by_id for missing IDs
-  fetch_one_stroke() [hd.task] → one workout fetched per render, queue advances
-      ↓
-  build_races_data() → RaceChart plugin
-      ↓
-  Results table from season+machine filtered workouts (all, not just PBs/SBs)
+  event_type      str    "dist" | "time"
+  event_value     int    meters or tenths-of-sec
+  include_filter  str    "All" | "PBs" | "SBs"
+  sort_mode       str    "date" | "result"
+  strokes_cache_loaded  bool
+  strokes_by_id         dict  {str(id): [{t,d}]}
+  fetch_queue           tuple[int]
+  fetch_total / fetch_done  int
+  last_batch_key        str
 """
 
 from __future__ import annotations
@@ -68,8 +50,8 @@ from services.rowing_utils import (
     compute_pace,
     compute_watts,
 )
-from services.ranked_filters import is_ranked_noninterval, seasons_from, apply_quality_filters
-from services.formatters import format_time, machine_label, fmt_split
+from services.ranked_filters import is_ranked_noninterval, apply_quality_filters
+from services.formatters import format_time, fmt_split
 from services.stroke_utils import build_races_data, fetch_one_stroke
 from services.local_storage_compression import (
     compress_strokes_cache,
@@ -135,11 +117,6 @@ def _event_workouts(workouts: list, etype: str, evalue: int, machine: str) -> li
         elif etype == "time" and w.get("time") == evalue and d not in RANKED_DIST_SET:
             out.append(w)
     return out
-
-
-def _season_filtered(workouts: list, excluded_seasons: tuple) -> list:
-    excl = set(excluded_seasons)
-    return [w for w in workouts if get_season(w.get("date", "")) not in excl]
 
 
 def _include_filtered(workouts: list, include_filter: str) -> list:
@@ -232,28 +209,38 @@ def _results_table(workouts: list, etype: str, pb_id: int | None) -> None:
 # ── Main page entry point ─────────────────────────────────────────────────────
 
 
-def event_page(client, user_id: str) -> None:
+def event_page(
+    client,
+    user_id: str,
+    excluded_seasons: tuple = (),
+    machine: str = "All",
+) -> None:
     """
-    Top-level entry point for the Event tab.
+    Top-level entry point for the Event (Race) tab.
+
+    Parameters
+    ----------
+    excluded_seasons  Global season filter from app.py (tuple of "YYYY-YY" strings).
+    machine           Global machine filter from app.py ("All" or machine type string).
 
     Renders:
-      1. Filter bar (event selector, include filter, season, machine)
-      2. RaceChart plugin (regatta animation)
-      3. Results table
+      1. Filter bar (event selector + include filter)
+      2. Race title
+      3. RaceChart plugin
+      4. Sort toggle (below the race)
+      5. Results table
     """
     state = hd.state(
         event_type=_DEFAULT_EVENT_TYPE,
         event_value=_DEFAULT_EVENT_VALUE,
-        excluded_seasons=(),
-        machine="All",
         include_filter="All",
         sort_mode="date",  # "date" | "result"
         strokes_cache_loaded=False,
         strokes_by_id={},
-        fetch_queue=(),       # tuple of workout dicts still to fetch
-        fetch_total=0,        # size of the current batch
-        fetch_done=0,         # completed fetches in current batch
-        last_batch_key="",    # changes when the qualifying set changes
+        fetch_queue=(),  # tuple of int workout IDs still to fetch
+        fetch_total=0,  # size of the current fetch batch
+        fetch_done=0,  # completed fetches in current batch
+        last_batch_key="",  # changes when qualifying set changes
     )
 
     is_dark = hd.theme().is_dark
@@ -278,8 +265,6 @@ def event_page(client, user_id: str) -> None:
     all_workouts = list(sorted_workouts)
 
     # ── Apply quality filter (same strategy as Performance page) ─────────────
-    # This excludes warmup rows and non-max-effort sessions before event counting
-    # and any subsequent filtering.
     all_ranked_raw = [w for w in all_workouts if is_ranked_noninterval(w)]
     all_ranked = apply_quality_filters(
         all_ranked_raw,
@@ -287,6 +272,15 @@ def event_page(client, user_id: str) -> None:
         selected_times=set(),
         excluded_seasons=set(),
     )
+
+    # ── Apply global filters ──────────────────────────────────────────────────
+    if excluded_seasons:
+        _excl = set(excluded_seasons)
+        all_ranked = [
+            w for w in all_ranked if get_season(w.get("date", "")) not in _excl
+        ]
+    if machine != "All":
+        all_ranked = [w for w in all_ranked if w.get("type", "rower") == machine]
 
     # ── Compute available events ──────────────────────────────────────────────
     event_counts: dict = {}
@@ -313,173 +307,14 @@ def event_page(client, user_id: str) -> None:
     ):
         state.event_type, state.event_value = available_events[0]
 
-    # ── Season + machine helpers ──────────────────────────────────────────────
-    all_seasons_global = seasons_from(all_ranked)  # newest-first
-    machine_types = sorted(
-        {w.get("type", "rower") for w in all_ranked if w.get("type")}
-    )
-
-    # ── Filter bar ────────────────────────────────────────────────────────────
-    with hd.box(
-        padding=1,
-        border="1px solid neutral-200",
-        border_radius="medium",
-        background_color="neutral-50",
-        margin_bottom=1,
-    ):
-        with hd.hbox(gap=2, align="center", wrap="wrap"):
-            # ── Event selector ──────────────────────────────────────────────
-            hd.text("Event", font_weight="semibold", font_size="small")
-            _cur_lbl = _fmt_event(state.event_type, state.event_value)
-            with hd.scope("event_dd"):
-                with hd.dropdown() as _ev_dd:
-                    _ev_btn = hd.button(
-                        _cur_lbl, caret=True, size="medium", slot=_ev_dd.trigger
-                    )
-                    if _ev_btn.clicked:
-                        _ev_dd.opened = not _ev_dd.opened
-                    with hd.box(
-                        padding=0.5,
-                        gap=0.1,
-                        min_width=13,
-                        background_color="neutral-50",
-                    ):
-                        for etype, evalue in available_events:
-                            count = event_counts.get((etype, evalue), 0)
-                            row_lbl = f"{_fmt_event_long(etype, evalue)}  ({count})"
-                            is_sel = (
-                                state.event_type == etype
-                                and state.event_value == evalue
-                            )
-                            with hd.scope(f"ev_{etype}_{evalue}"):
-                                _item = hd.button(
-                                    row_lbl,
-                                    size="small",
-                                    variant="primary" if is_sel else "text",
-                                    width="100%",
-                                )
-                                if _item.clicked:
-                                    state.event_type = etype
-                                    state.event_value = evalue
-                                    state.last_batch_key = ""  # force new batch
-                                    _ev_dd.opened = False
-
-            hd.text("|", font_color="neutral-300")
-
-            # ── Include filter ──────────────────────────────────────────────
-            hd.text("Include", font_weight="semibold", font_size="small")
-            with hd.scope("include_filter"):
-                with radio_group(value=state.include_filter, size="medium") as rg:
-                    hd.radio_button("All")
-                    hd.radio_button("PBs")
-                    hd.radio_button("SBs")
-                if rg.changed:
-                    state.include_filter = rg.value
-
-            hd.text("|", font_color="neutral-300")
-
-            # ── Season dropdown ─────────────────────────────────────────────
-            if all_seasons_global:
-                _excl_valid = set(state.excluded_seasons) & set(all_seasons_global)
-                _n_sel = len(all_seasons_global) - len(_excl_valid)
-                _seas_lbl = (
-                    "All"
-                    if not _excl_valid
-                    else f"{_n_sel} of {len(all_seasons_global)}"
-                )
-                hd.text("Season", font_weight="semibold", font_size="small")
-                with hd.scope("season_dd"):
-                    with hd.dropdown() as _se_dd:
-                        _se_btn = hd.button(
-                            _seas_lbl, caret=True, size="medium", slot=_se_dd.trigger
-                        )
-                        if _se_btn.clicked:
-                            _se_dd.opened = not _se_dd.opened
-                        with hd.box(padding=1, gap=0.5, background_color="neutral-50"):
-                            with hd.hbox(gap=0.5, padding_bottom=0.5):
-                                if hd.button(
-                                    "Select all", size="small", variant="text"
-                                ).clicked:
-                                    state.excluded_seasons = ()
-                                if hd.button(
-                                    "Clear all", size="small", variant="text"
-                                ).clicked:
-                                    state.excluded_seasons = tuple(all_seasons_global)
-                            _shown = [
-                                (n, lbl)
-                                for n, lbl in [
-                                    (1, "Last season"),
-                                    (2, "Last 2"),
-                                    (5, "Last 5"),
-                                ]
-                                if len(all_seasons_global) >= n
-                            ]
-                            if _shown:
-                                with hd.hbox(gap=0.5, padding_bottom=0.5, wrap="wrap"):
-                                    for _cn, _clbl in _shown:
-                                        with hd.scope(f"conv_{_cn}"):
-                                            if hd.button(
-                                                _clbl, size="medium", variant="text"
-                                            ).clicked:
-                                                state.excluded_seasons = tuple(
-                                                    sorted(all_seasons_global[_cn:])
-                                                )
-                            with hd.hbox(gap=0.75):
-                                with hd.scope(str(state.excluded_seasons)):
-                                    for season in all_seasons_global:
-                                        with hd.scope(f"s_{season}"):
-                                            _is_sel = (
-                                                season not in state.excluded_seasons
-                                            )
-                                            cb = hd.checkbox(season, checked=_is_sel)
-                                            if cb.changed:
-                                                _excl = set(state.excluded_seasons)
-                                                if cb.checked:
-                                                    _excl.discard(season)
-                                                else:
-                                                    _excl.add(season)
-                                                state.excluded_seasons = tuple(
-                                                    sorted(_excl)
-                                                )
-                                            if cb.checked != _is_sel:
-                                                cb.checked = _is_sel
-
-            # ── Machine filter ──────────────────────────────────────────────
-            if len(machine_types) > 1:
-                hd.text("|", font_color="neutral-300")
-                with hd.scope("machine_filter"):
-                    machine_sel = hd.select(value=state.machine, size="small")
-                    with machine_sel:
-                        hd.option("All Machines", value="All")
-                        for mt in machine_types:
-                            hd.option(machine_label(mt), value=mt)
-                    if machine_sel.changed:
-                        state.machine = machine_sel.value
-            else:
-                state.machine = "All"
-
-            hd.text("|", font_color="neutral-300")
-
-            # ── Sort order toggle ───────────────────────────────────────────
-            hd.text("Sort", font_weight="semibold", font_size="small")
-            with hd.scope("sort_mode"):
-                with radio_group(value=state.sort_mode, size="medium") as sort_rg:
-                    hd.radio_button("date", value="date")
-                    hd.radio_button("result", value="result")
-                if sort_rg.changed:
-                    state.sort_mode = sort_rg.value
-
     # ── Derived workout sets ───────────────────────────────────────────────────
-    # Table scope: event + machine + season (include_filter ignored)
-    table_wkts = _event_workouts(
-        all_ranked, state.event_type, state.event_value, state.machine
-    )
-    table_wkts = _season_filtered(table_wkts, state.excluded_seasons)
+    # Table scope: event + global filters (include_filter ignored for table)
+    table_wkts = _event_workouts(all_ranked, state.event_type, state.event_value, "All")
 
     # Race scope: additionally apply include_filter
     race_wkts = _include_filtered(table_wkts, state.include_filter)
 
-    # Season color palette (sorted chronologically = lexicographically for "YYYY-YY")
+    # Season color palette
     wkt_seasons = sorted(
         {
             get_season(w.get("date", ""))
@@ -506,20 +341,16 @@ def event_page(client, user_id: str) -> None:
         pb_id = pb.get("id") if pb else None
 
     # ── Phase 2: one-at-a-time stroke fetch with real progress bar ────────────
-    # The fetch queue stores workout IDs (ints).  Each ID gets its own
-    # hd.scope so HyperDiv creates a fresh task per workout, avoiding the
-    # "done task can't restart" problem.
     _all_race_ids = tuple(sorted(w.get("id") for w in race_wkts if w.get("id")))
     _batch_key = f"{state.event_type}_{state.event_value}_{_all_race_ids}"
 
-    # When the qualifying set changes, initialise a fresh fetch queue.
     if _batch_key != state.last_batch_key:
         missing_ids = tuple(
             w.get("id")
             for w in race_wkts
             if w.get("id") and str(w.get("id")) not in state.strokes_by_id
         )
-        state.fetch_queue = missing_ids   # tuple of ints
+        state.fetch_queue = missing_ids
         state.fetch_total = len(missing_ids)
         state.fetch_done = 0
         state.last_batch_key = _batch_key
@@ -528,12 +359,9 @@ def event_page(client, user_id: str) -> None:
 
     if state.fetch_queue:
         next_id = state.fetch_queue[0]
-        # Scope key changes per workout → fresh task for each one.
         with hd.scope(f"fetch_{next_id}"):
             stroke_task = hd.task()
-            next_wkt = next(
-                (w for w in race_wkts if w.get("id") == next_id), None
-            )
+            next_wkt = next((w for w in race_wkts if w.get("id") == next_id), None)
             if not stroke_task.running and not stroke_task.done and next_wkt:
                 stroke_task.run(fetch_one_stroke, client, int(user_id), next_wkt)
 
@@ -556,8 +384,6 @@ def event_page(client, user_id: str) -> None:
     )
 
     # ── Sort race workouts for lane assignment ─────────────────────────────────
-    # "date" mode: newest piece in lane 1 (top), oldest at bottom.
-    # "result" mode: best result in lane 1, worst at bottom.
     if state.sort_mode == "result":
         if state.event_type == "dist":
             sorted_race_wkts = sorted(
@@ -569,53 +395,168 @@ def event_page(client, user_id: str) -> None:
             )
     else:  # "date" — newest first
         sorted_race_wkts = sorted(
-            race_wkts,
-            key=lambda w: w.get("date") or "",
-            reverse=True,
+            race_wkts, key=lambda w: w.get("date") or "", reverse=True
         )
 
     # ── Build races payload ────────────────────────────────────────────────────
-    # Build with whatever strokes we have so far — workouts still in the queue
-    # will use synthesised pacing until their real data arrives.
     races_data = (
         build_races_data(sorted_race_wkts, state.strokes_by_id, wkt_seasons)
         if sorted_race_wkts
         else []
     )
 
-    # ── Loading progress bar (matches concept2_sync style) ───────────────────
-    if is_loading:
-        with hd.box(align="center", padding=2, gap=1, margin_bottom=0.5):
-            with hd.box(width=32):
-                hd.progress_bar(value=fetch_pct)
-            hd.text(
-                f"Fetching stroke data… {state.fetch_done} / {state.fetch_total}",
-                font_color="neutral-500",
-                font_size="small",
-            )
+    # ── Race title (interactive) ───────────────────────────────────────────────
+    # "A [2k ▾] Race Between [Season Bests ▾]!"
+    _include_long = {
+        "All": "All Great Efforts",
+        "SBs": "Season Bests",
+    }
+    _cur_event_lbl = _fmt_event_long(state.event_type, state.event_value)
+    _cur_include_lbl = _include_long.get(state.include_filter, state.include_filter)
 
-    RaceChart(
-        races=races_data,
-        event_type=state.event_type,
-        event_value=state.event_value,
-        is_dark=is_dark,
-        height="70vh",
-    )
+    with hd.box(align="center", gap=1, padding=2):
+        with hd.h1():
+            with hd.hbox(gap=0.6, align="center", wrap="wrap"):
+                hd.text("A ")
 
-    # ── Results table ─────────────────────────────────────────────────────────
-    if table_wkts:
-        hd.text(
-            f"{len(table_wkts)} result(s) — {_fmt_event_long(state.event_type, state.event_value)}",
-            font_weight="semibold",
-            font_size="small",
-            font_color="neutral-600",
-            padding_top=1.5,
-            padding_bottom=0.5,
+                # ── Event selector dropdown ─────────────────────────────────────
+                with hd.scope("event_dd"):
+                    with hd.dropdown() as _ev_dd:
+                        _ev_btn = hd.button(
+                            _cur_event_lbl,
+                            caret=True,
+                            size="large",
+                            font_color="neutral-800",
+                            font_size=2,
+                            font_weight="bold",
+                            slot=_ev_dd.trigger,
+                        )
+                        if _ev_btn.clicked:
+                            _ev_dd.opened = not _ev_dd.opened
+                        with hd.box(
+                            gap=0.1,
+                            min_width=17,
+                            background_color="neutral-0",
+                        ):
+                            for etype, evalue in available_events:
+                                count = event_counts.get((etype, evalue), 0)
+                                row_lbl = f"{_fmt_event_long(etype, evalue)}  ({count})"
+                                is_sel = (
+                                    state.event_type == etype
+                                    and state.event_value == evalue
+                                )
+                                with hd.scope(f"ev_{etype}_{evalue}"):
+                                    _ev_item = hd.button(
+                                        row_lbl,
+                                        size="small",
+                                        variant="primary" if is_sel else "text",
+                                        width="100%",
+                                        border_radius="small",
+                                        font_size="medium",
+                                        font_color="neutral-0"
+                                        if is_sel
+                                        else "neutral-800",
+                                        label_style=hd.style(
+                                            padding_top=0.5, padding_bottom=0.5
+                                        ),
+                                        hover_background_color="neutral-100",
+                                    )
+                                    if _ev_item.clicked:
+                                        state.event_type = etype
+                                        state.event_value = evalue
+                                        state.last_batch_key = ""
+                                        _ev_dd.opened = False
+
+                hd.text(" Race Between ")
+
+                # ── Include filter dropdown ─────────────────────────────────────
+                with hd.scope("include_dd"):
+                    with hd.dropdown() as _inc_dd:
+                        _inc_btn = hd.button(
+                            _cur_include_lbl,
+                            caret=True,
+                            size="large",
+                            font_color="neutral-800",
+                            font_size=2,
+                            font_weight="bold",
+                            slot=_inc_dd.trigger,
+                        )
+                        if _inc_btn.clicked:
+                            _inc_dd.opened = not _inc_dd.opened
+                        with hd.box(
+                            gap=0.1,
+                            background_color="neutral-0",
+                            min_width=20,
+                        ):
+                            for val, lbl in _include_long.items():
+                                with hd.scope(f"inc_{val}"):
+                                    _inc_item = hd.button(
+                                        lbl,
+                                        size="small",
+                                        variant="primary"
+                                        if state.include_filter == val
+                                        else "text",
+                                        width="100%",
+                                        border_radius="small",
+                                        font_size="medium",
+                                        font_color="neutral-0"
+                                        if state.include_filter == val
+                                        else "neutral-800",
+                                        label_style=hd.style(
+                                            padding_top=0.5, padding_bottom=0.5
+                                        ),
+                                        hover_background_color="neutral-100",
+                                    )
+                                    if _inc_item.clicked:
+                                        state.include_filter = val
+                                        _inc_dd.opened = False
+
+                hd.text("!")
+
+        # ── Loading progress bar ──────────────────────────────────────────────────
+        if is_loading:
+            with hd.box(align="center", padding=2, gap=1, margin_bottom=0.5):
+                with hd.box(width=32):
+                    hd.progress_bar(value=fetch_pct)
+                hd.text(
+                    f"Fetching stroke data… {state.fetch_done} / {state.fetch_total}",
+                    font_color="neutral-500",
+                    font_size="small",
+                )
+
+        # ── Race canvas ───────────────────────────────────────────────────────────
+        RaceChart(
+            races=races_data,
+            event_type=state.event_type,
+            event_value=state.event_value,
+            is_dark=is_dark,
+            height="70vh",
         )
-        _results_table(table_wkts, state.event_type, pb_id)
-    elif not is_loading:
-        with hd.box(padding=3, align="center"):
+
+        # ── Sort toggle (below the race) ──────────────────────────────────────────
+        with hd.hbox(gap=2, align="center", padding_top=0.75, padding_bottom=0.5):
+            hd.text("Sort lanes by", font_size="small", font_color="neutral-500")
+            with hd.scope("sort_mode"):
+                with radio_group(value=state.sort_mode, size="small") as sort_rg:
+                    hd.radio_button("Date", value="date")
+                    hd.radio_button("Result", value="result")
+                if sort_rg.changed:
+                    state.sort_mode = sort_rg.value
+
+        # ── Results table ─────────────────────────────────────────────────────────
+        if table_wkts:
             hd.text(
-                f"No {_fmt_event_long(state.event_type, state.event_value)} results in the selected scope.",
-                font_color="neutral-500",
+                f"{len(table_wkts)} result(s) — {_fmt_event_long(state.event_type, state.event_value)}",
+                font_weight="semibold",
+                font_size="small",
+                font_color="neutral-600",
+                padding_top=0.5,
+                padding_bottom=0.5,
             )
+            _results_table(table_wkts, state.event_type, pb_id)
+        elif not is_loading:
+            with hd.box(padding=3, align="center"):
+                hd.text(
+                    f"No {_fmt_event_long(state.event_type, state.event_value)} results in the selected scope.",
+                    font_color="neutral-500",
+                )
