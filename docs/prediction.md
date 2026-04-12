@@ -289,4 +289,4 @@ contributed.
 | `services/rowing_utils.py` | `pauls_law_pace` (now takes optional `k` param), `compute_pauls_constant`, `loglog_fit`, `loglog_predict_pace`, pace/watts conversions, RANKED_DISTANCES / RANKED_TIMES constants |
 | `services/critical_power_model.py` | Two-component CP model, fitting, curve generation, crossover and sprint/stayer metrics |
 | `components/ranked_chart_builder.py` | `build_prediction_table_data` (all four predictors, both event types), `build_chart_config` (chart datasets including prediction curves and components), `compute_lifetime_bests`, `_rl_interp_pace` |
-| `components/performance_page.py` | State management, chart settings UI, prediction table renderer, event toggles, accuracy row |
+| `components/power_curve_page.py` | State management, chart settings UI, prediction table renderer, event toggles, accuracy row |

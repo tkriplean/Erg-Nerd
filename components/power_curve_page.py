@@ -2,21 +2,21 @@
 Performance Page — UI and orchestration for the ranked-events view.
 
 Exported:
-  performance_page()   — top-level HyperDiv component; call from app.py
+  power_curve_page()   — top-level HyperDiv component; call from app.py
 
-See docs/performance_page.md for a full reference.
+See docs/power_curve_page.md for a full reference.
 
 Helper logic is split across:
   services/formatters.py              — formatting helpers
   components/workout_table            — result_table
   services/ranked_filters.py          — quality filters + season helpers
   services/ranked_predictions.py      — multi-model prediction computation
-  components/performance_chart_builder.py  — chart config builder
+  components/power_curve_chart_builder.py  — chart config builder
   services/critical_power_model.py    — CP model fitting
   services/ranked_predictions.py      — build_prediction_table_data
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-UI LAYOUT (inside performance_page)
+UI LAYOUT (inside power_curve_page)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   Filter bar:
@@ -26,7 +26,7 @@ UI LAYOUT (inside performance_page)
     Header: "Qualifying Performances through <date>"
     RowingLevel warning (only when predictor == "rowinglevel" and profile incomplete)
     Transport bar: ▶/⏸  speed-cycle-button  ──── DateSlider ────
-    PerformanceChart (75vh)
+    PowerCurveChart (75vh)
 
     Settings Row 1:
       [ [log] Intensity: [Pace|Watts] ]  |  [ [log] Length: [Distance|Duration] ]
@@ -40,7 +40,7 @@ UI LAYOUT (inside performance_page)
   Workout count / result_table()
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STATE VARIABLES  (declared at the top of performance_page())
+STATE VARIABLES  (declared at the top of power_curve_page())
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   dist_enabled       tuple[bool]   one flag per RANKED_DISTANCES entry (index-aligned)
@@ -94,8 +94,8 @@ SEASONS
 CHART / PREDICTION
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  Chart rendered by PerformanceChart (components/performance_chart_plugin.py), an hd.Plugin
-  wrapping Chart.js with custom JS in chart_assets/performance_chart_plugin.js.
+  Chart rendered by PowerCurveChart (components/power_curve_chart_plugin.py), an hd.Plugin
+  wrapping Chart.js with custom JS in chart_assets/power_curve_chart_plugin.js.
 
   Custom JS features:
     - canvasLabelsPlugin: stable overlay labels stored in a Map keyed by
@@ -152,7 +152,7 @@ from services.rowing_utils import (
 )
 from components.concept2_sync import concept2_sync
 from services.critical_power_model import fit_critical_power
-from components.performance_chart_plugin import PerformanceChart
+from components.power_curve_chart_plugin import PowerCurveChart
 from components.date_slider_plugin import DateSlider
 from components.workout_table import result_table
 from services.ranked_filters import (
@@ -161,7 +161,7 @@ from services.ranked_filters import (
     apply_quality_filters,
     sim_workouts_at,
 )
-from components.performance_chart_builder import (
+from components.power_curve_chart_builder import (
     build_sb_annotations,
     ol_event_line,
     pcts,
@@ -645,7 +645,7 @@ def _chart_section(
 ) -> None:
     """
     Renders the performance chart box: header, RL status, transport bar,
-    PerformanceChart, settings row, and components toggle.
+    PowerCurveChart, settings row, and components toggle.
     """
     is_dark = hd.theme().is_dark
 
@@ -762,7 +762,7 @@ def _chart_section(
         # ---- chart ----
         if chart_cfg:
             print("rendering")
-            PerformanceChart(
+            PowerCurveChart(
                 config=chart_cfg,
                 show_watts=show_watts,
                 x_mode=state.chart_x_mode,
@@ -1337,7 +1337,7 @@ def _prediction_table(
 # ---------------------------------------------------------------------------
 
 
-def performance_page(client, user_id: str) -> None:
+def power_curve_page(client, user_id: str) -> None:
     """
     Top-level entry point for the Performance tab.
     Fetches data, computes all derived state, then calls sub-components.
@@ -1555,7 +1555,7 @@ def performance_page(client, user_id: str) -> None:
         state.cp_fit_result = fit_critical_power(_cp_pb_list)
     _cp_params = state.cp_fit_result
 
-    # ---- RowingLevel scrape (runs at performance_page scope, result passed down) ----
+    # ---- RowingLevel scrape (runs at power_curve_page scope, result passed down) ----
     rl_task = None
     rl_predictions: dict = {}
     if _at_today and profile_complete(profile):

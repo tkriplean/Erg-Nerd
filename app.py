@@ -39,7 +39,7 @@ from services.concept2 import (
 from services.local_storage_compression import compress_workouts, decompress_workouts
 from components.intervals_page import intervals_page
 from components.profile_page import profile_page
-from components.performance_page import performance_page
+from components.power_curve_page import power_curve_page
 from components.race_page import race_page
 from components.ergnerd_animation import ergnerd_animation
 from components.workout_page import workout_page
@@ -185,12 +185,12 @@ _PAGES_ROUTES: dict[str, str] = {
     "Sessions": "/sessions",
     "Volume": "/volume",
     "Intervals": "/intervals",
-    "Performance": "/performance",
+    "Power Curve": "/performance",
     "Race": "/race",
     "Profile": "/profile",
 }
 _ROUTES_PAGES: dict[str, str] = {v: k for k, v in _PAGES_ROUTES.items()}
-_DEFAULT_PAGE = "Performance"
+_DEFAULT_PAGE = "Power Curve"
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +216,9 @@ def _global_filter_ui(gstate, all_seasons: list, machine_types: list) -> None:
         elif len(all_seasons) - len(_excl) == 1:
             _seas_btn_lbl = next(s for s in all_seasons if s not in _excl)
         else:
-            _seas_btn_lbl = f"{len(all_seasons) - len(_excl)} of {len(all_seasons)} seasons"
+            _seas_btn_lbl = (
+                f"{len(all_seasons) - len(_excl)} of {len(all_seasons)} seasons"
+            )
 
         with hd.scope("global_season_dd"):
             with hd.dropdown() as _se_dd:
@@ -230,11 +232,13 @@ def _global_filter_ui(gstate, all_seasons: list, machine_types: list) -> None:
                 if _se_btn.clicked:
                     _se_dd.opened = not _se_dd.opened
 
-                with hd.box(padding=1, gap=0.5, background_color="neutral-50", min_width=14):
+                with hd.box(
+                    padding=1, gap=0.5, background_color="neutral-50", min_width=14
+                ):
                     # Convenience shortcuts
                     _shortcuts = [
-                        ("All Seasons",    0),
-                        ("Last Season",    1),
+                        ("All Seasons", 0),
+                        ("Last Season", 1),
                         ("Last 2 Seasons", 2),
                         ("Last 5 Seasons", 5),
                     ]
@@ -242,10 +246,10 @@ def _global_filter_ui(gstate, all_seasons: list, machine_types: list) -> None:
                         for _lbl, _n in _shortcuts:
                             if _n == 0 or len(all_seasons) >= _n:
                                 with hd.scope(f"shortcut_{_n}"):
-                                    _active = (
-                                        (_n == 0 and not _excl) or
-                                        (_n > 0 and len(_excl) == max(0, len(all_seasons) - _n) and
-                                         all(s in _excl for s in all_seasons[_n:]))
+                                    _active = (_n == 0 and not _excl) or (
+                                        _n > 0
+                                        and len(_excl) == max(0, len(all_seasons) - _n)
+                                        and all(s in _excl for s in all_seasons[_n:])
                                     )
                                     if hd.button(
                                         _lbl,
@@ -284,6 +288,7 @@ def _global_filter_ui(gstate, all_seasons: list, machine_types: list) -> None:
     if len(machine_types) > 1:
         with hd.scope("global_machine_sel"):
             from services.formatters import machine_label
+
             machine_sel = hd.select(value=gstate.machine, size="small")
             with machine_sel:
                 hd.option("All Machines", value="All")
@@ -308,7 +313,7 @@ def _dashboard_view(client, user_id: str, app_state) -> None:
     # Shared across all pages; lives here so it persists across tab switches.
     gfilter = hd.state(
         excluded_seasons=(),  # tuple[str] of "YYYY-YY" seasons to hide
-        machine="All",        # "All" or a machine-type string
+        machine="All",  # "All" or a machine-type string
     )
 
     # Determine the full season list and machine types from localStorage workouts
@@ -321,6 +326,7 @@ def _dashboard_view(client, user_id: str, app_state) -> None:
     if _ls_wkts_meta.done and _ls_wkts_meta.result:
         try:
             from services.rowing_utils import get_season
+
             _wkts = decompress_workouts(_ls_wkts_meta.result)
             _season_set: set = set()
             _mtype_set: set = set()
@@ -415,8 +421,8 @@ def _dashboard_view(client, user_id: str, app_state) -> None:
             sessions_page(client, user_id)
         elif current_page == "Intervals":
             intervals_page(client, user_id)
-        elif current_page == "Performance":
-            performance_page(client, user_id)
+        elif current_page == "Power Curve":
+            power_curve_page(client, user_id)
         elif current_page == "Race":
             race_page(
                 client,
@@ -490,7 +496,7 @@ hd.run(
     index_page=hd.index_page(
         title="Erg Nerd",
         description="Personal Concept2 rowing analytics — performance charts, fitness level predictions, and workout history.",
-        keywords=["rowing", "Concept2", "erg", "performance", "analytics", "training"],
+        keywords=["rowing", "Concept2", "erg", "Power Curve", "analytics", "training"],
         url=f"http://localhost:{_PORT}",
         image=f"http://localhost:{_PORT}/assets/static_logo.png",
         favicon="/assets/nerdemoji.png",

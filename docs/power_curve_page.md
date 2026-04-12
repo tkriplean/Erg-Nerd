@@ -18,7 +18,7 @@ Chart box:
     Header: "Qualifying Performances through <date>"
     RowingLevel profile warning (only when RL predictor selected and profile incomplete)
     Transport bar: [▶ Play / ⏸ Pause]  [speed]  ─── DateSlider ───
-    PerformanceChart (75vh — Chart.js scatter/line)
+    PowerCurveChart (75vh — Chart.js scatter/line)
 
     Row 1 settings:
         Intensity: [Pace | Watts]  Log Y   |   Length: [Distance | Duration]  Log X
@@ -39,7 +39,7 @@ Workout list (raw qualifying performances matched by current filters)
 
 ## 2. State Variables
 
-All state is declared as `hd.state(...)` at the top of `performance_page()`.
+All state is declared as `hd.state(...)` at the top of `power_curve_page()`.
 
 | Variable | Type | Default | Purpose |
 |---|---|---|---|
@@ -89,7 +89,7 @@ concept2_sync(client)
               ├─ fetch_all_pb_predictions(...)    →  rl_predictions  (async task)
               ├─ compute_pauls_constant()         →  _pauls_k
               │
-              ├─ build_chart_config(...)  →  chart_cfg  →  PerformanceChart
+              ├─ build_chart_config(...)  →  chart_cfg  →  PowerCurveChart
               │
               └─ build_prediction_table_data(...)  →  _pred_rows  →  _prediction_table
 ```
@@ -295,10 +295,10 @@ events/seasons) and held fixed. This includes excluded events (for x-bounds stab
 
 | File | Responsibility |
 |---|---|
-| `components/performance_page.py` | State, orchestration, all UI sub-components |
-| `components/performance_chart_builder.py` | `build_chart_config()`, `build_prediction_table_data()` wrapper, `compute_lifetime_bests()`, dataset sub-builders |
-| `components/performance_chart_plugin.py` | HyperDiv `PerformanceChart` Plugin wrapping Chart.js |
-| `components/chart_assets/performance_chart_plugin.js` | Custom JS: tick formatters, tooltip callbacks, `canvasLabelsPlugin` |
+| `components/power_curve_page.py` | State, orchestration, all UI sub-components |
+| `components/power_curve_chart_builder.py` | `build_chart_config()`, `build_prediction_table_data()` wrapper, `compute_lifetime_bests()`, dataset sub-builders |
+| `components/power_curve_chart_plugin.py` | HyperDiv `PowerCurveChart` Plugin wrapping Chart.js |
+| `components/chart_assets/power_curve_chart_plugin.js` | Custom JS: tick formatters, tooltip callbacks, `canvasLabelsPlugin` |
 | `components/date_slider_plugin.py` | `DateSlider` plugin — the timeline scrubber |
 | `services/ranked_predictions.py` | `build_prediction_table_data()` — multi-model prediction computation |
 | `services/ranked_filters.py` | Quality filters, `sim_workouts_at()`, `seasons_from()` |

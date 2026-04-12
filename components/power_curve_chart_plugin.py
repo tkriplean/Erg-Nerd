@@ -1,11 +1,11 @@
 """
-PerformanceChart — a HyperDiv Plugin that wraps Chart.js with full JavaScript
+PowerCurveChart — a HyperDiv Plugin that wraps Chart.js with full JavaScript
 callback support, enabling proper axis tick formatting, rich tooltips, and
 arbitrary canvas overlays.
 
 Usage:
-    from components.performance_chart_plugin import PerformanceChart
-    PerformanceChart(config=chart_cfg, show_watts=False, x_mode="distance", height="75vh")
+    from components.power_curve_chart_plugin import PowerCurveChart
+    PowerCurveChart(config=chart_cfg, show_watts=False, x_mode="distance", height="75vh")
 
 The `config` prop is the same Chart.js dict produced by build_chart_config.
 The JS layer applies pace/watts tick formatters and a custom tooltip on top.
@@ -20,12 +20,12 @@ import os
 import hyperdiv as hd
 
 _HERE = os.path.dirname(__file__)
-with open(os.path.join(_HERE, "chart_assets", "performance_chart_plugin.js")) as _f:
+with open(os.path.join(_HERE, "chart_assets", "power_curve_chart_plugin.js")) as _f:
     _PERFORMANCE_CHART_JS = _f.read()
 
 
-class PerformanceChart(hd.Plugin):
-    _name = "PerformanceChart"
+class PowerCurveChart(hd.Plugin):
+    _name = "PowerCurveChart"
     _assets_root = os.path.join(_HERE, "chart_assets")
     _assets = [
         # Chart.js loaded from CDN — HyperDiv's own Chart.js is bundled/scoped

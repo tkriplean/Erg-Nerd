@@ -27,7 +27,7 @@ The detail view is composed of five sections rendered top-to-bottom:
 
 ### How a workout is opened
 
-Each tab (`performance_page`, `sessions_page`, `intervals_page`) receives an
+Each tab (`power_curve_page`, `sessions_page`, `intervals_page`) receives an
 `on_session_click(workout_id)` callback from `app.py`.  Clicking the view
 icon calls this callback, which sets `app_state.selected_session_id`.
 

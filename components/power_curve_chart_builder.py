@@ -460,7 +460,7 @@ def _cp_datasets(
 
     # Smooth curve — critical_power_curve_points produces x=distance, so we
     # use x_min/x_max in distance-space always, then convert x values after.
-    # (x_min/x_max in duration mode are already pre-converted from performance_page.py,
+    # (x_min/x_max in duration mode are already pre-converted from power_curve_page.py,
     # so we fall back to large safe distance bounds for the CP curve generation itself.)
     _cp_x_min_dist = 100.0
     _cp_x_max_dist = 50_000.0
@@ -1319,7 +1319,7 @@ def build_chart_config(
             _sim_overlay_datasets(sim_overlays, season_idx, _y, pb_color, is_dark)
         )
 
-    # Canvas labels drawn by canvasLabelsPlugin in performance_chart.js
+    # Canvas labels drawn by canvasLabelsPlugin in power_curve_chart_plugin.js
     canvas_labels = _canvas_labels_list(overlay_labels, _y, crossover_labels=_crossover_labels)
 
     # X-axis title and label mode
