@@ -93,7 +93,13 @@ def _client_secret() -> str:
     return os.environ.get("CONCEPT2_CLIENT_SECRET", "")
 
 
-def _get_server_url() -> str:
+def get_server_url() -> str:
+    """Return the base URL of the running server.
+
+    Checks the ``server_url`` environment variable first (useful for deployed
+    instances where the public URL differs from localhost).  Falls back to
+    ``http://localhost:{HD_PORT}`` using the same port HyperDiv binds to.
+    """
     port = os.environ.get("HD_PORT", "8888")
     return os.environ.get("server_url", f"http://localhost:{port}")
 
@@ -111,8 +117,8 @@ _CACHE_TTL_SECONDS = 5 * 60  # 5 minutes
 
 
 def get_redirect_uri() -> str:
-    """Build the redirect URI using the configured HD_PORT (default 8888)."""
-    return f"{_get_server_url()}/oauth/callback"
+    """Build the OAuth redirect URI from the configured server URL."""
+    return f"{get_server_url()}/oauth/callback"
 
 
 def get_authorization_url() -> str:

@@ -1,4 +1,4 @@
-window.hyperdiv.registerPlugin("PerformanceChart", (ctx) => {
+window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
   // --- Shadow DOM setup ---
   // The plugin renders into a shadow root; fill it completely.
   const style = document.createElement("style");

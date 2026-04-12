@@ -20,7 +20,7 @@ Usage::
         state.focused_interval = chart.clicked_band_idx
 
 Chart.js (from CDN) is loaded as a shared asset — HyperDiv deduplicates
-identical URLs so it is only loaded once even when PerformanceChart is
+identical URLs so it is only loaded once even when PowerCurveChart is
 also on the page.
 """
 
@@ -37,7 +37,7 @@ class StrokeChart(hd.Plugin):
     _name = "StrokeChart"
     _assets_root = os.path.join(_HERE, "chart_assets")
     _assets = [
-        # Shared Chart.js CDN copy — deduplicated by HyperDiv if PerformanceChart
+        # Shared Chart.js CDN copy — deduplicated by HyperDiv if PowerCurveChart
         # is already registered on the same page.
         hd.Plugin.js_link(
             "https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"

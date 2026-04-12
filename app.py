@@ -33,6 +33,7 @@ from services.concept2 import (
     extract_c2_profile,
     get_authorization_url,
     get_client,
+    get_server_url,
     parse_callback_query,
     save_token,
 )
@@ -185,7 +186,7 @@ _PAGES_ROUTES: dict[str, str] = {
     "Sessions": "/sessions",
     "Volume": "/volume",
     "Intervals": "/intervals",
-    "Power Curve": "/performance",
+    "Power Curve": "/power_curve",
     "Race": "/race",
     "Profile": "/profile",
 }
@@ -489,16 +490,16 @@ def main() -> None:
     _dashboard_view(client, user_id, app_state)
 
 
-_PORT = int(os.environ.get("HD_PORT", 8888))
+_BASE_URL = get_server_url()
 
 hd.run(
     main,
     index_page=hd.index_page(
         title="Erg Nerd",
-        description="Personal Concept2 rowing analytics — performance charts, fitness level predictions, and workout history.",
+        description="Personal Concept2 rowing analytics — power curves, predictions, interval browser, and workout history.",
         keywords=["rowing", "Concept2", "erg", "Power Curve", "analytics", "training"],
-        url=f"http://localhost:{_PORT}",
-        image=f"http://localhost:{_PORT}/assets/static_logo.png",
+        url=_BASE_URL,
+        image=f"{_BASE_URL}/assets/static_logo.png",
         favicon="/assets/nerdemoji.png",
     ),
 )
