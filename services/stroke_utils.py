@@ -364,16 +364,19 @@ def build_races_data(
         if not strokes:
             strokes = synthesize_strokes(w)
 
-        # For distance events: patch strokes so the last point is the official result.
-        # This guarantees every boat reaches the finish line at exactly the right moment
-        # even when stroke data doesn't quite cover the full distance.
+        # Patch strokes so the last point is the official (time, distance) result.
+        # For distance events this guarantees every boat crosses the finish line at
+        # exactly the right moment even when stroke data falls short.
+        # For time events it ensures the final distance is the authoritative one —
+        # stroke data sometimes under-counts by a few metres.
         finish_time_s: Optional[float] = None
-        if not is_time_event:
-            raw_t = w.get("time")
-            raw_d = w.get("distance")
-            if raw_t and raw_d:
-                finish_time_s = float(raw_t) / 10.0
-                strokes = _ensure_finish_point(strokes, finish_time_s, float(raw_d))
+        finish_dist_m: Optional[float] = None
+        raw_t = w.get("time")
+        raw_d = w.get("distance")
+        if raw_t and raw_d:
+            finish_time_s = float(raw_t) / 10.0
+            finish_dist_m = float(raw_d)
+            strokes = _ensure_finish_point(strokes, finish_time_s, finish_dist_m)
 
         season = get_season(w.get("date", ""))
         color = season_color_hex(season, sorted_seasons)
@@ -387,7 +390,8 @@ def build_races_data(
                 "strokes": strokes,
                 "is_pb": wid == pb_workout_id,
                 "season": season,
-                "finish_time_s": finish_time_s,
+                "finish_time_s": finish_time_s,  # dist events: official finish time (s)
+                "finish_dist_m": finish_dist_m,  # time events: official final metres
             }
         )
 
