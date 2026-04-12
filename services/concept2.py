@@ -498,11 +498,14 @@ class Concept2Client:
             if api_total is None:
                 api_total = pagination.get("total")
 
-            print(
-                f"[concept2] Page {page}: {len(page_results)} results | "
-                f"api_total={api_total} | local={len(local)} | "
-                f"has_next={bool(pagination.get('links', {}).get('next'))}"
-            )
+            try:
+                print(
+                    f"[concept2] Page {page}: {len(page_results)} results | "
+                    f"api_total={api_total} | local={len(local)} | "
+                    f"has_next={bool(pagination.get('links', {}).get('next'))}"
+                )
+            except:
+                print(pagination)
 
             if not page_results:
                 print("[concept2] Empty page — done.")
@@ -537,7 +540,9 @@ class Concept2Client:
                 print("[concept2] Overlap + complete — stopping.")
                 break
 
-            if not pagination.get("links", {}).get("next"):
+            if pagination.get("links", {}) == [] or not pagination.get("links", {}).get(
+                "next"
+            ):
                 print("[concept2] No next page link — done.")
                 break
 
