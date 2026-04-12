@@ -28,7 +28,8 @@
  *       PB scull has a white stroke outline.
  * Wake: ring buffer of last 8 positions drawn with decreasing opacity + radius.
  *
- * Default playback speed: 8× real-time. Speed options: 1×–64×.
+ * Playback speed presets: Slow (2 min), Normal (45 s), Fast (25 s), Very fast (10 s).
+ * Each preset delivers a fixed real-time duration regardless of race length.
  */
 
 window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
@@ -130,13 +131,21 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   const totalDisplay = document.createElement("span");
   totalDisplay.className = "race-time-total";
 
+  // Speed presets: each delivers a fixed real-time playback duration regardless
+  // of how long the race is, so a marathon and a sprint both feel engaging.
+  const SPEED_PRESETS = [
+    { label: "Slow",      targetMs: 120000 },
+    { label: "Normal",    targetMs: 45000  },
+    { label: "Fast",      targetMs: 25000  },
+    { label: "Very fast", targetMs: 10000  },
+  ];
   const speedSelect = document.createElement("select");
   speedSelect.className = "race-speed";
-  [1, 2, 4, 8, 16, 32, 64].forEach(v => {
+  SPEED_PRESETS.forEach(p => {
     const opt = document.createElement("option");
-    opt.value = v;
-    opt.textContent = v + "×";
-    if (v === 8) opt.selected = true;
+    opt.value = p.label;
+    opt.textContent = p.label;
+    if (p.label === "Normal") opt.selected = true;
     speedSelect.appendChild(opt);
   });
 
@@ -153,10 +162,17 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   let eventValue  = ctx.initialProps.event_value || 2000;
   let isDark      = !!(ctx.initialProps.is_dark);
 
-  let playing        = false;
-  let playbackSpeed  = 8;
-  let currentTimeMs  = 0;
-  let maxTimeMs      = 0;        // race duration (ms) — set by rebuildMaxTime()
+  let playing           = false;
+  let selectedPreset    = "Normal";   // which SPEED_PRESETS entry is active
+  let currentTimeMs     = 0;
+
+  // Compute actual multiplier from selected preset + current race duration.
+  function playbackSpeed() {
+    const p = SPEED_PRESETS.find(x => x.label === selectedPreset) || SPEED_PRESETS[1];
+    return maxTimeMs > 0 ? maxTimeMs / p.targetMs : 1;
+  }
+  let maxTimeMs           = 0;   // race duration (ms) — set by rebuildMaxTime()
+  let maxDistForTimeEvent = 1;   // time events: furthest any boat rows (normalization)
   let lastTs         = null;
   let rafHandle      = null;
   let changeId       = 0;
@@ -196,10 +212,21 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     } else {
       // Time event: event_value is in tenths of seconds
       maxTimeMs = Math.round(eventValue * 100); // tenths → ms
+      // Compute the max distance any boat rows across the whole race.
+      // Used as a fixed normalizer so boats animate smoothly left-to-right
+      // instead of snapping to the right edge when the leader's early distance is tiny.
+      maxDistForTimeEvent = 1;
+      for (const boat of races) {
+        const s = boat.strokes;
+        if (s && s.length > 0) {
+          maxDistForTimeEvent = Math.max(maxDistForTimeEvent, s[s.length - 1].d);
+        }
+      }
     }
 
     seekInput.max = maxTimeMs;
     totalDisplay.textContent = fmtTime(maxTimeMs);
+    // Speed is computed dynamically via playbackSpeed() — no static calibration needed.
   }
 
   // ── Boat distance at a given race time ─────────────────────────────────────
@@ -254,13 +281,22 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     return (a.t + frac * (b.t - a.t)) * 1000;
   }
 
-  // ── Compute leading distance for time events ───────────────────────────────
-  function getLeadingDistance(timeMs) {
-    let maxD = 0;
-    for (const boat of races) {
-      maxD = Math.max(maxD, getBoatDistance(boat, timeMs));
+  // ── Time (seconds) for a boat to reach a given distance ──────────────────
+  // Returns null if the boat never reaches that distance.
+  function timeToReachDist(boat, targetDist) {
+    const strokes = boat.strokes;
+    if (!strokes || strokes.length === 0) return null;
+    const last = strokes[strokes.length - 1];
+    if (last.d < targetDist) return null;
+    let lo = 0, hi = strokes.length - 1;
+    while (lo < hi - 1) {
+      const mid = (lo + hi) >> 1;
+      if (strokes[mid].d < targetDist) lo = mid; else hi = mid;
     }
-    return maxD || 1;
+    const a = strokes[lo], b = strokes[Math.min(lo + 1, strokes.length - 1)];
+    if (a.d === b.d) return a.t;
+    const frac = Math.max(0, (targetDist - a.d) / (b.d - a.d));
+    return a.t + frac * (b.t - a.t);
   }
 
   // ── Colors ─────────────────────────────────────────────────────────────────
@@ -361,8 +397,60 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     ctx2d.fillStyle = dimTextColor();
     ctx2d.fillText(fmtTime(timeMs), W - RESULT_W - 6, 17);
 
-    // ── Finish line (distance events) ──
+    // ── Hull geometry (shared across all boats) ──
+    // hullHL = half-length; stern (back) is at boatCx - hullHL.
+    // Boats are positioned STERN-first: the stern tracks from TRACK_L → TRACK_R.
+    // This means the date label (in the fixed label zone, left of TRACK_L) is
+    // never covered by the boat body, and boats sit fully past the finish line
+    // when they complete the race.
+    const BASE_HW = BOAT_R;
+    const BASE_HL = BASE_HW * 3.2;
+    const PB_HW   = PB_R;
+    const PB_HL   = PB_HW * 3.2;
+
+    // Precompute finish ranks for medal display (dist events only).
+    const finishRanks = new Map(); // boatId → rank (1 = gold, 2 = silver, 3 = bronze)
     if (eventType === "dist") {
+      const finishedNow = races
+        .filter(b => getBoatDistance(b, timeMs) >= eventValue)
+        .map(b => ({ id: b.id, fms: finishTimeMs(b) }))
+        .sort((a, b) => a.fms - b.fms);
+      finishedNow.forEach(({ id }, idx) => finishRanks.set(id, idx + 1));
+    }
+
+    // ── Split interval (distance events) ──
+    // Choose a sensible interval: 500m for ≤2k, 1k for ≤10k, 2k for ≤20k, 5k beyond.
+    function getSplitInterval(targetDist) {
+      if (targetDist <= 2000)  return 500;
+      if (targetDist <= 10000) return 1000;
+      if (targetDist <= 20000) return 2000;
+      return 5000;
+    }
+    const splitInterval = eventType === "dist" ? getSplitInterval(eventValue) : 0;
+
+    // ── Finish line + split markers (distance events) ──
+    if (eventType === "dist") {
+      // Intermediate split lines
+      ctx2d.save();
+      ctx2d.setLineDash([3, 5]);
+      ctx2d.lineWidth = 1;
+      ctx2d.strokeStyle = finishLineColor();
+      ctx2d.font = "9px sans-serif";
+      ctx2d.textAlign = "center";
+      ctx2d.fillStyle = dimTextColor();
+      for (let sd = splitInterval; sd < eventValue; sd += splitInterval) {
+        const sx = TRACK_L + (sd / eventValue) * TRACK_W;
+        ctx2d.beginPath();
+        ctx2d.moveTo(sx, HEADER_H);
+        ctx2d.lineTo(sx, H);
+        ctx2d.stroke();
+        const splitLbl = sd >= 1000 ? (sd / 1000) + "k" : sd + "m";
+        ctx2d.fillText(splitLbl, sx, HEADER_H + 10);
+      }
+      ctx2d.setLineDash([]);
+      ctx2d.restore();
+
+      // Finish line (solid, slightly more prominent)
       ctx2d.save();
       ctx2d.setLineDash([5, 4]);
       ctx2d.strokeStyle = finishLineColor();
@@ -380,20 +468,55 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       ctx2d.fillText("FINISH", TRACK_R, HEADER_H + 10);
     }
 
-    // ── Time event: progress ruler ──
+    // ── Time event: best-distance marker label ──
     if (eventType === "time") {
-      const leadDist = getLeadingDistance(timeMs);
       ctx2d.fillStyle = dimTextColor();
       ctx2d.font = "10px sans-serif";
-      ctx2d.textAlign = "center";
-      const kmLabel = leadDist >= 1000
-        ? (leadDist / 1000).toFixed(2) + " km"
-        : Math.round(leadDist) + " m";
-      ctx2d.fillText(kmLabel + " (leader)", TRACK_R - 4, HEADER_H + 10);
+      ctx2d.textAlign = "right";
+      const bestLabel = maxDistForTimeEvent >= 1000
+        ? (maxDistForTimeEvent / 1000).toFixed(2) + " km"
+        : Math.round(maxDistForTimeEvent) + " m";
+      ctx2d.fillText("best: " + bestLabel, TRACK_R - 4, HEADER_H + 10);
+    }
+
+    // ── Compute per-boat gap at each split (dist events only) ──
+    // gapAtSplit[boatIndex][splitIndex] = gap in seconds behind leader (null = not yet reached)
+    const splitPositions = []; // canvas X for each split line
+    const gapLabels = [];      // [{boatIdx, splitIdx, gapSec}] to render after boats
+    if (eventType === "dist" && splitInterval > 0) {
+      const numSplits = Math.floor((eventValue - 1) / splitInterval); // excludes finish
+      for (let si = 0; si < numSplits; si++) {
+        const splitDist = (si + 1) * splitInterval;
+        splitPositions.push(TRACK_L + (splitDist / eventValue) * TRACK_W);
+      }
+
+      // Find the fastest boat's time to each split
+      const leaderTimes = splitPositions.map((_, si) => {
+        const splitDist = (si + 1) * splitInterval;
+        let best = Infinity;
+        for (const boat of races) {
+          const t = timeToReachDist(boat, splitDist);
+          if (t !== null && t < best) best = t;
+        }
+        return best === Infinity ? null : best;
+      });
+
+      for (let i = 0; i < numBoats; i++) {
+        for (let si = 0; si < splitPositions.length; si++) {
+          const splitDist = (si + 1) * splitInterval;
+          const boatDist = getBoatDistance(races[i], timeMs);
+          if (boatDist < splitDist) continue; // not reached yet
+          const leaderT = leaderTimes[si];
+          if (leaderT === null) continue;
+          const boatT = timeToReachDist(races[i], splitDist);
+          if (boatT === null) continue;
+          const gap = boatT - leaderT;
+          gapLabels.push({ boatIdx: i, splitIdx: si, gapSec: gap });
+        }
+      }
     }
 
     // ── Lanes ──
-    const leadDist = eventType === "time" ? getLeadingDistance(timeMs) : eventValue;
 
     for (let i = 0; i < numBoats; i++) {
       const boat = races[i];
@@ -414,33 +537,44 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       ctx2d.lineTo(W, laneY);
       ctx2d.stroke();
 
+      // ── Boat geometry ──
+      const hullHW = boat.is_pb ? PB_HW : BASE_HW;
+      const hullHL = boat.is_pb ? PB_HL : BASE_HL;
+
       // ── Boat position ──
+      // The hull centre travels from (TRACK_L + hullHL) to (TRACK_R - hullHL).
+      // This guarantees:
+      //   dist = 0           → stern exactly on TRACK_L  (start line)
+      //   dist = eventValue  → bow   exactly on TRACK_R  (finish line)
+      // The label zone (left of TRACK_L) and result zone (right of TRACK_R) are
+      // never overlapped by the boat hull at any point during the race.
+      const TRACK_INNER = TRACK_W - 2 * hullHL; // centre-travel distance
       const dist = getBoatDistance(boat, timeMs);
       const finished = eventType === "dist" && dist >= eventValue;
-      let boatX;
+      let boatCx; // hull centre X
       if (eventType === "dist") {
         const clampedDist = Math.min(dist, eventValue);
-        boatX = TRACK_L + (clampedDist / eventValue) * TRACK_W;
+        boatCx = TRACK_L + hullHL + (clampedDist / eventValue) * TRACK_INNER;
       } else {
-        boatX = TRACK_L + (dist / leadDist) * TRACK_W;
+        // Time event: same logic, normalised by the best boat's final distance.
+        boatCx = TRACK_L + hullHL + (dist / maxDistForTimeEvent) * TRACK_INNER;
       }
 
-      // ── Wake trail ──
+      // ── Wake trail (follows hull centre) ──
       if (!wakeBuffers.has(boat.id)) {
         wakeBuffers.set(boat.id, { buf: [], head: 0 });
       }
       const wb = wakeBuffers.get(boat.id);
 
-      // Only push new wake point if boat has moved (avoids static trail on pause)
       const prevWake = wb.buf[wb.buf.length - 1];
-      if (!prevWake || Math.abs(prevWake.x - boatX) > 0.5) {
-        wb.buf.push({ x: boatX, y: midY });
+      if (!prevWake || Math.abs(prevWake.x - boatCx) > 0.5) {
+        wb.buf.push({ x: boatCx, y: midY });
         if (wb.buf.length > WAKE_LEN) wb.buf.shift();
       }
 
       for (let w = 0; w < wb.buf.length - 1; w++) {
         const frac = (w + 1) / wb.buf.length;
-        const wakeR = Math.max(1, BOAT_R * 0.7 * frac);
+        const wakeR = Math.max(1, hullHW * 0.7 * frac);
         const alpha = 0.45 * frac * frac;
         ctx2d.beginPath();
         ctx2d.arc(wb.buf[w].x, wb.buf[w].y, wakeR, 0, Math.PI * 2);
@@ -449,29 +583,40 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       }
 
       // ── Scull (elongated hull, bow pointing right) ──
-      const hullHW = boat.is_pb ? PB_R : BOAT_R; // half-width (vertical)
-      const hullHL = hullHW * 3.2;               // half-length (horizontal)
-      drawScull(ctx2d, boatX, midY, hullHL, hullHW, boat.color, boat.is_pb, isDark);
+      drawScull(ctx2d, boatCx, midY, hullHL, hullHW, boat.color, boat.is_pb, isDark);
 
-      // ── Label (left zone) ──
+      // ── Label (left zone) — always shows date ──
       ctx2d.fillStyle = boat.color;
       ctx2d.font = `${boat.is_pb ? "bold " : ""}11px sans-serif`;
       ctx2d.textAlign = "right";
       ctx2d.fillText(boat.label, LABEL_W - 8, midY + 4);
 
-      // ── Result (right zone) ──
-      ctx2d.textAlign = "left";
+      // ── Result zone (right of finish line) ──
+      const rank = finishRanks.get(boat.id);
       if (eventType === "dist" && finished) {
+        // Medal emoji (top 3) + result time, just past the finish line
+        const medal = rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : null;
+        let textX = TRACK_R + 5;
+        if (medal) {
+          const medalSize = Math.max(10, Math.min(14, LANE_H - 6));
+          ctx2d.font = `${medalSize}px sans-serif`;
+          ctx2d.textAlign = "left";
+          ctx2d.fillText(medal, textX, midY + medalSize * 0.38);
+          textX += medalSize + 2;
+        }
         const fms = finishTimeMs(boat);
-        ctx2d.fillStyle = boat.is_pb ? "#ffc107" : dimTextColor();
-        ctx2d.font = `${boat.is_pb ? "bold " : ""}11px monospace`;
-        ctx2d.fillText(fmtTime(fms), TRACK_R + 6, midY + 4);
+        ctx2d.fillStyle = boat.is_pb ? "#ffc107" : (rank && rank <= 3 ? textColor() : dimTextColor());
+        ctx2d.font = `${boat.is_pb || (rank && rank <= 3) ? "bold " : ""}10px monospace`;
+        ctx2d.textAlign = "left";
+        ctx2d.fillText(fmtTime(fms), textX, midY + 4);
       } else if (eventType === "time") {
+        // Show each boat's current distance
         const dStr = dist >= 1000
           ? (dist / 1000).toFixed(2) + "k"
           : Math.round(dist) + "m";
         ctx2d.fillStyle = boat.is_pb ? "#ffc107" : dimTextColor();
         ctx2d.font = "11px monospace";
+        ctx2d.textAlign = "left";
         ctx2d.fillText(dStr, TRACK_R + 6, midY + 4);
       }
     }
@@ -484,6 +629,31 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     ctx2d.moveTo(0, lastLaneBottom);
     ctx2d.lineTo(W, lastLaneBottom);
     ctx2d.stroke();
+
+    // ── Gap-to-leader labels at split lines ──
+    // Render after all boats so they sit on top of the lanes.
+    // Leader shows no label (gap = 0); others show "+X.Xs" in their boat colour.
+    for (const { boatIdx, splitIdx, gapSec } of gapLabels) {
+      if (gapSec <= 0.05) continue; // leader — skip
+      const boat = races[boatIdx];
+      const laneY = HEADER_H + boatIdx * LANE_H;
+      const midY  = laneY + LANE_H / 2;
+      const sx    = splitPositions[splitIdx];
+      const label = "+" + gapSec.toFixed(1) + "s";
+
+      // Tiny pill background so label is readable over the split line
+      ctx2d.font = "9px sans-serif";
+      const tw = ctx2d.measureText(label).width;
+      const px = 3, py = 2;
+      ctx2d.fillStyle = isDark ? "rgba(20,20,40,0.72)" : "rgba(240,244,255,0.80)";
+      ctx2d.beginPath();
+      ctx2d.roundRect(sx - tw / 2 - px, midY - 7 - py, tw + px * 2, 10 + py * 2, 3);
+      ctx2d.fill();
+
+      ctx2d.fillStyle = hexWithAlpha(boat.color, 0.9);
+      ctx2d.textAlign = "center";
+      ctx2d.fillText(label, sx, midY + 3);
+    }
 
     ctx2d.restore();
   }
@@ -516,7 +686,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     rafHandle = requestAnimationFrame(function tick(ts) {
       if (!playing) return;
       if (lastTs !== null) {
-        currentTimeMs += (ts - lastTs) * playbackSpeed;
+        currentTimeMs += (ts - lastTs) * playbackSpeed();
       }
       lastTs = ts;
       if (currentTimeMs >= maxTimeMs) {
@@ -587,11 +757,8 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   });
 
   speedSelect.addEventListener("change", () => {
-    playbackSpeed = parseFloat(speedSelect.value);
-    if (playing) {
-      // Restart rAF with new speed (resets lastTs so no jump)
-      lastTs = null;
-    }
+    selectedPreset = speedSelect.value;
+    if (playing) lastTs = null; // reset timing so the new speed takes effect cleanly
   });
 
   // ── Prop updates from Python ───────────────────────────────────────────────

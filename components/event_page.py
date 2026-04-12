@@ -47,7 +47,7 @@ DATA FLOW
       ↓  filter by event + season + machine + include_filter
   qualifying_wkts (race boats)
       ↓  check strokes_by_id for missing IDs
-  fetch_strokes_batch() [hd.task] → strokes_by_id updated + localStorage write
+  fetch_one_stroke() [hd.task] → one workout fetched per render, queue advances
       ↓
   build_races_data() → RaceChart plugin
       ↓
@@ -120,14 +120,19 @@ def _event_workouts(workouts: list, etype: str, evalue: int, machine: str) -> li
 
     Expects workouts to already be quality-filtered (is_ranked_noninterval()
     pre-applied) — e.g. the `all_ranked` list from event_page().
+
+    Time events: match `time == evalue` as long as `distance` is not itself a
+    ranked distance (avoids treating a 2k that happened to take exactly 30 min
+    as a time event).
     """
     out = []
     for w in workouts:
         if machine != "All" and w.get("type", "rower") != machine:
             continue
-        if etype == "dist" and w.get("distance") == evalue:
+        d = w.get("distance") or 0
+        if etype == "dist" and d == evalue:
             out.append(w)
-        elif etype == "time" and w.get("time") == evalue and not w.get("distance"):
+        elif etype == "time" and w.get("time") == evalue and d not in RANKED_DIST_SET:
             out.append(w)
     return out
 
@@ -245,8 +250,10 @@ def event_page(client, user_id: str) -> None:
         sort_mode="date",  # "date" | "result"
         strokes_cache_loaded=False,
         strokes_by_id={},
-        fetch_task_key=0,
-        last_fetched_key="",
+        fetch_queue=(),       # tuple of workout dicts still to fetch
+        fetch_total=0,        # size of the current batch
+        fetch_done=0,         # completed fetches in current batch
+        last_batch_key="",    # changes when the qualifying set changes
     )
 
     is_dark = hd.theme().is_dark
@@ -284,11 +291,11 @@ def event_page(client, user_id: str) -> None:
     # ── Compute available events ──────────────────────────────────────────────
     event_counts: dict = {}
     for w in all_ranked:
-        d = w.get("distance")
+        d = w.get("distance") or 0
         t = w.get("time")
         if d in RANKED_DIST_SET:
             event_counts[("dist", d)] = event_counts.get(("dist", d), 0) + 1
-        elif t in RANKED_TIME_SET and not d:
+        elif t in RANKED_TIME_SET and d not in RANKED_DIST_SET:
             event_counts[("time", t)] = event_counts.get(("time", t), 0) + 1
 
     available_events: list = []
@@ -354,7 +361,7 @@ def event_page(client, user_id: str) -> None:
                                 if _item.clicked:
                                     state.event_type = etype
                                     state.event_value = evalue
-                                    state.fetch_task_key += 1
+                                    state.last_batch_key = ""  # force new batch
                                     _ev_dd.opened = False
 
             hd.text("|", font_color="neutral-300")
@@ -498,30 +505,55 @@ def event_page(client, user_id: str) -> None:
             )
         pb_id = pb.get("id") if pb else None
 
-    # ── Phase 2: fetch missing stroke data ────────────────────────────────────
-    missing_wkts = [
-        w for w in race_wkts if str(w.get("id", "")) not in state.strokes_by_id
-    ]
-    _fetch_scope = f"{state.event_type}_{state.event_value}_{state.include_filter}_{','.join(state.excluded_seasons)}_{state.machine}"
-    fetch_needed = bool(missing_wkts) and _fetch_scope != state.last_fetched_key
+    # ── Phase 2: one-at-a-time stroke fetch with real progress bar ────────────
+    # The fetch queue stores workout IDs (ints).  Each ID gets its own
+    # hd.scope so HyperDiv creates a fresh task per workout, avoiding the
+    # "done task can't restart" problem.
+    _all_race_ids = tuple(sorted(w.get("id") for w in race_wkts if w.get("id")))
+    _batch_key = f"{state.event_type}_{state.event_value}_{_all_race_ids}"
 
-    with hd.scope(f"stroke_fetch_{state.fetch_task_key}"):
-        stroke_task = hd.task()
-        if fetch_needed and not stroke_task.running and not stroke_task.done:
-            stroke_task.run(
-                fetch_strokes_batch,
-                client,
-                int(user_id),
-                race_wkts,
-                state.strokes_by_id,
+    # When the qualifying set changes, initialise a fresh fetch queue.
+    if _batch_key != state.last_batch_key:
+        missing_ids = tuple(
+            w.get("id")
+            for w in race_wkts
+            if w.get("id") and str(w.get("id")) not in state.strokes_by_id
+        )
+        state.fetch_queue = missing_ids   # tuple of ints
+        state.fetch_total = len(missing_ids)
+        state.fetch_done = 0
+        state.last_batch_key = _batch_key
+
+    is_loading = bool(state.fetch_queue)
+
+    if state.fetch_queue:
+        next_id = state.fetch_queue[0]
+        # Scope key changes per workout → fresh task for each one.
+        with hd.scope(f"fetch_{next_id}"):
+            stroke_task = hd.task()
+            next_wkt = next(
+                (w for w in race_wkts if w.get("id") == next_id), None
             )
-        if stroke_task.done and not stroke_task.error:
-            merged = stroke_task.result
-            state.strokes_by_id = merged
-            state.last_fetched_key = _fetch_scope
-            hd.local_storage.set_item(_STROKES_LS_KEY, compress_strokes_cache(merged))
+            if not stroke_task.running and not stroke_task.done and next_wkt:
+                stroke_task.run(fetch_one_stroke, client, int(user_id), next_wkt)
 
-    is_loading = fetch_needed and stroke_task.running
+            if stroke_task.done and not stroke_task.error:
+                wid_str, strokes = stroke_task.result
+                if wid_str == str(next_id):
+                    merged = dict(state.strokes_by_id)
+                    merged[wid_str] = strokes
+                    state.strokes_by_id = merged
+                    state.fetch_queue = state.fetch_queue[1:]
+                    state.fetch_done += 1
+                    hd.local_storage.set_item(
+                        _STROKES_LS_KEY, compress_strokes_cache(merged)
+                    )
+
+    fetch_pct = (
+        round(100 * state.fetch_done / state.fetch_total)
+        if state.fetch_total > 0
+        else 0
+    )
 
     # ── Sort race workouts for lane assignment ─────────────────────────────────
     # "date" mode: newest piece in lane 1 (top), oldest at bottom.
@@ -543,26 +575,21 @@ def event_page(client, user_id: str) -> None:
         )
 
     # ── Build races payload ────────────────────────────────────────────────────
+    # Build with whatever strokes we have so far — workouts still in the queue
+    # will use synthesised pacing until their real data arrives.
     races_data = (
         build_races_data(sorted_race_wkts, state.strokes_by_id, wkt_seasons)
-        if not is_loading and sorted_race_wkts
+        if sorted_race_wkts
         else []
     )
 
-    # ── Race visualization ────────────────────────────────────────────────────
+    # ── Loading progress bar (matches concept2_sync style) ───────────────────
     if is_loading:
-        with hd.hbox(
-            align="center",
-            gap=1,
-            padding=(0.5, 1),
-            border="1px solid neutral-200",
-            border_radius="medium",
-            background_color="neutral-50",
-            margin_bottom=0.5,
-        ):
-            hd.spinner()
+        with hd.box(align="center", padding=2, gap=1, margin_bottom=0.5):
+            with hd.box(width=32):
+                hd.progress_bar(value=fetch_pct)
             hd.text(
-                f"Fetching stroke data for {len(missing_wkts)} workout(s)…",
+                f"Fetching stroke data… {state.fetch_done} / {state.fetch_total}",
                 font_color="neutral-500",
                 font_size="small",
             )

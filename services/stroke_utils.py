@@ -335,9 +335,12 @@ def build_races_data(
     if not workouts:
         return []
 
-    # Determine event type from the first workout
+    # Determine event type from the first workout.
+    # Timed workouts (e.g. 30-min) always carry a non-zero distance (meters rowed),
+    # so we MUST check against RANKED_DIST_SET rather than truthiness of distance.
+    from services.rowing_utils import RANKED_DIST_SET
     first = workouts[0]
-    is_time_event = not bool(first.get("distance"))
+    is_time_event = first.get("distance") not in RANKED_DIST_SET
 
     # Find the personal best for the event
     if is_time_event:
