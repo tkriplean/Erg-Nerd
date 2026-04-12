@@ -74,7 +74,7 @@ HR_ZONE_COLORS: list[tuple[str, str]] = [
 ]
 
 # Draw order for stacked bar (bottom → top): No HR, Z1, Z2, Z3, Z4, Z5, Rest
-HR_ZONE_DRAW_ORDER: list[int] = [6, 5, 4, 3, 2, 1, 0]
+HR_ZONE_DRAW_ORDER: list[int] = [1, 2, 3, 4, 5, 0, 6]
 
 # 3-zone model for the distribution table
 HR_Z1_BINS: frozenset = frozenset({4, 5})  # Z2 Aerobic + Z1 Recovery  (easy)
