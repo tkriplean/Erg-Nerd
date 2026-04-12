@@ -1,0 +1,188 @@
+# Race Page
+
+**File:** `components/race_page.py`  
+**Entry point:** `race_page(client, user_id, excluded_seasons=(), machine="All")`
+
+A regatta-style animated race that replays all qualifying workouts for a single
+ranked Concept2 event side-by-side, one boat per workout, driven by real
+stroke-level data fetched from the Concept2 API.
+
+---
+
+## UI Layout
+
+```
+A [2k ▾] Race Between [Season Bests ▾]!      ← interactive h1 title
+─────────────────────────────────────────────
+Fetching stroke data…  3 / 7   ████░░░░       ← progress bar (while loading)
+┌─────────────────────────────────────────┐
+│  Race canvas  (RaceChart plugin)        │   ← auto-height: 26px + 44px × N lanes
+└─────────────────────────────────────────┘
+Sort lanes by  ● Date  ○ Result             ← sort toggle (below canvas)
+─────────────────────────────────────────────
+7 result(s) — 2,000m                        ← results table header
+Date  Season  Time  Pace  Watts  SPM  HR    ← full results table
+```
+
+Season and machine filtering are applied globally (passed in from `app.py`).
+The results table always shows **all** qualifying workouts regardless of the
+include filter — the filter only affects which boats race on the canvas.
+
+---
+
+## Interactive Title
+
+The page title is rendered as an `hd.h1()` containing two inline `hd.dropdown()`
+widgets that double as the filter controls:
+
+| Token | Control | Changes |
+|---|---|---|
+| **[2k ▾]** | Event dropdown | `state.event_type` + `state.event_value`; resets fetch queue |
+| **[Season Bests ▾]** | Include filter dropdown | `state.include_filter` |
+
+Include filter options and their state values:
+
+| Label | `state.include_filter` |
+|---|---|
+| All Great Efforts | `"All"` |
+| Personal Bests | `"PBs"` |
+| Season Bests *(default)* | `"SBs"` |
+
+---
+
+## State Variables
+
+| Name | Type | Description |
+|---|---|---|
+| `event_type` | `str` | `"dist"` or `"time"` |
+| `event_value` | `int` | metres (dist events) or tenths-of-second (time events) |
+| `include_filter` | `str` | `"All"` / `"PBs"` / `"SBs"` — default `"SBs"` |
+| `sort_mode` | `str` | `"date"` (newest first) or `"result"` (fastest first) |
+| `strokes_cache_loaded` | `bool` | True once the localStorage stroke cache has been read |
+| `strokes_by_id` | `dict` | `{str(workout_id): [{t, d}, …]}` — in-memory stroke cache |
+| `fetch_queue` | `tuple[int]` | Workout IDs still waiting for stroke fetch |
+| `fetch_total` | `int` | Total fetches needed for the current batch |
+| `fetch_done` | `int` | Completed fetches in the current batch |
+| `last_batch_key` | `str` | Sentinel that detects when the qualifying set changes |
+
+---
+
+## Workout Filtering Pipeline
+
+```
+all_workouts (all synced workouts)
+  │
+  ├─ is_ranked_noninterval()         quality filter (same as Performance page)
+  ├─ apply_quality_filters()         removes anomalous entries
+  ├─ excluded_seasons  (global)      from app.py gfilter
+  ├─ machine           (global)      from app.py gfilter
+  │
+  └─▶ all_ranked
+        │
+        ├─ _event_workouts()         match event_type + event_value
+        │    └─▶ table_wkts          used for the results table (all pieces)
+        │
+        └─ _include_filtered()       apply "All" / "PBs" / "SBs" filter
+             └─▶ race_wkts           boats on the canvas
+```
+
+`_include_filtered()` uses `apply_best_only()` from `services/rowing_utils.py`:
+- `"PBs"` → single all-time best
+- `"SBs"` → one best per season
+
+---
+
+## Stroke Data Fetching
+
+Stroke data (1-Hz telemetry: time + distance per stroke) is fetched one workout
+at a time via `fetch_one_stroke()` from `services/stroke_utils.py`.
+
+- **Cache**: stored in `localStorage` under key `strokes_cache`, compressed with
+  `services/local_storage_compression.py`. Loaded once on first render.
+- **Fetch loop**: each render cycle starts one `hd.task()` for the next
+  un-cached workout ID (wrapped in `hd.scope(f"fetch_{id}")` for task isolation).
+  Progress is shown as a progress bar: `fetch_done / fetch_total`.
+- **Batch key**: `last_batch_key` is `"{event_type}_{event_value}_{sorted_ids}"`.
+  Changing event or include filter resets the queue for only the newly required IDs.
+
+---
+
+## Race Canvas — RaceChart Plugin
+
+**Plugin:** `components/race_chart_plugin.py` + `components/chart_assets/race_chart_plugin.js`
+
+Python props passed to JS:
+
+| Prop | Type | Description |
+|---|---|---|
+| `races` | `list` | Boat dicts from `stroke_utils.build_races_data()` |
+| `event_type` | `str` | `"dist"` or `"time"` |
+| `event_value` | `int` | metres or tenths-of-second |
+| `is_dark` | `bool` | Dark mode flag for colour scheme |
+
+JS writes back `change_id` and `current_time_ms` on user seek (not used by Python currently).
+
+### Canvas sizing
+
+Height is auto-computed in JS by `updateCanvasHeight()`, called from `rebuildMaxTime()`:
+
+```
+height = 26px (header) + N × 44px (lanes) + 6px (bottom pad)
+```
+
+Width is always 100% of the containing block.
+
+### Boat geometry
+
+Each boat hull is drawn as a rounded ellipse. The centre X position formula
+ensures **stern touches the start line at dist=0** and **bow touches the finish
+line at dist=normDist**:
+
+```
+TRACK_INNER = TRACK_W − 2 × hullHL
+boatCx      = TRACK_L + hullHL + (dist / normDist) × TRACK_INNER
+```
+
+For **distance events**, `normDist = event_value` (metres).  
+For **time events**, `normDist = maxDistForTimeEvent` — the furthest official
+`finish_dist_m` across all boats, computed once in `rebuildMaxTime()` from
+Python-authoritative data to avoid the snap-to-edge problem at t=0.
+
+### Split checkpoints
+
+`getSplitInterval(targetDist)` picks the largest checkpoint spacing from
+`[5000, 2000, 1000, 500, 250, 100]` that yields **at least 3 checkpoints**
+before the finish line. Labels appear only after the boat's stern has fully
+cleared the checkpoint + padding.
+
+### Finish ranks & medals
+
+- **Distance events**: `finishRanks` is populated as each boat's bow crosses
+  `distToX(eventValue)`. Rank is assigned in crossing order.
+- **Time events**: `finishRanks` is populated at `atEnd` (timeMs ≥ maxTimeMs − 50ms)
+  by sorting boats by `finish_dist_m` descending.
+
+---
+
+## Results Table
+
+Rendered by `_results_table()`. Shows all workouts in `table_wkts` (include
+filter is **not** applied), sorted by result (fastest time or longest distance).
+The all-time PB row is highlighted in `primary-50` background.
+
+Columns: Date · Season · Time (or Distance for time events) · Avg Pace · Avg Watts · Avg SPM · Avg HR
+
+---
+
+## Key Service Dependencies
+
+| Module | Used for |
+|---|---|
+| `services/stroke_utils.py` | `build_races_data()`, `fetch_one_stroke()` |
+| `services/ranked_filters.py` | `is_ranked_noninterval()`, `apply_quality_filters()` |
+| `services/rowing_utils.py` | `RANKED_DISTANCES`, `RANKED_TIMES`, `get_season()`, `apply_best_only()`, `compute_pace()`, `compute_watts()` |
+| `services/formatters.py` | `format_time()`, `fmt_split()` |
+| `services/local_storage_compression.py` | Compress/decompress stroke cache for localStorage |
+| `components/race_chart_plugin.py` | `RaceChart` HyperDiv plugin |
+| `components/concept2_sync.py` | `concept2_sync()` — ensures workouts are loaded |
+| `components/hyperdiv_extensions.py` | `radio_group` — sort toggle |

@@ -1,8 +1,8 @@
 """
-Event Page — Regatta-style race animation for a single ranked event.
+Race Page — Regatta-style race animation for a single ranked event.
 
 Exported:
-    event_page(client, user_id, excluded_seasons=(), machine="All")
+    race_page(client, user_id, excluded_seasons=(), machine="All")
         Top-level HyperDiv component; call from app.py.
         excluded_seasons / machine come from the global filter in app.py.
 
@@ -15,7 +15,7 @@ UI LAYOUT
                 include_filter options: All Great Efforts | Personal Bests | Season Bests
                 Default include_filter: Season Bests (SBs)
   Loading bar:  "Fetching stroke data… N / M"  (while fetching)
-  Race canvas:  RaceChart plugin (70vh)
+  Race canvas:  RaceChart plugin (auto-sized: 26px header + 44px × N lanes)
   Sort toggle:  Sort lanes by [Date | Result]  (below race canvas)
   Results table (all qualifying workouts; include_filter ignored)
 
@@ -101,7 +101,7 @@ def _event_workouts(workouts: list, etype: str, evalue: int, machine: str) -> li
     Return all workouts matching the event + machine filter (any season).
 
     Expects workouts to already be quality-filtered (is_ranked_noninterval()
-    pre-applied) — e.g. the `all_ranked` list from event_page().
+    pre-applied) — e.g. the `all_ranked` list from race_page().
 
     Time events: match `time == evalue` as long as `distance` is not itself a
     ranked distance (avoids treating a 2k that happened to take exactly 30 min
@@ -209,14 +209,14 @@ def _results_table(workouts: list, etype: str, pb_id: int | None) -> None:
 # ── Main page entry point ─────────────────────────────────────────────────────
 
 
-def event_page(
+def race_page(
     client,
     user_id: str,
     excluded_seasons: tuple = (),
     machine: str = "All",
 ) -> None:
     """
-    Top-level entry point for the Event (Race) tab.
+    Top-level entry point for the Race tab.
 
     Parameters
     ----------
