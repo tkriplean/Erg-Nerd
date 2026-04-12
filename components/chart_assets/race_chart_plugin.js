@@ -34,6 +34,213 @@
 
 window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
 
+  // Importing styles from hyperdiv components
+  const button_styles = document.createElement("style");
+  button_styles.textContent = `
+    :host { display: inline-block; position: relative; width: auto; cursor: pointer; }
+    .button { display: inline-flex; align-items: stretch; justify-content: center; border-style: solid; border-width: var(--sl-input-border-width); font-family: var(--sl-input-font-family); font-weight: var(--sl-font-weight-semibold); text-decoration: none; user-select: none; white-space: nowrap; vertical-align: middle; padding: 0px; transition: var(--sl-transition-x-fast) background-color,
+          var(--sl-transition-x-fast) color,
+          var(--sl-transition-x-fast) border,
+          var(--sl-transition-x-fast) box-shadow; cursor: inherit; }
+    .button:focus { outline: none; }
+    .button:focus-visible { outline: var(--sl-focus-ring); outline-offset: var(--sl-focus-ring-offset); }
+    .button--disabled { opacity: 0.5; cursor: not-allowed; }
+    .button--disabled * { pointer-events: none; }
+    .button__prefix, .button__suffix { flex: 0 0 auto; display: flex; align-items: center; pointer-events: none; }
+    .button__label { display: inline-block; }
+    .button__label::slotted(sl-icon) { vertical-align: -2px; }
+    .button--standard.button--default { background-color: var(--sl-color-neutral-0); border-color: var(--sl-input-border-color); color: var(--sl-color-neutral-700); }
+    .button--standard.button--default:hover:not(.button--disabled) { background-color: var(--sl-color-primary-50); border-color: var(--sl-color-primary-300); color: var(--sl-color-primary-700); }
+    .button--standard.button--default:active:not(.button--disabled) { background-color: var(--sl-color-primary-100); border-color: var(--sl-color-primary-400); color: var(--sl-color-primary-700); }
+    .button--standard.button--primary { background-color: var(--sl-color-primary-600); border-color: var(--sl-color-primary-600); color: var(--sl-color-neutral-0); }
+    .button--standard.button--primary:hover:not(.button--disabled) { background-color: var(--sl-color-primary-500); border-color: var(--sl-color-primary-500); color: var(--sl-color-neutral-0); }
+    .button--standard.button--primary:active:not(.button--disabled) { background-color: var(--sl-color-primary-600); border-color: var(--sl-color-primary-600); color: var(--sl-color-neutral-0); }
+    .button--standard.button--success { background-color: var(--sl-color-success-600); border-color: var(--sl-color-success-600); color: var(--sl-color-neutral-0); }
+    .button--standard.button--success:hover:not(.button--disabled) { background-color: var(--sl-color-success-500); border-color: var(--sl-color-success-500); color: var(--sl-color-neutral-0); }
+    .button--standard.button--success:active:not(.button--disabled) { background-color: var(--sl-color-success-600); border-color: var(--sl-color-success-600); color: var(--sl-color-neutral-0); }
+    .button--standard.button--neutral { background-color: var(--sl-color-neutral-600); border-color: var(--sl-color-neutral-600); color: var(--sl-color-neutral-0); }
+    .button--standard.button--neutral:hover:not(.button--disabled) { background-color: var(--sl-color-neutral-500); border-color: var(--sl-color-neutral-500); color: var(--sl-color-neutral-0); }
+    .button--standard.button--neutral:active:not(.button--disabled) { background-color: var(--sl-color-neutral-600); border-color: var(--sl-color-neutral-600); color: var(--sl-color-neutral-0); }
+    .button--standard.button--warning { background-color: var(--sl-color-warning-600); border-color: var(--sl-color-warning-600); color: var(--sl-color-neutral-0); }
+    .button--standard.button--warning:hover:not(.button--disabled) { background-color: var(--sl-color-warning-500); border-color: var(--sl-color-warning-500); color: var(--sl-color-neutral-0); }
+    .button--standard.button--warning:active:not(.button--disabled) { background-color: var(--sl-color-warning-600); border-color: var(--sl-color-warning-600); color: var(--sl-color-neutral-0); }
+    .button--standard.button--danger { background-color: var(--sl-color-danger-600); border-color: var(--sl-color-danger-600); color: var(--sl-color-neutral-0); }
+    .button--standard.button--danger:hover:not(.button--disabled) { background-color: var(--sl-color-danger-500); border-color: var(--sl-color-danger-500); color: var(--sl-color-neutral-0); }
+    .button--standard.button--danger:active:not(.button--disabled) { background-color: var(--sl-color-danger-600); border-color: var(--sl-color-danger-600); color: var(--sl-color-neutral-0); }
+    .button--outline { background: none; border: 1px solid; }
+    .button--outline.button--default { border-color: var(--sl-input-border-color); color: var(--sl-color-neutral-700); }
+    .button--outline.button--default:hover:not(.button--disabled), .button--outline.button--default.button--checked:not(.button--disabled) { border-color: var(--sl-color-primary-600); background-color: var(--sl-color-primary-600); color: var(--sl-color-neutral-0); }
+    .button--outline.button--default:active:not(.button--disabled) { border-color: var(--sl-color-primary-700); background-color: var(--sl-color-primary-700); color: var(--sl-color-neutral-0); }
+    .button--outline.button--primary { border-color: var(--sl-color-primary-600); color: var(--sl-color-primary-600); }
+    .button--outline.button--primary:hover:not(.button--disabled), .button--outline.button--primary.button--checked:not(.button--disabled) { background-color: var(--sl-color-primary-600); color: var(--sl-color-neutral-0); }
+    .button--outline.button--primary:active:not(.button--disabled) { border-color: var(--sl-color-primary-700); background-color: var(--sl-color-primary-700); color: var(--sl-color-neutral-0); }
+    .button--outline.button--success { border-color: var(--sl-color-success-600); color: var(--sl-color-success-600); }
+    .button--outline.button--success:hover:not(.button--disabled), .button--outline.button--success.button--checked:not(.button--disabled) { background-color: var(--sl-color-success-600); color: var(--sl-color-neutral-0); }
+    .button--outline.button--success:active:not(.button--disabled) { border-color: var(--sl-color-success-700); background-color: var(--sl-color-success-700); color: var(--sl-color-neutral-0); }
+    .button--outline.button--neutral { border-color: var(--sl-color-neutral-600); color: var(--sl-color-neutral-600); }
+    .button--outline.button--neutral:hover:not(.button--disabled), .button--outline.button--neutral.button--checked:not(.button--disabled) { background-color: var(--sl-color-neutral-600); color: var(--sl-color-neutral-0); }
+    .button--outline.button--neutral:active:not(.button--disabled) { border-color: var(--sl-color-neutral-700); background-color: var(--sl-color-neutral-700); color: var(--sl-color-neutral-0); }
+    .button--outline.button--warning { border-color: var(--sl-color-warning-600); color: var(--sl-color-warning-600); }
+    .button--outline.button--warning:hover:not(.button--disabled), .button--outline.button--warning.button--checked:not(.button--disabled) { background-color: var(--sl-color-warning-600); color: var(--sl-color-neutral-0); }
+    .button--outline.button--warning:active:not(.button--disabled) { border-color: var(--sl-color-warning-700); background-color: var(--sl-color-warning-700); color: var(--sl-color-neutral-0); }
+    .button--outline.button--danger { border-color: var(--sl-color-danger-600); color: var(--sl-color-danger-600); }
+    .button--outline.button--danger:hover:not(.button--disabled), .button--outline.button--danger.button--checked:not(.button--disabled) { background-color: var(--sl-color-danger-600); color: var(--sl-color-neutral-0); }
+    .button--outline.button--danger:active:not(.button--disabled) { border-color: var(--sl-color-danger-700); background-color: var(--sl-color-danger-700); color: var(--sl-color-neutral-0); }
+    @media (forced-colors: active) {
+      .button.button--outline.button--checked:not(.button--disabled) { outline: transparent solid 2px; }
+    }
+    .button--text { background-color: transparent; border-color: transparent; color: var(--sl-color-primary-600); }
+    .button--text:hover:not(.button--disabled) { background-color: transparent; border-color: transparent; color: var(--sl-color-primary-500); }
+    .button--text:focus-visible:not(.button--disabled) { background-color: transparent; border-color: transparent; color: var(--sl-color-primary-500); }
+    .button--text:active:not(.button--disabled) { background-color: transparent; border-color: transparent; color: var(--sl-color-primary-700); }
+    .button--small { height: auto; min-height: var(--sl-input-height-small); font-size: var(--sl-button-font-size-small); line-height: calc(var(--sl-input-height-small) - var(--sl-input-border-width) * 2); border-radius: var(--sl-input-border-radius-small); }
+    .button--medium { height: auto; min-height: var(--sl-input-height-medium); font-size: var(--sl-button-font-size-medium); line-height: calc(var(--sl-input-height-medium) - var(--sl-input-border-width) * 2); border-radius: var(--sl-input-border-radius-medium); }
+    .button--large { height: auto; min-height: var(--sl-input-height-large); font-size: var(--sl-button-font-size-large); line-height: calc(var(--sl-input-height-large) - var(--sl-input-border-width) * 2); border-radius: var(--sl-input-border-radius-large); }
+    .button--pill.button--small { border-radius: var(--sl-input-height-small); }
+    .button--pill.button--medium { border-radius: var(--sl-input-height-medium); }
+    .button--pill.button--large { border-radius: var(--sl-input-height-large); }
+    .button--circle { padding-left: 0px; padding-right: 0px; }
+    .button--circle.button--small { width: var(--sl-input-height-small); border-radius: 50%; }
+    .button--circle.button--medium { width: var(--sl-input-height-medium); border-radius: 50%; }
+    .button--circle.button--large { width: var(--sl-input-height-large); border-radius: 50%; }
+    .button--circle .button__prefix, .button--circle .button__suffix, .button--circle .button__caret { display: none; }
+    .button--caret .button__suffix { display: none; }
+    .button--caret .button__caret { height: auto; }
+    .button--loading { position: relative; cursor: wait; }
+    .button--loading .button__prefix, .button--loading .button__label, .button--loading .button__suffix, .button--loading .button__caret { visibility: hidden; }
+    .button--loading sl-spinner { --indicator-color: currentColor; position: absolute; font-size: 1em; height: 1em; width: 1em; top: calc(50% - 0.5em); left: calc(50% - 0.5em); }
+    .button ::slotted(sl-badge) { position: absolute; top: 0px; right: 0px; translate: 50% -50%; pointer-events: none; }
+    .button--rtl ::slotted(sl-badge) { right: auto; left: 0px; translate: -50% -50%; }
+    .button--has-label.button--small .button__label { padding: 0 var(--sl-spacing-small); }
+    .button--has-label.button--medium .button__label { padding: 0 var(--sl-spacing-medium); }
+    .button--has-label.button--large .button__label { padding: 0 var(--sl-spacing-large); }
+    .button--has-prefix.button--small { padding-inline-start: var(--sl-spacing-x-small); }
+    .button--has-prefix.button--small .button__label { padding-inline-start: var(--sl-spacing-x-small); }
+    .button--has-prefix.button--medium { padding-inline-start: var(--sl-spacing-small); }
+    .button--has-prefix.button--medium .button__label { padding-inline-start: var(--sl-spacing-small); }
+    .button--has-prefix.button--large { padding-inline-start: var(--sl-spacing-small); }
+    .button--has-prefix.button--large .button__label { padding-inline-start: var(--sl-spacing-small); }
+    .button--has-suffix.button--small, .button--caret.button--small { padding-inline-end: var(--sl-spacing-x-small); }
+    .button--has-suffix.button--small .button__label, .button--caret.button--small .button__label { padding-inline-end: var(--sl-spacing-x-small); }
+    .button--has-suffix.button--medium, .button--caret.button--medium { padding-inline-end: var(--sl-spacing-small); }
+    .button--has-suffix.button--medium .button__label, .button--caret.button--medium .button__label { padding-inline-end: var(--sl-spacing-small); }
+    .button--has-suffix.button--large, .button--caret.button--large { padding-inline-end: var(--sl-spacing-small); }
+    .button--has-suffix.button--large .button__label, .button--caret.button--large .button__label { padding-inline-end: var(--sl-spacing-small); }
+    :host([data-sl-button-group__button--first]:not([data-sl-button-group__button--last])) .button { border-start-end-radius: 0px; border-end-end-radius: 0px; }
+    :host([data-sl-button-group__button--inner]) .button { border-radius: 0px; }
+    :host([data-sl-button-group__button--last]:not([data-sl-button-group__button--first])) .button { border-start-start-radius: 0px; border-end-start-radius: 0px; }
+    :host([data-sl-button-group__button]:not([data-sl-button-group__button--first])) { margin-inline-start: calc(-1 * var(--sl-input-border-width)); }
+    :host([data-sl-button-group__button]:not([data-sl-button-group__button--first], [data-sl-button-group__button--radio], [variant="default"]):not(:hover)) .button::after { content: ""; position: absolute; top: 0px; inset-inline-start: 0px; bottom: 0px; border-left: 1px solid rgba(128, 128, 128, 0.33); mix-blend-mode: multiply; }
+    :host([data-sl-button-group__button--hover]) { z-index: 1; }
+    :host([data-sl-button-group__button--focus]), :host([data-sl-button-group__button][checked]) { z-index: 2; }
+  `
+  ctx.domElement.appendChild(button_styles);
+
+
+  const range_style = document.createElement("style");
+  range_style.textContent = `
+    :host {
+      display: block;
+      width: 100%;
+      overflow: visible;
+      --thumb-size: 22px;
+      --track-color: var(--sl-color-neutral-300, #cbd5e1);
+      --fill-color:  var(--sl-color-primary-600, #0284c7);
+      --tip-bg:      var(--sl-tooltip-background-color, #1e293b);
+      --tip-fg:      var(--sl-tooltip-color, #fff);
+    }
+
+    .wrap {
+      position: relative;
+      padding: 36px 18px 36px 18px;
+    }
+
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      display: block;
+      width: 100%;
+      height: 6px;
+      border-radius: 3px;
+      background: var(--track-color);
+      outline: none;
+      cursor: pointer;
+      margin: 0;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width:  var(--thumb-size);
+      height: var(--thumb-size);
+      border-radius: 50%;
+      background: var(--fill-color);
+      cursor: pointer;
+      box-shadow: 0 1px 5px rgba(0,0,0,.35);
+      transition: transform 0.1s;
+    }
+    input[type="range"]::-webkit-slider-thumb:hover {
+      transform: scale(1.15);
+    }
+    input[type="range"]::-webkit-slider-thumb:active {
+      transform: scale(1.2);
+    }
+
+    input[type="range"]::-moz-range-thumb {
+      width:  var(--thumb-size);
+      height: var(--thumb-size);
+      border-radius: 50%;
+      background: var(--fill-color);
+      cursor: pointer;
+      border: none;
+      box-shadow: 0 1px 5px rgba(0,0,0,.35);
+    }
+
+    /* Tooltip — floats above the thumb or above a hovered dot */
+    .tip {
+      position: absolute;
+      bottom: calc(62% + 8px);
+      transform: translateX(-50%);
+      background: var(--tip-bg);
+      color: var(--tip-fg);
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-family: var(--sl-font-sans, system-ui, sans-serif);
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.12s;
+      z-index: 9999;
+    }
+    .tip.show { opacity: 1; }
+
+    /* Row of SB annotation dots below the slider track */
+    .ann-row {
+      position: absolute;
+      height: 16px;
+      margin-top: 9px;
+    }
+
+    .dot {
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      transform: translateX(-50%);
+      cursor: pointer;
+      top: 0px;
+      border: 1px solid var(--sl-color-neutral-0);
+      box-sizing: border-box;
+      transition: transform 0.1s;
+    }
+    .dot:hover {
+      transform: translateX(-50%) scale(1.45);
+    }
+  `
+  ctx.domElement.appendChild(range_style);
+
+
   // ── Shadow DOM styles ──────────────────────────────────────────────────────
   const style = document.createElement("style");
   style.textContent = `
@@ -53,6 +260,12 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       width: 100% !important;
       height: 100% !important;
     }
+    .wrapper {
+      display: flex;
+      align-items: center;
+      gap: 2rem;
+      flex-direction: column;
+    }
     .controls {
       flex-shrink: 0;
       height: 44px;
@@ -60,21 +273,16 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       align-items: center;
       gap: 8px;
       padding: 0 10px;
-      border-top: 1px solid rgba(128,128,128,0.20);
-      font-family: sans-serif;
       font-size: 13px;
+      max-width: 900px;
+      width: 100%;
     }
     .play-btn {
-      background: none;
-      border: 1px solid rgba(128,128,128,0.45);
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 14px;
-      padding: 2px 9px;
-      color: inherit;
-      min-width: 38px;
+      // display: inline-flex;
+      // align-items: stretch;
+      // justify-content: center;
     }
-    .play-btn:hover { background: rgba(128,128,128,0.12); }
+    // .play-btn:hover { background: rgba(128,128,128,0.12); }
     .race-time-display {
       font-variant-numeric: tabular-nums;
       min-width: 48px;
@@ -104,22 +312,33 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   ctx.domElement.appendChild(style);
 
   // ── DOM ────────────────────────────────────────────────────────────────────
+  const wrapper = document.createElement("div");
+  wrapper.className = "wrapper";
+  ctx.domElement.appendChild(wrapper);
+
   const canvasWrap = document.createElement("div");
   canvasWrap.className = "canvas-wrap";
   const canvas = document.createElement("canvas");
   canvasWrap.appendChild(canvas);
-  ctx.domElement.appendChild(canvasWrap);
+  wrapper.appendChild(canvasWrap);
 
   const controls = document.createElement("div");
   controls.className = "controls";
 
   const playBtn = document.createElement("button");
-  playBtn.className = "play-btn";
-  playBtn.textContent = "▶";
+  playBtn.className = "play-btn button button--primary button--medium button--standard button--has-label";
 
-  const timeDisplay = document.createElement("span");
-  timeDisplay.className = "race-time-display";
-  timeDisplay.textContent = "0:00.0";
+  const playBtnLabel = document.createElement("span")
+  playBtnLabel.className = "button__label"
+  playBtnLabel.textContent = "▶ Race";
+
+  playBtn.appendChild(playBtnLabel)
+
+
+
+  // const timeDisplay = document.createElement("span");
+  // timeDisplay.className = "race-time-display";
+  // timeDisplay.textContent = "0:00.0";
 
   const seekInput = document.createElement("input");
   seekInput.type = "range";
@@ -128,8 +347,8 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   seekInput.step = 100;
   seekInput.value = 0;
 
-  const totalDisplay = document.createElement("span");
-  totalDisplay.className = "race-time-total";
+  // const totalDisplay = document.createElement("span");
+  // totalDisplay.className = "race-time-total";
 
   // Speed presets: each delivers a fixed real-time playback duration regardless
   // of how long the race is, so a marathon and a sprint both feel engaging.
@@ -150,11 +369,11 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   });
 
   controls.appendChild(playBtn);
-  controls.appendChild(timeDisplay);
+  // controls.appendChild(timeDisplay);
   controls.appendChild(seekInput);
-  controls.appendChild(totalDisplay);
+  // controls.appendChild(totalDisplay);
   controls.appendChild(speedSelect);
-  ctx.domElement.appendChild(controls);
+  wrapper.appendChild(controls);
 
   // ── State ──────────────────────────────────────────────────────────────────
   let races       = ctx.initialProps.races || [];
@@ -190,6 +409,17 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     const sStr = parseFloat(sf) < 10 ? "0" + sf : sf;
     return m + ":" + sStr;
   }
+
+  function updateFill() {
+    const min = Number(seekInput.min);
+    const max = Number(seekInput.max);
+    const val = Number(seekInput.value);
+    const pct = max > min ? (val - min) / (max - min) * 100 : 0;
+    console.log(min, max, val, pct)
+    seekInput.style.background =
+      `linear-gradient(to right, var(--fill-color) ${pct}%, var(--track-color) ${pct}%)`;
+  }
+
 
   // ── Compute race duration from stroke data ─────────────────────────────────
   function rebuildMaxTime() {
@@ -230,7 +460,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     }
 
     seekInput.max = maxTimeMs;
-    totalDisplay.textContent = fmtTime(maxTimeMs);
+    // totalDisplay.textContent = fmtTime(maxTimeMs);
     // Speed is computed dynamically via playbackSpeed() — no static calibration needed.
   }
 
@@ -624,8 +854,9 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
         ctx2d.font = `${boat.is_pb || (rank && rank <= 3) ? "bold " : ""}13px monospace`;
         ctx2d.textAlign = "left";
         ctx2d.fillText(dStr+medal, textX, midY + 4);
-        console.log(textX)
       }
+
+      updateFill();
     }
 
     // Final lane bottom border
@@ -716,12 +947,12 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   }
 
   function updatePlayBtn() {
-    playBtn.textContent = playing ? "⏸" : "▶";
+    playBtnLabel.textContent = playing ? "⏸ Race" : "▶ Race";
   }
 
   function updateSeekDisplay() {
     seekInput.value = currentTimeMs;
-    timeDisplay.textContent = fmtTime(currentTimeMs);
+    // timeDisplay.textContent = fmtTime(currentTimeMs);
   }
 
   // ── Reset race to start ────────────────────────────────────────────────────
@@ -757,11 +988,12 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     currentTimeMs = parseFloat(seekInput.value);
     wakeBuffers.clear();
     renderFrame(currentTimeMs);
-    timeDisplay.textContent = fmtTime(currentTimeMs);
+    // timeDisplay.textContent = fmtTime(currentTimeMs);
     // Report back to Python
     changeId++;
     ctx.updateProp("change_id", changeId);
     ctx.updateProp("current_time_ms", Math.round(currentTimeMs));
+
   });
 
   speedSelect.addEventListener("change", () => {

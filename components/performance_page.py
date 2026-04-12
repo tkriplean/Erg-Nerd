@@ -761,6 +761,7 @@ def _chart_section(
 
         # ---- chart ----
         if chart_cfg:
+            print("rendering")
             PerformanceChart(
                 config=chart_cfg,
                 show_watts=show_watts,

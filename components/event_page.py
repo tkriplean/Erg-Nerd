@@ -530,14 +530,13 @@ def event_page(
             event_type=state.event_type,
             event_value=state.event_value,
             is_dark=is_dark,
-            height="70vh",
         )
 
         # ── Sort toggle (below the race) ──────────────────────────────────────────
-        with hd.hbox(gap=2, align="center", padding_top=0.75, padding_bottom=0.5):
-            hd.text("Sort lanes by", font_size="small", font_color="neutral-500")
+        with hd.box(gap=0.2, align="center", padding_top=0.75, padding_bottom=0.5):
+            hd.text("Sort lanes by", font_size="medium", font_color="neutral-500")
             with hd.scope("sort_mode"):
-                with radio_group(value=state.sort_mode, size="small") as sort_rg:
+                with radio_group(value=state.sort_mode, size="medium") as sort_rg:
                     hd.radio_button("Date", value="date")
                     hd.radio_button("Result", value="result")
                 if sort_rg.changed:
