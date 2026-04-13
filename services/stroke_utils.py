@@ -25,7 +25,8 @@ Exported:
 
     build_races_data(workouts, strokes_by_id, sorted_seasons) → list[dict]
         Assemble the full races payload ready for the RaceChart JS plugin.
-        Each dict: {id, label, color, strokes, is_pb, season, finish_time_s}.
+        Each dict: {id, label, color, strokes, is_pb, season, finish_time_s,
+                    avg_spm, has_real_strokes}.
         Order is preserved from the input workouts list (Python caller sorts).
 
     season_color_hex(season, sorted_seasons) → str
@@ -318,13 +319,16 @@ def build_races_data(
     List of boat dicts in the same order as `workouts`:
     [
         {
-            "id":           int,
-            "label":        "Jan. 26th, 2019",
-            "color":        "#3a8fde",
-            "strokes":      [{"t": float, "d": float}, …],
-            "is_pb":        bool,
-            "season":       "2025-26",
-            "finish_time_s": float | None,  # official finish time (dist events only)
+            "id":               int,
+            "label":            "Jan. 26th, 2019",
+            "color":            "#3a8fde",
+            "strokes":          [{"t": float, "d": float}, …],
+            "is_pb":            bool,
+            "season":           "2025-26",
+            "finish_time_s":    float | None,  # official finish time (dist events only)
+            "finish_dist_m":    float | None,  # official final metres (time events)
+            "avg_spm":          int,            # piece average stroke rate (0 if unknown)
+            "has_real_strokes": bool,           # False → strokes are synthesised from splits
         },
         …
     ]
@@ -382,6 +386,19 @@ def build_races_data(
         color = season_color_hex(season, sorted_seasons)
         label = build_boat_label(w, workouts)
 
+        # avg_spm: the piece's recorded average stroke rate (strokes/min).
+        # Used by the JS animation as the per-boat cadence fallback when real
+        # stroke-level data is not available.
+        avg_spm = int(w.get("stroke_rate") or 0)
+
+        # has_real_strokes: True only when the cached stroke list came from the
+        # Concept2 API (not synthesised from split data).  Synthesised lists have
+        # very few points (~2 × number of splits), so the SMOOTH_WIN smoothing
+        # window would span the whole piece and produce an incorrectly low SPM.
+        # We require > 20 points as a proxy for "real" stroke data.
+        cached_strokes = strokes_by_id.get(key, []) if key else []
+        has_real_strokes = len(cached_strokes) > 20
+
         boats.append(
             {
                 "id": wid,
@@ -390,8 +407,10 @@ def build_races_data(
                 "strokes": strokes,
                 "is_pb": wid == pb_workout_id,
                 "season": season,
-                "finish_time_s": finish_time_s,  # dist events: official finish time (s)
-                "finish_dist_m": finish_dist_m,  # time events: official final metres
+                "finish_time_s": finish_time_s,   # dist events: official finish time (s)
+                "finish_dist_m": finish_dist_m,   # time events: official final metres
+                "avg_spm": avg_spm,               # piece average stroke rate (SPM)
+                "has_real_strokes": has_real_strokes,  # False → use avg_spm for cadence
             }
         )
 

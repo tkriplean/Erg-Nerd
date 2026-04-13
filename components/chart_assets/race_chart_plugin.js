@@ -35,210 +35,8 @@
 window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
 
   // Importing styles from hyperdiv components
-  const button_styles = document.createElement("style");
-  button_styles.textContent = `
-    :host { display: inline-block; position: relative; width: auto; cursor: pointer; }
-    .button { display: inline-flex; align-items: stretch; justify-content: center; border-style: solid; border-width: var(--sl-input-border-width); font-family: var(--sl-input-font-family); font-weight: var(--sl-font-weight-semibold); text-decoration: none; user-select: none; white-space: nowrap; vertical-align: middle; padding: 0px; transition: var(--sl-transition-x-fast) background-color,
-          var(--sl-transition-x-fast) color,
-          var(--sl-transition-x-fast) border,
-          var(--sl-transition-x-fast) box-shadow; cursor: inherit; }
-    .button:focus { outline: none; }
-    .button:focus-visible { outline: var(--sl-focus-ring); outline-offset: var(--sl-focus-ring-offset); }
-    .button--disabled { opacity: 0.5; cursor: not-allowed; }
-    .button--disabled * { pointer-events: none; }
-    .button__prefix, .button__suffix { flex: 0 0 auto; display: flex; align-items: center; pointer-events: none; }
-    .button__label { display: inline-block; }
-    .button__label::slotted(sl-icon) { vertical-align: -2px; }
-    .button--standard.button--default { background-color: var(--sl-color-neutral-0); border-color: var(--sl-input-border-color); color: var(--sl-color-neutral-700); }
-    .button--standard.button--default:hover:not(.button--disabled) { background-color: var(--sl-color-primary-50); border-color: var(--sl-color-primary-300); color: var(--sl-color-primary-700); }
-    .button--standard.button--default:active:not(.button--disabled) { background-color: var(--sl-color-primary-100); border-color: var(--sl-color-primary-400); color: var(--sl-color-primary-700); }
-    .button--standard.button--primary { background-color: var(--sl-color-primary-600); border-color: var(--sl-color-primary-600); color: var(--sl-color-neutral-0); }
-    .button--standard.button--primary:hover:not(.button--disabled) { background-color: var(--sl-color-primary-500); border-color: var(--sl-color-primary-500); color: var(--sl-color-neutral-0); }
-    .button--standard.button--primary:active:not(.button--disabled) { background-color: var(--sl-color-primary-600); border-color: var(--sl-color-primary-600); color: var(--sl-color-neutral-0); }
-    .button--standard.button--success { background-color: var(--sl-color-success-600); border-color: var(--sl-color-success-600); color: var(--sl-color-neutral-0); }
-    .button--standard.button--success:hover:not(.button--disabled) { background-color: var(--sl-color-success-500); border-color: var(--sl-color-success-500); color: var(--sl-color-neutral-0); }
-    .button--standard.button--success:active:not(.button--disabled) { background-color: var(--sl-color-success-600); border-color: var(--sl-color-success-600); color: var(--sl-color-neutral-0); }
-    .button--standard.button--neutral { background-color: var(--sl-color-neutral-600); border-color: var(--sl-color-neutral-600); color: var(--sl-color-neutral-0); }
-    .button--standard.button--neutral:hover:not(.button--disabled) { background-color: var(--sl-color-neutral-500); border-color: var(--sl-color-neutral-500); color: var(--sl-color-neutral-0); }
-    .button--standard.button--neutral:active:not(.button--disabled) { background-color: var(--sl-color-neutral-600); border-color: var(--sl-color-neutral-600); color: var(--sl-color-neutral-0); }
-    .button--standard.button--warning { background-color: var(--sl-color-warning-600); border-color: var(--sl-color-warning-600); color: var(--sl-color-neutral-0); }
-    .button--standard.button--warning:hover:not(.button--disabled) { background-color: var(--sl-color-warning-500); border-color: var(--sl-color-warning-500); color: var(--sl-color-neutral-0); }
-    .button--standard.button--warning:active:not(.button--disabled) { background-color: var(--sl-color-warning-600); border-color: var(--sl-color-warning-600); color: var(--sl-color-neutral-0); }
-    .button--standard.button--danger { background-color: var(--sl-color-danger-600); border-color: var(--sl-color-danger-600); color: var(--sl-color-neutral-0); }
-    .button--standard.button--danger:hover:not(.button--disabled) { background-color: var(--sl-color-danger-500); border-color: var(--sl-color-danger-500); color: var(--sl-color-neutral-0); }
-    .button--standard.button--danger:active:not(.button--disabled) { background-color: var(--sl-color-danger-600); border-color: var(--sl-color-danger-600); color: var(--sl-color-neutral-0); }
-    .button--outline { background: none; border: 1px solid; }
-    .button--outline.button--default { border-color: var(--sl-input-border-color); color: var(--sl-color-neutral-700); }
-    .button--outline.button--default:hover:not(.button--disabled), .button--outline.button--default.button--checked:not(.button--disabled) { border-color: var(--sl-color-primary-600); background-color: var(--sl-color-primary-600); color: var(--sl-color-neutral-0); }
-    .button--outline.button--default:active:not(.button--disabled) { border-color: var(--sl-color-primary-700); background-color: var(--sl-color-primary-700); color: var(--sl-color-neutral-0); }
-    .button--outline.button--primary { border-color: var(--sl-color-primary-600); color: var(--sl-color-primary-600); }
-    .button--outline.button--primary:hover:not(.button--disabled), .button--outline.button--primary.button--checked:not(.button--disabled) { background-color: var(--sl-color-primary-600); color: var(--sl-color-neutral-0); }
-    .button--outline.button--primary:active:not(.button--disabled) { border-color: var(--sl-color-primary-700); background-color: var(--sl-color-primary-700); color: var(--sl-color-neutral-0); }
-    .button--outline.button--success { border-color: var(--sl-color-success-600); color: var(--sl-color-success-600); }
-    .button--outline.button--success:hover:not(.button--disabled), .button--outline.button--success.button--checked:not(.button--disabled) { background-color: var(--sl-color-success-600); color: var(--sl-color-neutral-0); }
-    .button--outline.button--success:active:not(.button--disabled) { border-color: var(--sl-color-success-700); background-color: var(--sl-color-success-700); color: var(--sl-color-neutral-0); }
-    .button--outline.button--neutral { border-color: var(--sl-color-neutral-600); color: var(--sl-color-neutral-600); }
-    .button--outline.button--neutral:hover:not(.button--disabled), .button--outline.button--neutral.button--checked:not(.button--disabled) { background-color: var(--sl-color-neutral-600); color: var(--sl-color-neutral-0); }
-    .button--outline.button--neutral:active:not(.button--disabled) { border-color: var(--sl-color-neutral-700); background-color: var(--sl-color-neutral-700); color: var(--sl-color-neutral-0); }
-    .button--outline.button--warning { border-color: var(--sl-color-warning-600); color: var(--sl-color-warning-600); }
-    .button--outline.button--warning:hover:not(.button--disabled), .button--outline.button--warning.button--checked:not(.button--disabled) { background-color: var(--sl-color-warning-600); color: var(--sl-color-neutral-0); }
-    .button--outline.button--warning:active:not(.button--disabled) { border-color: var(--sl-color-warning-700); background-color: var(--sl-color-warning-700); color: var(--sl-color-neutral-0); }
-    .button--outline.button--danger { border-color: var(--sl-color-danger-600); color: var(--sl-color-danger-600); }
-    .button--outline.button--danger:hover:not(.button--disabled), .button--outline.button--danger.button--checked:not(.button--disabled) { background-color: var(--sl-color-danger-600); color: var(--sl-color-neutral-0); }
-    .button--outline.button--danger:active:not(.button--disabled) { border-color: var(--sl-color-danger-700); background-color: var(--sl-color-danger-700); color: var(--sl-color-neutral-0); }
-    @media (forced-colors: active) {
-      .button.button--outline.button--checked:not(.button--disabled) { outline: transparent solid 2px; }
-    }
-    .button--text { background-color: transparent; border-color: transparent; color: var(--sl-color-primary-600); }
-    .button--text:hover:not(.button--disabled) { background-color: transparent; border-color: transparent; color: var(--sl-color-primary-500); }
-    .button--text:focus-visible:not(.button--disabled) { background-color: transparent; border-color: transparent; color: var(--sl-color-primary-500); }
-    .button--text:active:not(.button--disabled) { background-color: transparent; border-color: transparent; color: var(--sl-color-primary-700); }
-    .button--small { height: auto; min-height: var(--sl-input-height-small); font-size: var(--sl-button-font-size-small); line-height: calc(var(--sl-input-height-small) - var(--sl-input-border-width) * 2); border-radius: var(--sl-input-border-radius-small); }
-    .button--medium { height: auto; min-height: var(--sl-input-height-medium); font-size: var(--sl-button-font-size-medium); line-height: calc(var(--sl-input-height-medium) - var(--sl-input-border-width) * 2); border-radius: var(--sl-input-border-radius-medium); }
-    .button--large { height: auto; min-height: var(--sl-input-height-large); font-size: var(--sl-button-font-size-large); line-height: calc(var(--sl-input-height-large) - var(--sl-input-border-width) * 2); border-radius: var(--sl-input-border-radius-large); }
-    .button--pill.button--small { border-radius: var(--sl-input-height-small); }
-    .button--pill.button--medium { border-radius: var(--sl-input-height-medium); }
-    .button--pill.button--large { border-radius: var(--sl-input-height-large); }
-    .button--circle { padding-left: 0px; padding-right: 0px; }
-    .button--circle.button--small { width: var(--sl-input-height-small); border-radius: 50%; }
-    .button--circle.button--medium { width: var(--sl-input-height-medium); border-radius: 50%; }
-    .button--circle.button--large { width: var(--sl-input-height-large); border-radius: 50%; }
-    .button--circle .button__prefix, .button--circle .button__suffix, .button--circle .button__caret { display: none; }
-    .button--caret .button__suffix { display: none; }
-    .button--caret .button__caret { height: auto; }
-    .button--loading { position: relative; cursor: wait; }
-    .button--loading .button__prefix, .button--loading .button__label, .button--loading .button__suffix, .button--loading .button__caret { visibility: hidden; }
-    .button--loading sl-spinner { --indicator-color: currentColor; position: absolute; font-size: 1em; height: 1em; width: 1em; top: calc(50% - 0.5em); left: calc(50% - 0.5em); }
-    .button ::slotted(sl-badge) { position: absolute; top: 0px; right: 0px; translate: 50% -50%; pointer-events: none; }
-    .button--rtl ::slotted(sl-badge) { right: auto; left: 0px; translate: -50% -50%; }
-    .button--has-label.button--small .button__label { padding: 0 var(--sl-spacing-small); }
-    .button--has-label.button--medium .button__label { padding: 0 var(--sl-spacing-medium); }
-    .button--has-label.button--large .button__label { padding: 0 var(--sl-spacing-large); }
-    .button--has-prefix.button--small { padding-inline-start: var(--sl-spacing-x-small); }
-    .button--has-prefix.button--small .button__label { padding-inline-start: var(--sl-spacing-x-small); }
-    .button--has-prefix.button--medium { padding-inline-start: var(--sl-spacing-small); }
-    .button--has-prefix.button--medium .button__label { padding-inline-start: var(--sl-spacing-small); }
-    .button--has-prefix.button--large { padding-inline-start: var(--sl-spacing-small); }
-    .button--has-prefix.button--large .button__label { padding-inline-start: var(--sl-spacing-small); }
-    .button--has-suffix.button--small, .button--caret.button--small { padding-inline-end: var(--sl-spacing-x-small); }
-    .button--has-suffix.button--small .button__label, .button--caret.button--small .button__label { padding-inline-end: var(--sl-spacing-x-small); }
-    .button--has-suffix.button--medium, .button--caret.button--medium { padding-inline-end: var(--sl-spacing-small); }
-    .button--has-suffix.button--medium .button__label, .button--caret.button--medium .button__label { padding-inline-end: var(--sl-spacing-small); }
-    .button--has-suffix.button--large, .button--caret.button--large { padding-inline-end: var(--sl-spacing-small); }
-    .button--has-suffix.button--large .button__label, .button--caret.button--large .button__label { padding-inline-end: var(--sl-spacing-small); }
-    :host([data-sl-button-group__button--first]:not([data-sl-button-group__button--last])) .button { border-start-end-radius: 0px; border-end-end-radius: 0px; }
-    :host([data-sl-button-group__button--inner]) .button { border-radius: 0px; }
-    :host([data-sl-button-group__button--last]:not([data-sl-button-group__button--first])) .button { border-start-start-radius: 0px; border-end-start-radius: 0px; }
-    :host([data-sl-button-group__button]:not([data-sl-button-group__button--first])) { margin-inline-start: calc(-1 * var(--sl-input-border-width)); }
-    :host([data-sl-button-group__button]:not([data-sl-button-group__button--first], [data-sl-button-group__button--radio], [variant="default"]):not(:hover)) .button::after { content: ""; position: absolute; top: 0px; inset-inline-start: 0px; bottom: 0px; border-left: 1px solid rgba(128, 128, 128, 0.33); mix-blend-mode: multiply; }
-    :host([data-sl-button-group__button--hover]) { z-index: 1; }
-    :host([data-sl-button-group__button--focus]), :host([data-sl-button-group__button][checked]) { z-index: 2; }
-  `
-  ctx.domElement.appendChild(button_styles);
 
 
-  const range_style = document.createElement("style");
-  range_style.textContent = `
-    :host {
-      display: block;
-      width: 100%;
-      overflow: visible;
-      --thumb-size: 22px;
-      --track-color: var(--sl-color-neutral-300, #cbd5e1);
-      --fill-color:  var(--sl-color-primary-600, #0284c7);
-      --tip-bg:      var(--sl-tooltip-background-color, #1e293b);
-      --tip-fg:      var(--sl-tooltip-color, #fff);
-    }
-
-    .wrap {
-      position: relative;
-      padding: 36px 18px 36px 18px;
-    }
-
-    input[type="range"] {
-      -webkit-appearance: none;
-      appearance: none;
-      display: block;
-      width: 100%;
-      height: 6px;
-      border-radius: 3px;
-      background: var(--track-color);
-      outline: none;
-      cursor: pointer;
-      margin: 0;
-    }
-
-    input[type="range"]::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      appearance: none;
-      width:  var(--thumb-size);
-      height: var(--thumb-size);
-      border-radius: 50%;
-      background: var(--fill-color);
-      cursor: pointer;
-      box-shadow: 0 1px 5px rgba(0,0,0,.35);
-      transition: transform 0.1s;
-    }
-    input[type="range"]::-webkit-slider-thumb:hover {
-      transform: scale(1.15);
-    }
-    input[type="range"]::-webkit-slider-thumb:active {
-      transform: scale(1.2);
-    }
-
-    input[type="range"]::-moz-range-thumb {
-      width:  var(--thumb-size);
-      height: var(--thumb-size);
-      border-radius: 50%;
-      background: var(--fill-color);
-      cursor: pointer;
-      border: none;
-      box-shadow: 0 1px 5px rgba(0,0,0,.35);
-    }
-
-    /* Tooltip — floats above the thumb or above a hovered dot */
-    .tip {
-      position: absolute;
-      bottom: calc(62% + 8px);
-      transform: translateX(-50%);
-      background: var(--tip-bg);
-      color: var(--tip-fg);
-      padding: 3px 8px;
-      border-radius: 4px;
-      font-size: 12px;
-      font-family: var(--sl-font-sans, system-ui, sans-serif);
-      white-space: nowrap;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity 0.12s;
-      z-index: 9999;
-    }
-    .tip.show { opacity: 1; }
-
-    /* Row of SB annotation dots below the slider track */
-    .ann-row {
-      position: absolute;
-      height: 16px;
-      margin-top: 9px;
-    }
-
-    .dot {
-      position: absolute;
-      width: 12px;
-      height: 12px;
-      border-radius: 50%;
-      transform: translateX(-50%);
-      cursor: pointer;
-      top: 0px;
-      border: 1px solid var(--sl-color-neutral-0);
-      box-sizing: border-box;
-      transition: transform 0.1s;
-    }
-    .dot:hover {
-      transform: translateX(-50%) scale(1.45);
-    }
-  `
-  ctx.domElement.appendChild(range_style);
 
 
   // ── Shadow DOM styles ──────────────────────────────────────────────────────
@@ -263,6 +61,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       gap: 2rem;
       flex-direction: column;
       width: 100%;
+      padding-top: 1rem;
     }
     .controls {
       flex-shrink: 0;
@@ -276,11 +75,9 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       width: 100%;
     }
     .play-btn {
-      // display: inline-flex;
-      // align-items: stretch;
-      // justify-content: center;
+      flex-grow: 1;
     }
-    // .play-btn:hover { background: rgba(128,128,128,0.12); }
+
     .race-time-display {
       font-variant-numeric: tabular-nums;
       min-width: 48px;
@@ -289,7 +86,6 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     .race-seek {
       flex: 1;
       cursor: pointer;
-      accent-color: #4a9eff;
     }
     .race-time-total {
       font-variant-numeric: tabular-nums;
@@ -324,8 +120,11 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   const controls = document.createElement("div");
   controls.className = "controls";
 
-  const playBtn = document.createElement("button");
-  playBtn.className = "play-btn button button--primary button--medium button--standard button--has-label";
+  const playBtn = document.createElement("sl-button");
+  playBtn.size = "medium"
+  playBtn.variant = "primary"
+
+  // playBtn.className = "play-btn";
 
   const playBtnLabel = document.createElement("span")
   playBtnLabel.className = "button__label"
@@ -341,8 +140,31 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   // timeDisplay.className = "race-time-display";
   // timeDisplay.textContent = "0:00.0";
 
-  const seekInput = document.createElement("input");
-  seekInput.type = "range";
+  const seekInput = document.createElement("sl-range");
+  // ── Time formatting ────────────────────────────────────────────────────────
+  function fmtTime(ms) {
+    const totalSec = ms / 1000;
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec - m * 60;
+    const sf = s.toFixed(1);
+    const sStr = parseFloat(sf) < 10 ? "0" + sf : sf;
+    return m + ":" + sStr;
+  }
+
+
+  function format_time(tenths){
+    total_s = parseInt(tenths / 10);
+    secs = parseInt(total_s % 60);
+    total_m = total_s / 60;
+    mins = parseInt(total_m % 60);
+    hours = parseInt(total_m / 60);
+    if (hours)
+        return `${hours}:${mins}:${secs}`;
+
+    return `${mins}:${secs}`;
+  }
+
+  seekInput.tooltipFormatter = fmtTime
   seekInput.className = "race-seek";
   seekInput.min = 0;
   seekInput.step = 100;
@@ -385,6 +207,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   let playing           = false;
   let selectedPreset    = "Normal";   // which SPEED_PRESETS entry is active
   let currentTimeMs     = 0;
+  let lastWallDeltaSec  = 0;          // wall-clock seconds elapsed last rAF tick
 
   // Compute actual multiplier from selected preset + current race duration.
   function playbackSpeed() {
@@ -393,6 +216,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   }
   let maxTimeMs           = 0;   // race duration (ms) — set by rebuildMaxTime()
   let maxDistForTimeEvent = 1;   // time events: furthest any boat rows (normalization)
+  let fieldBasePeriod     = 2.0; // mean stroke period across field — set by rebuildMaxTime()
   let lastTs         = null;
   let rafHandle      = null;
   let changeId       = 0;
@@ -417,24 +241,18 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
 
   // Per-boat wake ring buffers: Map<id, {buf: [{x,y}], head: int}>
   const wakeBuffers = new Map();
+  // Per-boat stroke phase accumulators: Map<id, phase [0,1)>.
+  // Incremented by lastWallDeltaSec / boatPeriod each frame so phase advances
+  // smoothly even when boatPeriod changes — avoids jumps from period updates.
+  const phaseAccum = new Map();
   const WAKE_LEN = 8;
 
-  // ── Time formatting ────────────────────────────────────────────────────────
-  function fmtTime(ms) {
-    const totalSec = ms / 1000;
-    const m = Math.floor(totalSec / 60);
-    const s = totalSec - m * 60;
-    const sf = s.toFixed(1);
-    const sStr = parseFloat(sf) < 10 ? "0" + sf : sf;
-    return m + ":" + sStr;
-  }
 
   function updateFill() {
     const min = Number(seekInput.min);
     const max = Number(seekInput.max);
     const val = Number(seekInput.value);
     const pct = max > min ? (val - min) / (max - min) * 100 : 0;
-    console.log(min, max, val, pct)
     seekInput.style.background =
       `linear-gradient(to right, var(--fill-color) ${pct}%, var(--track-color) ${pct}%)`;
   }
@@ -481,6 +299,21 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     seekInput.max = maxTimeMs;
     // totalDisplay.textContent = fmtTime(maxTimeMs);
     // Speed is computed dynamically via playbackSpeed() — no static calibration needed.
+
+    // Field-average stroke period: mean of each boat's whole-piece mean period.
+    // Used to give context to per-boat smoothed SPM — a 28-SPM field should look
+    // visually slower than a 50-SPM field, while differences within the field remain
+    // proportional.
+    let fpSum = 0, fpN = 0;
+    for (const b of races) {
+      const s = b.strokes;
+      if (s && s.length >= 4) {
+        const p = (s[s.length - 1].t - s[0].t) / (s.length - 1);
+        if (p > 0.5 && p < 6) { fpSum += p; fpN++; }
+      }
+    }
+    fieldBasePeriod = fpN > 0 ? fpSum / fpN : 2.0;
+
     updateCanvasHeight();
   }
 
@@ -554,27 +387,76 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     return a.t + frac * (b.t - a.t);
   }
 
-  // ── Stroke-phase helper ───────────────────────────────────────────────────
-  // Returns a value in [0, 1) representing position in the current stroke
-  // cycle, where 0 = catch and DRIVE_FRAC = finish.  Computed by finding the
-  // two surrounding recorded strokes and interpolating.  Each stroke record
-  // represents one stroke, so the time gap between consecutive records is the
-  // stroke period (60 / gap = SPM), giving naturally SPM-proportional speed.
-  function getStrokePhase(boat, timeSec) {
+  // ── Stroke-phase helpers ─────────────────────────────────────────────────
+  //
+  // getSmoothedPeriod(boat, timeSec)
+  //   Returns the mean stroke period (seconds/stroke) smoothed over a window of
+  //   ±SMOOTH_WIN strokes around the current position.  Wider window eliminates
+  //   the jitter from rough 1-Hz data so animation speed is stable and the
+  //   proportional difference between boats reflects real SPM, not noise.
+  //   Clamped to physiologically plausible range (12–65 SPM).
+  //
+  // getStrokePhase(boat, timeSec, smoothedPeriod)
+  //   Returns [0, 1) position in the current stroke cycle using the supplied
+  //   smoothed period as the cycle length.  Phase resets to 0 at each actual
+  //   recorded stroke event, keeping animation anchored to real stroke timing.
+  const SMOOTH_WIN = 10;
+
+  function getSmoothedPeriod(boat, timeSec) {
+    // Per-boat baseline: use the piece's recorded average SPM when available,
+    // otherwise fall back to the field-wide mean.  This is the ONLY source used
+    // for boats whose strokes are synthesised from split data — those have only
+    // ~8 data points, so a SMOOTH_WIN=10 window spans the whole piece and
+    // produces an artificially low "12 SPM" floor.
+    const boatBasePeriod = (boat.avg_spm > 0) ? 60 / boat.avg_spm : fieldBasePeriod;
+
     const strokes = boat.strokes;
-    if (!strokes || strokes.length < 2) return 0.5;
-    if (timeSec <= strokes[0].t) return 0;
-    const last = strokes[strokes.length - 1];
-    if (timeSec >= last.t) return 0.5;   // after race ends — show resting pose
+    // No real stroke-level data → constant cadence at the piece's average SPM.
+    if (!strokes || strokes.length < 2 || !boat.has_real_strokes) return boatBasePeriod;
+
+    const lastIdx = strokes.length - 1;
+
+    // Find bracket index
+    let lo = 0;
+    if (timeSec >= strokes[lastIdx].t) {
+      lo = lastIdx;
+    } else if (timeSec > strokes[0].t) {
+      let hi = lastIdx;
+      while (lo < hi - 1) {
+        const mid = (lo + hi) >> 1;
+        if (strokes[mid].t <= timeSec) lo = mid; else hi = mid;
+      }
+    }
+
+    const wLo = Math.max(0, lo - SMOOTH_WIN);
+    const wHi = Math.min(lastIdx, lo + SMOOTH_WIN);
+    const n   = wHi - wLo;
+    if (n <= 0) return boatBasePeriod;
+    const p = (strokes[wHi].t - strokes[wLo].t) / n;
+    // Clamp to 12–65 SPM
+    return Math.max(60 / 65, Math.min(60 / 12, p));
+  }
+
+  function getStrokePhase(boat, timeSec, smoothedPeriod) {
+    // Synthesised boats have only a handful of split-boundary timestamps, not
+    // real stroke events.  Anchoring to those boundaries causes the phase to
+    // shoot to 0.99 within one stroke period and then freeze until the next
+    // split (~120 s later).  Instead, run a continuous metronome.
+    if (!boat.has_real_strokes) {
+      return (timeSec / smoothedPeriod) % 1;
+    }
+
+    const strokes = boat.strokes;
+    // if (!strokes || strokes.length < 2) return 0.5;
+    // if (timeSec <= strokes[0].t) return 0;
+    // if (timeSec >= strokes[strokes.length - 1].t) return 0.5;
 
     let lo = 0, hi = strokes.length - 1;
     while (lo < hi - 1) {
       const mid = (lo + hi) >> 1;
       if (strokes[mid].t <= timeSec) lo = mid; else hi = mid;
     }
-    const dt = strokes[hi].t - strokes[lo].t;
-    if (dt < 0.1) return 0;   // guard against duplicate timestamps
-    return Math.min(0.99, (timeSec - strokes[lo].t) / dt);
+    return Math.min(0.99, (timeSec - strokes[lo].t) / smoothedPeriod);
   }
 
   // ── Colors ─────────────────────────────────────────────────────────────────
@@ -633,12 +515,9 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   // positive toward bow (right).  During the drive the blade is in the water
   // (bright, thick, blade mark shown); during recovery it is feathered (dim).
   //
-  // Top oar pivot: (boatCx, midY - hullHW)  →  tip up-and-sideways
-  //   tip = (boatCx + sinθ·L,  midY - hullHW - cosθ·L)
-  //   blade perp direction = (cosθ, sinθ)
-  // Bottom oar pivot: (boatCx, midY + hullHW)  →  tip down-and-sideways (mirror)
-  //   tip = (boatCx + sinθ·L,  midY + hullHW + cosθ·L)
-  //   blade perp direction = (−cosθ, sinθ)
+  // Top oar:    pivot (boatCx, midY − hullHW), tip direction (sinθ, −cosθ)
+  // Bottom oar: pivot (boatCx, midY + hullHW), tip direction (sinθ, +cosθ)
+  // Blade: ellipse at the outer end, semi-major along shaft (2:1 aspect ratio).
   function drawOars(ctx2d, boatCx, midY, hullHL, hullHW, laneH, phase, color) {
     const CATCH_ANG  =  Math.PI * 0.185;  // ~33° toward bow
     const FINISH_ANG = -Math.PI * 0.130;  // ~23° toward stern
@@ -651,69 +530,77 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       theta = FINISH_ANG + t * (CATCH_ANG - FINISH_ANG);
     }
 
-    const inWater  = phase < DRIVE_FRAC;
-    // Reach: fill most of the space between hull edge and lane edge
-    const oarLen   = Math.min((laneH * 0.5 - hullHW) * 0.80, hullHL * 0.85);
-    const bladeHW  = Math.max(2.0, hullHW * 0.44);
+    const inWater = phase < DRIVE_FRAC;
+    const oarLen  = Math.min((laneH * 0.5 - hullHW) * 0.75, hullHL * 0.75);
     const sinT = Math.sin(theta), cosT = Math.cos(theta);
 
+    // Blade geometry: an ellipse at the outer end of the shaft, oriented along
+    // the shaft direction.  Semi-major axis (along shaft) ≈ 28% of oar length;
+    // semi-minor (across) ≈ half that — giving the 2:1 "slight widening" look.
+    // During recovery (feathered) the minor axis collapses to a sliver.
+    const bladeA = oarLen * 0.28;         // semi-major along shaft
+    const bladeB = inWater ? .7 : bladeA * 0.45;  // semi-minor: full face or edge-on
+
     ctx2d.save();
-    ctx2d.strokeStyle = hexWithAlpha(color, inWater ? 0.92 : 0.38);
-    ctx2d.lineWidth   = inWater ? 1.5 : 1.0;
-    ctx2d.lineCap     = "round";
+    ctx2d.lineCap = "round";
 
-    // ── Top oar shaft ──────────────────────────────────────────────────────
-    const topPY = midY - hullHW;
-    const topTX = boatCx + sinT * oarLen;
-    const topTY = topPY - cosT * oarLen;
-    ctx2d.beginPath();
-    ctx2d.moveTo(boatCx, topPY);
-    ctx2d.lineTo(topTX, topTY);
-    ctx2d.stroke();
-    if (inWater) {
-      ctx2d.lineWidth = 2.5;
+    // Helper: draw one oar.
+    //   pivY  — pivot Y (hull gunwale)
+    //   tipDY — Y component of shaft direction (−cosT top, +cosT bottom)
+    function _oar(pivY, tipDY) {
+      // Shaft runs pivot → (oarLen - bladeA) so it meets the blade's inner edge.
+      const shaftEndX = boatCx + sinT * (oarLen - bladeA);
+      const shaftEndY = pivY   + tipDY * (oarLen - bladeA);
+
+      ctx2d.strokeStyle = hexWithAlpha(color, inWater ? 0.35 : 0.85);
+      ctx2d.lineWidth   = 1.5;
       ctx2d.beginPath();
-      ctx2d.moveTo(topTX - cosT * bladeHW, topTY - sinT * bladeHW);
-      ctx2d.lineTo(topTX + cosT * bladeHW, topTY + sinT * bladeHW);
+      ctx2d.moveTo(boatCx,    pivY);
+      ctx2d.lineTo(shaftEndX, shaftEndY);
       ctx2d.stroke();
+
+      // Blade ellipse centred at (oarLen - bladeA/2) along shaft.
+      const bcX = boatCx + sinT  * (oarLen - bladeA * 0.5);
+      const bcY = pivY   + tipDY * (oarLen - bladeA * 0.5);
+      // Rotation: angle of shaft direction from x-axis
+      const rot = Math.atan2(tipDY, sinT);
+
+      ctx2d.fillStyle = hexWithAlpha(color, inWater ? 0.50 : 0.90);
+      ctx2d.beginPath();
+      ctx2d.ellipse(bcX, bcY, bladeA, bladeB, rot, 0, Math.PI * 2);
+      ctx2d.fill();
     }
 
-    // ── Bottom oar shaft (vertical mirror) ────────────────────────────────
-    ctx2d.lineWidth = inWater ? 1.5 : 1.0;
-    const botPY = midY + hullHW;
-    const botTX = boatCx + sinT * oarLen;
-    const botTY = botPY + cosT * oarLen;
-    ctx2d.beginPath();
-    ctx2d.moveTo(boatCx, botPY);
-    ctx2d.lineTo(botTX, botTY);
-    ctx2d.stroke();
-    if (inWater) {
-      ctx2d.lineWidth = 2.5;
-      ctx2d.beginPath();
-      ctx2d.moveTo(botTX + cosT * bladeHW, botTY - sinT * bladeHW);
-      ctx2d.lineTo(botTX - cosT * bladeHW, botTY + sinT * bladeHW);
-      ctx2d.stroke();
-    }
+    // Top oar: pivot at (boatCx, midY − hullHW), tip direction (sinT, −cosT)
+    _oar(midY - hullHW, -cosT);
+    // Bottom oar: pivot at (boatCx, midY + hullHW), tip direction (sinT, +cosT)
+    _oar(midY + hullHW, +cosT);
 
     ctx2d.restore();
   }
 
   // ── Stick-figure rower ────────────────────────────────────────────────────
-  // Tiny top-view side silhouette: head (circle) + torso (line) + arm (line).
-  // Rower faces LEFT (stern direction, the backward rowing direction).
+  // Tiny side silhouette: head (circle) + torso (line) + arm (line).
+  // Rower faces LEFT (stern direction).
   //
-  // Body lean (angle from vertical, + = toward bow/right):
-  //   catch  → leaning toward stern  (~−21°)
-  //   finish → leaning toward bow    (~+13°)
+  // Body lean (from vertical, + = toward bow/right):
+  //   catch  → ~−21° (leaning toward stern)
+  //   finish → ~+13° (leaning toward bow)
   //   recovery: smoothstep back to catch lean
   //
-  // Arm angle sweeps from reaching-forward-left at catch (arms extended) to
-  // pulled-in at finish (elbows behind body, hands near torso).
+  // Arms: the arm angle is fixed pointing left-and-down (toward the oar handles
+  // near the rower's lap).  The "pull-through" is shown by the arm getting
+  // shorter from catch (fully extended) to finish (elbows bent, hands in).
+  // This avoids any sweeping motion that could look like arms going overhead.
   function drawRower(ctx2d, boatCx, midY, hullHL, hullHW, phase, isDark) {
-    const CATCH_LEAN   = -Math.PI * 0.115;  // ~21° toward stern
-    const FINISH_LEAN  =  Math.PI * 0.073;  // ~13° toward bow
-    const ARM_CATCH    = -Math.PI * 0.620;  // arms reaching left-and-slightly-down
-    const ARM_FINISH   =  Math.PI * 0.720;  // arms pulled in (hands near torso/bow-side)
+    const CATCH_LEAN  = -Math.PI * 0.115;  // ~21° toward stern
+    const FINISH_LEAN =  Math.PI * 0.073;  // ~13° toward bow
+    // Fixed arm direction: pointing left-and-down toward oar handles in lap.
+    // Uses angles > π (i.e., past "straight down") so the arc sweeps through
+    // the bottom half of the circle — arms never pass above the shoulder.
+    // 200° = left-and-below (handles at stern/lap); 170° = left-and-below (pulled in).
+    const ARM_DIR_DEG = 200;   // degrees from "up" (clockwise) — fixed direction
+    const ARM_ANG     = (ARM_DIR_DEG * Math.PI) / 180;
 
     // Body lean angle
     let leanAngle;
@@ -725,31 +612,32 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       leanAngle  = FINISH_LEAN + ease * (CATCH_LEAN - FINISH_LEAN);
     }
 
-    // Arm angle (same interpolation logic)
-    let armAngle;
+    // Arm length varies: fully extended at catch, shortened ~45% at finish
+    // (elbows bent, hands pulled in toward body).
+    const maxArmL = Math.min(hullHW * 1.55, 8.5) * 0.65;
+    let armFrac;
     if (phase <= DRIVE_FRAC) {
-      armAngle = ARM_CATCH + (phase / DRIVE_FRAC) * (ARM_FINISH - ARM_CATCH);
+      armFrac = 1.0 - 0.45 * (phase / DRIVE_FRAC);        // 1.0 → 0.55
     } else {
       const t    = (phase - DRIVE_FRAC) / (1 - DRIVE_FRAC);
       const ease = t * t * (3 - 2 * t);
-      armAngle   = ARM_FINISH + ease * (ARM_CATCH - ARM_FINISH);
+      armFrac    = 0.55 + 0.45 * ease;                     // 0.55 → 1.0
     }
+    const armL = maxArmL * armFrac;
 
-    const figH  = Math.min(hullHW * 1.55, 8.5);    // torso length
-    const headR = Math.max(1.8, hullHW * 0.38);    // head radius
-    const armL  = figH * 0.65;                     // arm length
-
-    const sinL = Math.sin(leanAngle), cosL = Math.cos(leanAngle);
+    const figH  = Math.min(hullHW * 1.55, 8.5);
+    const headR = Math.max(1.8, hullHW * 0.38);
+    const sinL  = Math.sin(leanAngle), cosL = Math.cos(leanAngle);
 
     // Hip at hull centre (slightly below midline)
     const hipX = boatCx, hipY = midY + hullHW * 0.20;
-    // Shoulder = hip displaced along lean vector (up = −y in canvas)
+    // Shoulder = hip + body lean (up = −y)
     const shlX = hipX + sinL * figH, shlY = hipY - cosL * figH;
     // Head = further along lean
     const hdX  = shlX + sinL * (headR + 1), hdY = shlY - cosL * (headR + 1);
-    // Hand = from shoulder along arm angle  (convention: 0=up, +π/2=right, +π=down)
-    const handX = shlX + Math.sin(armAngle) * armL;
-    const handY = shlY - Math.cos(armAngle) * armL;
+    // Hand = shoulder + arm direction (0=up, π=down, convention: handY = shlY − cos·L)
+    const handX = shlX + Math.sin(ARM_ANG) * armL;
+    const handY = shlY - Math.cos(ARM_ANG) * armL;
 
     const fc = isDark ? "rgba(255,255,255,0.82)" : "rgba(20,20,40,0.75)";
     ctx2d.save();
@@ -1007,13 +895,26 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       }
 
       // ── Oars (behind hull), hull, rower (on top of hull) ──
-      // Phase is [0,1) through the stroke cycle, derived from real stroke timing:
-      // the time gap between consecutive stroke records = 60/SPM seconds, so
-      // animation speed is naturally proportional to each boat's actual stroke rate.
-      const strokePhase = getStrokePhase(boat, timeMs / 1000);
-      drawOars(ctx2d, boatCx, midY, hullHL, hullHW, LANE_H, strokePhase, boat.color);
+      const timeSec    = timeMs / 1000;
+      const boatPeriod = getSmoothedPeriod(boat, timeSec);
+      // Per-boat phase accumulator: increment by wall-clock delta / period.
+      // This is smooth even when boatPeriod changes — a changed period only
+      // affects the rate going forward, never snaps the current phase position.
+      const prevPhase  = phaseAccum.get(boat.id) || 0;
+      // Stop animating once a distance-event boat crosses the finish line.
+      const nextPhase  = finished ? DRIVE_FRAC : (prevPhase + lastWallDeltaSec / boatPeriod) % 1;
+      phaseAccum.set(boat.id, nextPhase);
+      const strokePhase = nextPhase;
       drawScull(ctx2d, boatCx, midY, hullHL, hullHW, boat.color, boat.is_pb, isDark);
+      drawOars(ctx2d, boatCx, midY, hullHL, hullHW, LANE_H, strokePhase, boat.color);
       drawRower(ctx2d, boatCx, midY, hullHL, hullHW, strokePhase, isDark);
+
+      // ── DEBUG: SPM display ──
+      const debugSpm = Math.round(60 / boatPeriod);
+      ctx2d.fillStyle = hexWithAlpha(boat.color, 0.85);
+      ctx2d.font = "bold 9px monospace";
+      ctx2d.textAlign = "left";
+      ctx2d.fillText(`${debugSpm}`, boatCx + hullHL + 3, midY + 3);
 
       // ── Label (left zone) — always shows date ──
       ctx2d.fillStyle = boat.color;
@@ -1115,7 +1016,11 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     rafHandle = requestAnimationFrame(function tick(ts) {
       if (!playing) return;
       if (lastTs !== null) {
-        currentTimeMs += (ts - lastTs) * playbackSpeed();
+        const wallDelta  = ts - lastTs;
+        currentTimeMs   += wallDelta * playbackSpeed();
+        lastWallDeltaSec = wallDelta / 1000;
+      } else {
+        lastWallDeltaSec = 0;
       }
       lastTs = ts;
       if (currentTimeMs >= maxTimeMs) {
@@ -1149,7 +1054,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   function resetRace() {
     stopRaf();
     currentTimeMs = 0;
-    wakeBuffers.clear();
+    wakeBuffers.clear(); phaseAccum.clear();
     updatePlayBtn();
     updateSeekDisplay();
   }
@@ -1164,7 +1069,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       // If at end, restart from beginning
       if (currentTimeMs >= maxTimeMs) {
         currentTimeMs = 0;
-        wakeBuffers.clear();
+        wakeBuffers.clear(); phaseAccum.clear();
         updateSeekDisplay();
       }
       playing = true;
@@ -1176,7 +1081,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   seekInput.addEventListener("input", () => {
     stopRaf();
     currentTimeMs = parseFloat(seekInput.value);
-    wakeBuffers.clear();
+    wakeBuffers.clear(); phaseAccum.clear();
     renderFrame(currentTimeMs);
     // timeDisplay.textContent = fmtTime(currentTimeMs);
     // Report back to Python
@@ -1195,7 +1100,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   ctx.onPropUpdate((propName, propValue) => {
     if (propName === "races") {
       races = propValue || [];
-      wakeBuffers.clear();
+      wakeBuffers.clear(); phaseAccum.clear();
       rebuildMaxTime();
       resetRace();
       renderFrame(0);
