@@ -471,18 +471,6 @@ def _filter_bar(state) -> None:
         background_color="neutral-50",
     ):
         with hd.hbox(gap=2, align="center", wrap="wrap"):
-            # ---- Include radio ----
-            hd.text("Include", font_weight="semibold", font_size="small")
-            with hd.scope("best_filter"):
-                with radio_group(value=state.best_filter, size="medium") as rg:
-                    hd.radio_button("All")
-                    hd.radio_button("PBs")
-                    hd.radio_button("SBs")
-                if rg.changed:
-                    state.best_filter = rg.value
-
-            hd.text("|", font_color="neutral-300")
-
             # ---- Events dropdown ----
             _n_ev_sel = sum(state.dist_enabled) + sum(state.time_enabled)
             _n_ev_tot = len(RANKED_DISTANCES) + len(RANKED_TIMES)
@@ -1497,7 +1485,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
     state = hd.state(
         dist_enabled=tuple(True for _ in RANKED_DISTANCES),
         time_enabled=tuple(True for _ in RANKED_TIMES),
-        best_filter="SBs",
+        best_filter="All",
         chart_log_x=True,
         chart_log_y=False,
         chart_show_lifetime_line=True,
@@ -1575,9 +1563,44 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
     with hd.box(gap=1, align="center"):
         with hd.h1():
             _date_label = sim_date.strftime("%b %d, %Y")
-            with hd.hbox(gap=1, align="center", padding_bottom=0, justify="center"):
-                hd.text("Qualifying Performances", font_weight="normal", font_size="2x-large")
-                hd.text("through ", font_size="medium")
+            _best_long = {
+                "All": "All Great Efforts",
+                "PBs": "Personal Bests",
+                "SBs": "Season Bests",
+            }
+            _cur_best_lbl = _best_long.get(state.best_filter, state.best_filter)
+            with hd.hbox(gap=0.6, align="center", padding_bottom=0, justify="center", wrap="wrap"):
+                with hd.scope("best_filter_dd"):
+                    with hd.dropdown() as _bf_dd:
+                        _bf_btn = hd.button(
+                            _cur_best_lbl,
+                            caret=True,
+                            size="large",
+                            font_color="neutral-800",
+                            font_size=2,
+                            font_weight="bold",
+                            slot=_bf_dd.trigger,
+                        )
+                        if _bf_btn.clicked:
+                            _bf_dd.opened = not _bf_dd.opened
+                        with hd.box(gap=0.1, background_color="neutral-0", min_width=20):
+                            for val, lbl in _best_long.items():
+                                with hd.scope(f"bf_{val}"):
+                                    _bf_item = hd.button(
+                                        lbl,
+                                        size="small",
+                                        variant="primary" if state.best_filter == val else "text",
+                                        width="100%",
+                                        border_radius="small",
+                                        font_size="medium",
+                                        font_color="neutral-0" if state.best_filter == val else "neutral-800",
+                                        label_style=hd.style(padding_top=0.5, padding_bottom=0.5),
+                                        hover_background_color="neutral-100",
+                                    )
+                                    if _bf_item.clicked:
+                                        state.best_filter = val
+                                        _bf_dd.opened = False
+                hd.text("through", font_size="medium")
                 hd.text(_date_label, font_size="2x-large", font_weight="normal")
             if at_today and rl_task is not None and state.chart_predictor == "rowinglevel":
                 if not profile_complete(profile):
