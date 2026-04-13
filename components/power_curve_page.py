@@ -243,6 +243,7 @@ def _compute_lookahead_overlays(
     selected_times: set,
     included_seasons: list,
     show_watts: bool,
+    excluded_seasons=(),
 ) -> tuple:
     """
     Compute ghost/arrow/threatened/new-arrival overlay data for the lookahead
@@ -568,6 +569,7 @@ def _chart_section(
     selected_times: set,
     _included_seasons: list,
     all_seasons: list,
+    excluded_seasons=(),
     pauls_k_fit: float | None = None,
 ) -> None:
     """
@@ -1221,6 +1223,268 @@ def _prediction_table(
 
 
 # ---------------------------------------------------------------------------
+# Pure data helpers  (no HyperDiv, no side-effects)
+# ---------------------------------------------------------------------------
+
+
+def _build_ranked_workouts(sync_result, machine: str) -> tuple:
+    """
+    Extract and quality-filter the ranked non-interval workouts from sync_result.
+    Returns (all_ranked, all_ranked_raw, all_seasons); empty lists while loading.
+    """
+    if sync_result is None:
+        return [], [], []
+    _workouts_dict, sorted_workouts = sync_result
+    if machine != "All":
+        sorted_workouts = [w for w in sorted_workouts if w.get("type") == machine]
+    all_ranked = [r for r in sorted_workouts if is_ranked_noninterval(r)]
+    all_ranked = apply_quality_filters(
+        all_ranked, selected_dists=set(), selected_times=set(), excluded_seasons=set()
+    )
+    all_ranked_raw = list(all_ranked)
+    all_seasons = seasons_from(all_ranked)
+    return all_ranked, all_ranked_raw, all_seasons
+
+
+def _apply_display_filter(
+    state, all_ranked: list, selected_dists: set, selected_times: set, excluded_seasons
+) -> list:
+    """Apply event, season, and best-filter; return the chart/table display list."""
+    filtered = [
+        r for r in all_ranked
+        if (r.get("distance") in selected_dists or r.get("time") in selected_times)
+        and get_season(r.get("date", "")) not in excluded_seasons
+    ]
+    if state.best_filter == "PBs":
+        return apply_best_only(filtered)
+    elif state.best_filter == "SBs":
+        return apply_season_best_only(filtered)
+    return filtered
+
+
+def _compute_sim_timeline(excluded_seasons, all_seasons: list, sim_week: int) -> tuple:
+    """
+    Derive the simulation timeline from the included seasons.
+    Returns (sim_start, total_days, sim_day_idx, sim_date, at_today, included_seasons).
+    """
+    included_seasons = [s for s in all_seasons if s not in set(excluded_seasons)]
+    if included_seasons:
+        ey = int(min(included_seasons)[:4])
+        sim_start = date(ey, 5, 1)
+        max_end_year = int(max(included_seasons)[:4]) + 1
+        sim_end = min(date.today(), date(max_end_year, 4, 30))
+    else:
+        sim_start = date.today() - timedelta(days=365)
+        sim_end = date.today()
+    total_days = max(1, (sim_end - sim_start).days + 1)
+    sim_day_idx = max(0, min(sim_week, total_days - 1))
+    sim_date = sim_start + timedelta(days=sim_day_idx)
+    at_today = sim_day_idx >= total_days - 1
+    return sim_start, total_days, sim_day_idx, sim_date, at_today, included_seasons
+
+
+def _compute_axis_bounds(
+    all_ranked_raw: list, excluded_seasons, show_watts: bool,
+    use_duration: bool, log_x: bool
+) -> tuple:
+    """
+    Compute stable x/y bounds from all-time PBs so the chart doesn't rescale
+    when the user toggles individual events.
+    Returns (x_bounds, y_bounds); either may be None if data is insufficient.
+    """
+    bounds_src = [
+        w for w in all_ranked_raw
+        if get_season(w.get("date", "")) not in set(excluded_seasons)
+        and (w.get("distance") in RANKED_DIST_SET or w.get("time") in RANKED_TIME_SET)
+    ]
+    bests = apply_best_only(bounds_src)
+    if not bests:
+        return None, None
+    bp = [p for w in bests if (p := compute_pace(w)) and 60 < p < 400]
+    if use_duration:
+        bx = [
+            w.get("distance") * p / 500
+            for w in bests
+            if w.get("distance") and (p := compute_pace(w)) and 60 < p < 400
+        ]
+    else:
+        bx = [w.get("distance") for w in bests if w.get("distance")]
+    if not bp or not bx:
+        return None, None
+    xr, xR = min(bx), max(bx)
+    x_bounds = (
+        (xr / 1.45, xR * 1.45) if log_x
+        else (
+            max(0, xr - max((xR - xr) * 0.1, xr * 0.1)),
+            xR + max((xR - xr) * 0.1, xr * 0.1),
+        )
+    )
+    by = [compute_watts(p) if show_watts else p for p in bp]
+    yr, yR = min(by), max(by)
+    ypad = max((yR - yr) * 0.15, 5 if not show_watts else 2)
+    return x_bounds, (yr - ypad, yR + ypad)
+
+
+def _build_sim_data(
+    state, all_ranked_raw: list, sim_date: date, excluded_seasons,
+    selected_dists: set, selected_times: set,
+) -> tuple:
+    """
+    Build everything that depends on the current sim position:
+
+      sim_wkts       — filtered workouts visible at sim_date
+      excluded_wkts  — PBs of user-disabled events (faint background dots)
+      lb, lb_anchor  — selected-event lifetime bests
+      lb_all, lb_all_anchor — all-event lifetime bests
+      pauls_k_fit    — personalised Paul's constant (None if < 2 PBs)
+      pauls_k        — pauls_k_fit or population default 5.0
+    """
+    sim_wkts = sim_workouts_at(
+        all_ranked_raw, sim_date, selected_dists, selected_times,
+        set(excluded_seasons), state.best_filter,
+    )
+
+    # Workouts for disabled events — plotted faintly, not used in model fits.
+    excluded_cats = set()
+    for i, (dist, _) in enumerate(RANKED_DISTANCES):
+        if not state.dist_enabled[i]:
+            excluded_cats.add(("dist", dist))
+    for i, (tenths, _) in enumerate(RANKED_TIMES):
+        if not state.time_enabled[i]:
+            excluded_cats.add(("time", tenths))
+    excluded_wkts: list = []
+    if excluded_cats:
+        excl_src = [
+            w for w in all_ranked_raw
+            if workout_cat_key(w) in excluded_cats
+            and parse_date(w.get("date", "")) <= sim_date
+            and get_season(w.get("date", "")) not in set(excluded_seasons)
+        ]
+        excluded_wkts = apply_best_only(excl_src)
+
+    lb, lb_anchor = compute_lifetime_bests(sim_wkts)
+    lb_all, lb_all_anchor = compute_lifetime_bests([
+        w for w in all_ranked_raw
+        if parse_date(w.get("date", "")) <= sim_date
+        and get_season(w.get("date", "")) not in set(excluded_seasons)
+    ])
+    pauls_k_fit = compute_pauls_constant(lb, lb_anchor)
+    pauls_k = pauls_k_fit if pauls_k_fit is not None else 5.0
+    return sim_wkts, excluded_wkts, lb, lb_anchor, lb_all, lb_all_anchor, pauls_k_fit, pauls_k
+
+
+# ---------------------------------------------------------------------------
+# HyperDiv async helpers  (use hd.task / hd.scope / hd.state)
+# ---------------------------------------------------------------------------
+
+
+def _update_cp_fit(
+    state, all_ranked_raw: list, sim_date: date, excluded_seasons,
+    selected_dists: set, selected_times: set,
+):
+    """
+    Compute (or retrieve from cache) the Critical Power fit for the current sim
+    position.  Mutates state.cp_fit_key / state.cp_fit_result; returns the params
+    dict (or None if the fit failed / insufficient data).
+    """
+    cp_src = [
+        w for w in all_ranked_raw
+        if (w.get("distance") in selected_dists or w.get("time") in selected_times)
+        and get_season(w.get("date", "")) not in set(excluded_seasons)
+        and parse_date(w.get("date", "")) <= sim_date
+    ]
+    cp_pb_list = []
+    for w in apply_best_only(cp_src):
+        dur = compute_duration_s(w)
+        pac = compute_pace(w)
+        if dur and pac:
+            cp_pb_list.append({"duration_s": dur, "watts": compute_watts(pac)})
+    fit_key = str(sorted((round(p["duration_s"], 1), round(p["watts"], 1)) for p in cp_pb_list))
+    if fit_key != state.cp_fit_key:
+        state.cp_fit_key = fit_key
+        state.cp_fit_result = fit_critical_power(cp_pb_list)
+    return state.cp_fit_result
+
+
+def _fetch_rowinglevel(state, profile: dict, chart_workouts: list, at_today: bool) -> tuple:
+    """
+    Launch (or resume) the background RowingLevel scrape.
+    Only fires when at_today and profile_complete; otherwise returns (None, {}).
+    Uses a scope key derived from profile + PB hash so the task re-fires only
+    when its inputs change.
+    Returns (rl_task, rl_predictions).
+    """
+    if not at_today or not profile_complete(profile):
+        return None, {}
+
+    weight_kg = (
+        profile["weight"] * 0.453592
+        if profile["weight_unit"] == "lbs"
+        else profile["weight"]
+    )
+    lbest: dict = {}
+    lbest_anchor: dict = {}
+    lbest_dates: dict = {}
+    for w in chart_workouts:
+        p = compute_pace(w)
+        c = workout_cat_key(w)
+        d = w.get("distance")
+        if p is None or c is None or not d:
+            continue
+        if c not in lbest or p < lbest[c]:
+            lbest[c] = p
+            lbest_anchor[c] = d
+            lbest_dates[c] = w.get("date", "")
+
+    lbest_hash = hashlib.md5(
+        json.dumps(sorted((str(k), round(v, 2)) for k, v in lbest.items())).encode()
+    ).hexdigest()[:8]
+    scope_key = f"rl_{_profile_hash(profile)}_{lbest_hash}"
+
+    rl_predictions = {}
+    with hd.scope(scope_key):
+        rl_task = hd.task()
+
+        def _do_scrape(gender, current_age, wkg, lb, lb_anchor, lb_dates):
+            return fetch_all_pb_predictions(
+                [], lb, lb_anchor, gender, current_age, wkg, lbest_dates=lb_dates
+            )
+
+        rl_task.run(
+            _do_scrape,
+            profile["gender"],
+            age_from_dob(profile.get("dob", "")),
+            weight_kg,
+            lbest,
+            lbest_anchor,
+            lbest_dates,
+        )
+        if rl_task.done and rl_task.result:
+            rl_predictions = rl_task.result
+
+    return rl_task, rl_predictions
+
+
+def _run_animation_tick(state, total_days: int) -> None:
+    """Advance sim_week by one step when the animation is playing."""
+    if not state.sim_playing:
+        return
+    with hd.scope(f"sim_tick_{state.sim_tick_id}"):
+        tick = hd.task()
+        if not tick.running and not tick.done:
+            tick.run(time.sleep, _BASE_TICK_SECS)
+        if tick.done:
+            step = _SPEED_DAYS.get(state.sim_speed, 7)
+            nd = state.sim_week + step
+            if nd >= total_days:
+                state.sim_week = _SIM_TODAY
+                state.sim_playing = False
+            else:
+                state.sim_week = nd
+                state.sim_tick_id += 1
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
@@ -1233,18 +1497,17 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
     state = hd.state(
         dist_enabled=tuple(True for _ in RANKED_DISTANCES),
         time_enabled=tuple(True for _ in RANKED_TIMES),
-        best_filter="SBs",  # "All" | "PBs" | "SBs"
+        best_filter="SBs",
         chart_log_x=True,
         chart_log_y=False,
         chart_show_lifetime_line=True,
-        chart_metric="Pace",  # "Pace" | "Watts"
-        chart_x_mode="distance",  # "distance" | "duration"
-        chart_predictor="loglog",  # "none" | "pauls_law" | "loglog" | "rowinglevel" | "critical_power" | "average"
+        chart_metric="Pace",
+        chart_x_mode="distance",
+        chart_predictor="loglog",
         chart_show_components=False,
         chart_season_lines=(),
-        chart_lines="PBs",  # "PBs" | "SBs" | "None"
+        chart_lines="PBs",
         show_chart_settings=False,
-        # ---- timeline / simulation ----
         sim_playing=False,
         sim_week=_SIM_TODAY,
         sim_speed="1x",
@@ -1253,14 +1516,12 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         sim_pb_set_at_day=-9999,
         sim_pb_stored_labels_json="[]",
         last_ds_change_id=0,
-        # ---- critical power model fit cache ----
         cp_fit_key="",
         cp_fit_result=None,
     )
-
     is_dark = hd.theme().is_dark
 
-    # ---- profile from localStorage ----
+    # ── Profile ───────────────────────────────────────────────────────────────
     ls_profile = hd.local_storage.get_item("profile")
     if not ls_profile.done:
         with hd.box(align="center", padding=4):
@@ -1273,284 +1534,52 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         except Exception:
             pass
 
-    # ---- fetch (shared sync component) ----
+    # ── Data ──────────────────────────────────────────────────────────────────
     sync_result = concept2_sync(client)
-
-    # ---- base set + quality filters (empty while loading) ----
-    if sync_result is not None:
-        _workouts_dict, sorted_workouts = sync_result
-        if machine != "All":
-            sorted_workouts = [w for w in sorted_workouts if w.get("type") == machine]
-        all_ranked = [r for r in sorted_workouts if is_ranked_noninterval(r)]
-        all_ranked = apply_quality_filters(
-            all_ranked,
-            selected_dists=set(),
-            selected_times=set(),
-            excluded_seasons=set(),
-        )
-        all_ranked_raw = list(all_ranked)
-        all_seasons = seasons_from(all_ranked)
-    else:
-        all_ranked = []
-        all_ranked_raw = []
-        all_seasons = []
-
-    # ---- filter bar (always visible, even while loading) ----
+    all_ranked, all_ranked_raw, all_seasons = _build_ranked_workouts(sync_result, machine)
     _filter_bar(state)
-
-    # ---- loading / error gate ----
     if sync_result is None:
         return
 
-    # ---- apply event / season / best filters ----
-    selected_dists = {
-        dist for i, (dist, _) in enumerate(RANKED_DISTANCES) if state.dist_enabled[i]
-    }
-    selected_times = {
-        tenths for i, (tenths, _) in enumerate(RANKED_TIMES) if state.time_enabled[i]
-    }
-    filtered = [
-        r
-        for r in all_ranked
-        if (r.get("distance") in selected_dists or r.get("time") in selected_times)
-        and get_season(r.get("date", "")) not in excluded_seasons
-    ]
-    if state.best_filter == "PBs":
-        display = apply_best_only(filtered)
-    elif state.best_filter == "SBs":
-        display = apply_season_best_only(filtered)
-    else:
-        display = filtered
-    chart_workouts = display
+    # ── Filters ───────────────────────────────────────────────────────────────
+    selected_dists = {dist for i, (dist, _) in enumerate(RANKED_DISTANCES) if state.dist_enabled[i]}
+    selected_times = {tenths for i, (tenths, _) in enumerate(RANKED_TIMES) if state.time_enabled[i]}
+    display = _apply_display_filter(state, all_ranked, selected_dists, selected_times, excluded_seasons)
 
-    # ---- simulation timeline ----
-    _included_seasons = [s for s in all_seasons if s not in set(excluded_seasons)]
-    if _included_seasons:
-        _ey = int(min(_included_seasons)[:4])
-        sim_start = date(_ey, 5, 1)
-        _max_season_end_year = int(max(_included_seasons)[:4]) + 1
-        sim_end = min(date.today(), date(_max_season_end_year, 4, 30))
-    else:
-        sim_start = date.today() - timedelta(days=365)
-        sim_end = date.today()
-    total_days = max(1, (sim_end - sim_start).days + 1)
-    sim_day_idx = max(0, min(state.sim_week, total_days - 1))
-    sim_date = sim_start + timedelta(days=sim_day_idx)
-    _at_today = sim_day_idx >= total_days - 1
-
-    # ---- stable axis bounds ----
+    # ── Simulation timeline ───────────────────────────────────────────────────
+    sim_start, total_days, sim_day_idx, sim_date, at_today, included_seasons = \
+        _compute_sim_timeline(excluded_seasons, all_seasons, state.sim_week)
     show_watts = state.chart_metric == "Watts"
-    _use_duration = state.chart_x_mode == "duration"
-    _show_lb_line = state.chart_lines == "PBs"
-    _season_lines_set = set(all_seasons) if state.chart_lines == "SBs" else set()
-    # Bounds use ALL ranked events (not just selected ones) so that toggling an
-    # event off doesn't cause the chart to rescale.
-    _bounds_src = [
-        w
-        for w in all_ranked_raw
-        if get_season(w.get("date", "")) not in set(excluded_seasons)
-        and (w.get("distance") in RANKED_DIST_SET or w.get("time") in RANKED_TIME_SET)
-    ]
-    _bounds_bests = apply_best_only(_bounds_src)
-    _sim_x_bounds = None
-    _sim_y_bounds = None
-    if _bounds_bests:
-        _bp = [p for w in _bounds_bests if (p := compute_pace(w)) and 60 < p < 400]
-        if _use_duration:
-            # X axis in seconds: duration = dist * pace / 500
-            _bx = [
-                w.get("distance") * p / 500
-                for w in _bounds_bests
-                if w.get("distance") and (p := compute_pace(w)) and 60 < p < 400
-            ]
-        else:
-            _bx = [w.get("distance") for w in _bounds_bests if w.get("distance")]
-        if _bp and _bx:
-            _xr, _xR = min(_bx), max(_bx)
-            _sim_x_bounds = (
-                (_xr / 1.45, _xR * 1.45)
-                if state.chart_log_x
-                else (
-                    max(0, _xr - max((_xR - _xr) * 0.1, _xr * 0.1)),
-                    _xR + max((_xR - _xr) * 0.1, _xr * 0.1),
-                )
-            )
-            _by = [compute_watts(p) if show_watts else p for p in _bp]
-            _yr, _yR = min(_by), max(_by)
-            _ypad = max((_yR - _yr) * 0.15, 5 if not show_watts else 2)
-            _sim_y_bounds = (_yr - _ypad, _yR + _ypad)
 
-    # ---- sim workouts + lifetime bests ----
-    sim_wkts = sim_workouts_at(
-        all_ranked_raw,
-        sim_date,
-        selected_dists,
-        selected_times,
-        set(excluded_seasons),
-        state.best_filter,
-    )
+    # ── Simulation data ───────────────────────────────────────────────────────
+    sim_wkts, excluded_wkts, lb, lb_anchor, lb_all, lb_all_anchor, pauls_k_fit, pauls_k = \
+        _build_sim_data(state, all_ranked_raw, sim_date, excluded_seasons, selected_dists, selected_times)
+    cp_params = _update_cp_fit(state, all_ranked_raw, sim_date, excluded_seasons, selected_dists, selected_times)
+    rl_task, rl_predictions = _fetch_rowinglevel(state, profile, display, at_today)
+    _run_animation_tick(state, total_days)
 
-    # ---- excluded-event workouts (plotted faintly, not used in model fits) ----
-    _excluded_cats = set()
-    for i, (dist, _) in enumerate(RANKED_DISTANCES):
-        if not state.dist_enabled[i]:
-            _excluded_cats.add(("dist", dist))
-    for i, (tenths, _) in enumerate(RANKED_TIMES):
-        if not state.time_enabled[i]:
-            _excluded_cats.add(("time", tenths))
-
-    _excluded_wkts: list = []
-    if _excluded_cats:
-        _excl_src = [
-            w
-            for w in all_ranked_raw
-            if workout_cat_key(w) in _excluded_cats
-            and parse_date(w.get("date", "")) <= sim_date
-            and get_season(w.get("date", "")) not in set(excluded_seasons)
-        ]
-        _excluded_wkts = apply_best_only(_excl_src)
-
-    _lb, _lb_anchor = compute_lifetime_bests(sim_wkts)
-    _lb_all, _lb_all_anchor = compute_lifetime_bests(
-        [
-            w
-            for w in all_ranked_raw
-            if parse_date(w.get("date", "")) <= sim_date
-            and get_season(w.get("date", "")) not in set(excluded_seasons)
-        ]
-    )
-    _pauls_k_fit = compute_pauls_constant(_lb, _lb_anchor)
-    _pauls_k = _pauls_k_fit if _pauls_k_fit is not None else 5.0
-
-    # ---- critical power model fit (cached in state) ----
-    _cp_src = [
-        w
-        for w in all_ranked_raw
-        if (w.get("distance") in selected_dists or w.get("time") in selected_times)
-        and get_season(w.get("date", "")) not in set(excluded_seasons)
-        and parse_date(w.get("date", "")) <= sim_date
-    ]
-    _cp_pb_list = []
-    for _w in apply_best_only(_cp_src):
-        _dur = compute_duration_s(_w)
-        _pac = compute_pace(_w)
-        if _dur and _pac:
-            _cp_pb_list.append({"duration_s": _dur, "watts": compute_watts(_pac)})
-    _cp_fit_key = str(
-        sorted((round(p["duration_s"], 1), round(p["watts"], 1)) for p in _cp_pb_list)
-    )
-    if _cp_fit_key != state.cp_fit_key:
-        state.cp_fit_key = _cp_fit_key
-        state.cp_fit_result = fit_critical_power(_cp_pb_list)
-    _cp_params = state.cp_fit_result
-
-    # ---- RowingLevel scrape (runs at power_curve_page scope, result passed down) ----
-    rl_task = None
-    rl_predictions: dict = {}
-    if _at_today and profile_complete(profile):
-        weight_kg = (
-            profile["weight"] * 0.453592
-            if profile["weight_unit"] == "lbs"
-            else profile["weight"]
+    # ── Overlays + bounds ─────────────────────────────────────────────────────
+    sim_overlays, overlay_labels = None, []
+    if not at_today:
+        sim_overlays, overlay_labels = _compute_lookahead_overlays(
+            sim_wkts, all_ranked_raw, sim_date, sim_day_idx, state,
+            total_days, selected_dists, selected_times, included_seasons,
+            show_watts, excluded_seasons=excluded_seasons,
         )
-        _lbest: dict = {}
-        _lbest_anchor: dict = {}
-        _lbest_dates: dict = {}
-        for w in chart_workouts:
-            p = compute_pace(w)
-            c = workout_cat_key(w)
-            d = w.get("distance")
-            if p is None or c is None or not d:
-                continue
-            if c not in _lbest or p < _lbest[c]:
-                _lbest[c] = p
-                _lbest_anchor[c] = d
-                _lbest_dates[c] = w.get("date", "")
-        _lbest_hash = hashlib.md5(
-            json.dumps(
-                sorted((str(k), round(v, 2)) for k, v in _lbest.items())
-            ).encode()
-        ).hexdigest()[:8]
-        _scope_key = f"rl_{_profile_hash(profile)}_{_lbest_hash}"
-        with hd.scope(_scope_key):
-            rl_task = hd.task()
+    x_bounds, y_bounds = _compute_axis_bounds(
+        all_ranked_raw, excluded_seasons, show_watts,
+        state.chart_x_mode == "duration", state.chart_log_x,
+    )
 
-            def _do_scrape(gender, current_age, wkg, lbest, lbest_anchor, lbest_dates):
-                return fetch_all_pb_predictions(
-                    [],
-                    lbest,
-                    lbest_anchor,
-                    gender,
-                    current_age,
-                    wkg,
-                    lbest_dates=lbest_dates,
-                )
-
-            rl_task.run(
-                _do_scrape,
-                profile["gender"],
-                age_from_dob(profile.get("dob", "")),
-                weight_kg,
-                _lbest,
-                _lbest_anchor,
-                _lbest_dates,
-            )
-        if rl_task.done and rl_task.result:
-            rl_predictions = rl_task.result
-
-    # ---- animation tick (advances sim_week while playing) ----
-    # Use sim_tick_id as scope key so backward scrubs never revisit done tasks.
-    if state.sim_playing:
-        with hd.scope(f"sim_tick_{state.sim_tick_id}"):
-            _tick = hd.task()
-            if not _tick.running and not _tick.done:
-                _tick.run(time.sleep, _BASE_TICK_SECS)
-            if _tick.done:
-                _step = _SPEED_DAYS.get(state.sim_speed, 7)
-                _nd = state.sim_week + _step
-                if _nd >= total_days:
-                    state.sim_week = _SIM_TODAY
-                    state.sim_playing = False
-                else:
-                    state.sim_week = _nd
-                    state.sim_tick_id += 1
-
-    # ---- lookahead overlays ----
-    _sim_overlays = None
-    _overlay_labels = []
-    if not _at_today:
-        _sim_overlays, _overlay_labels = _compute_lookahead_overlays(
-            sim_wkts,
-            all_ranked_raw,
-            sim_date,
-            sim_day_idx,
-            state,
-            total_days,
-            selected_dists,
-            selected_times,
-            _included_seasons,
-            show_watts,
-        )
-
+    # ── Render ────────────────────────────────────────────────────────────────
     with hd.box(gap=1, align="center"):
         with hd.h1():
-            # ---- header row ----
             _date_label = sim_date.strftime("%b %d, %Y")
             with hd.hbox(gap=1, align="center", padding_bottom=0, justify="center"):
-                hd.text(
-                    "Qualifying Performances",
-                    font_weight="normal",
-                    font_size="2x-large",
-                )
+                hd.text("Qualifying Performances", font_weight="normal", font_size="2x-large")
                 hd.text("through ", font_size="medium")
-                hd.text(f"{_date_label}", font_size="2x-large", font_weight="normal")
-
-            # ---- RowingLevel status indicators (only shown when RL predictor selected) ----
-            if (
-                _at_today
-                and rl_task is not None
-                and state.chart_predictor == "rowinglevel"
-            ):
+                hd.text(_date_label, font_size="2x-large", font_weight="normal")
+            if at_today and rl_task is not None and state.chart_predictor == "rowinglevel":
                 if not profile_complete(profile):
                     hd.alert(
                         "Please complete your profile (Gender, Age, and Bodyweight) "
@@ -1559,37 +1588,33 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
                         opened=True,
                     )
 
-        # ---- chart config ----
-        _predictor = (
-            state.chart_predictor
-            if _at_today or state.chart_predictor != "rowinglevel"
+        predictor = (
+            state.chart_predictor if at_today or state.chart_predictor != "rowinglevel"
             else "none"
         )
         chart_cfg = build_chart_config(
             sim_wkts,
             log_x=state.chart_log_x,
             log_y=state.chart_log_y,
-            show_lifetime_line=_show_lb_line,
+            show_lifetime_line=state.chart_lines == "PBs",
             show_watts=show_watts,
             is_dark=is_dark,
-            predictor=_predictor,
+            predictor=predictor,
             rl_predictions=rl_predictions,
-            critical_power_params=_cp_params,
-            season_lines=_season_lines_set,
+            critical_power_params=cp_params,
+            season_lines=set(all_seasons) if state.chart_lines == "SBs" else set(),
             all_seasons=all_seasons,
-            x_bounds=_sim_x_bounds,
-            y_bounds=_sim_y_bounds,
-            sim_overlays=_sim_overlays,
-            overlay_labels=_overlay_labels,
+            x_bounds=x_bounds,
+            y_bounds=y_bounds,
+            sim_overlays=sim_overlays,
+            overlay_labels=overlay_labels,
             show_components=state.chart_show_components,
-            lifetime_best=_lb,
-            lifetime_best_anchor=_lb_anchor,
-            pauls_k=_pauls_k,
-            excluded_workouts=_excluded_wkts,
+            lifetime_best=lb,
+            lifetime_best_anchor=lb_anchor,
+            pauls_k=pauls_k,
+            excluded_workouts=excluded_wkts,
             x_mode=state.chart_x_mode,
         )
-
-        # ---- render chart section ----
         _chart_section(
             state,
             chart_cfg=chart_cfg,
@@ -1598,43 +1623,35 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
             profile=profile,
             show_watts=show_watts,
             sim_date=sim_date,
-            _at_today=_at_today,
+            _at_today=at_today,
             sim_day_idx=sim_day_idx,
             total_days=total_days,
             sim_start=sim_start,
             all_ranked_raw=all_ranked_raw,
             selected_dists=selected_dists,
             selected_times=selected_times,
-            _included_seasons=_included_seasons,
+            _included_seasons=included_seasons,
             all_seasons=all_seasons,
-            pauls_k_fit=_pauls_k_fit,
+            excluded_seasons=excluded_seasons,
+            pauls_k_fit=pauls_k_fit,
         )
 
-        # ---- RL profile notice (shown between chart and table when profile incomplete) ----
-        _rl_available = profile_complete(profile)
-        if not _rl_available:
+        rl_available = profile_complete(profile)
+        if not rl_available:
             _rl_profile_notice()
 
-        # ---- render prediction table ----
-        _pred_rows = build_prediction_table_data(
-            lifetime_best=_lb,
-            lifetime_best_anchor=_lb_anchor,
-            all_lifetime_best=_lb_all,
-            all_lifetime_best_anchor=_lb_all_anchor,
-            critical_power_params=_cp_params,
+        pred_rows = build_prediction_table_data(
+            lifetime_best=lb,
+            lifetime_best_anchor=lb_anchor,
+            all_lifetime_best=lb_all,
+            all_lifetime_best_anchor=lb_all_anchor,
+            critical_power_params=cp_params,
             rl_predictions=rl_predictions if rl_predictions else None,
-            pauls_k=_pauls_k,
+            pauls_k=pauls_k,
         )
-        _prediction_table(
-            state,
-            _pred_rows,
-            selected_dists,
-            selected_times,
-            rl_available=_rl_available,
-            pauls_k=_pauls_k,
-        )
+        _prediction_table(state, pred_rows, selected_dists, selected_times,
+                         rl_available=rl_available, pauls_k=pauls_k)
 
-        # ---- result count + table ----
         count = len(display)
         hd.text(
             f"{count} workout{'s' if count != 1 else ''} matched",
@@ -1645,5 +1662,4 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         if not display:
             hd.text("No workouts match the selected filters.", font_color="neutral-500")
             return
-
         result_table(display, paginate=False)
