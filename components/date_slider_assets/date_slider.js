@@ -9,8 +9,6 @@ window.hyperdiv.registerPlugin("DateSlider", (ctx) => {
       width: 100%;
       overflow: visible;
       --thumb-size: 22px;
-      --track-color: var(--sl-color-neutral-300, #cbd5e1);
-      --fill-color:  var(--sl-color-primary-600, #0284c7);
       --tip-bg:      var(--sl-tooltip-background-color, #1e293b);
       --tip-fg:      var(--sl-tooltip-color, #fff);
     }
@@ -18,47 +16,6 @@ window.hyperdiv.registerPlugin("DateSlider", (ctx) => {
     .wrap {
       position: relative;
       padding: 36px 18px 36px 18px;
-    }
-
-    input[type="range"] {
-      -webkit-appearance: none;
-      appearance: none;
-      display: block;
-      width: 100%;
-      height: 6px;
-      border-radius: 3px;
-      background: var(--track-color);
-      outline: none;
-      cursor: pointer;
-      margin: 0;
-    }
-
-    input[type="range"]::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      appearance: none;
-      width:  var(--thumb-size);
-      height: var(--thumb-size);
-      border-radius: 50%;
-      background: var(--fill-color);
-      cursor: pointer;
-      box-shadow: 0 1px 5px rgba(0,0,0,.35);
-      transition: transform 0.1s;
-    }
-    input[type="range"]::-webkit-slider-thumb:hover {
-      transform: scale(1.15);
-    }
-    input[type="range"]::-webkit-slider-thumb:active {
-      transform: scale(1.2);
-    }
-
-    input[type="range"]::-moz-range-thumb {
-      width:  var(--thumb-size);
-      height: var(--thumb-size);
-      border-radius: 50%;
-      background: var(--fill-color);
-      cursor: pointer;
-      border: none;
-      box-shadow: 0 1px 5px rgba(0,0,0,.35);
     }
 
     /* Tooltip — floats above the thumb or above a hovered dot */
@@ -106,30 +63,6 @@ window.hyperdiv.registerPlugin("DateSlider", (ctx) => {
   ctx.domElement.appendChild(style);
 
   // -------------------------------------------------------------------------
-  // DOM
-  // -------------------------------------------------------------------------
-  const wrap = document.createElement("div");
-  wrap.className = "wrap";
-  ctx.domElement.appendChild(wrap);
-
-  const input = document.createElement("input");
-  input.type  = "range";
-  input.min   = ctx.initialProps.min_value ?? 0;
-  input.max   = ctx.initialProps.max_value ?? 100;
-  input.step  = ctx.initialProps.step ?? 1;
-  // target_value is the Python-owned position; value is the JS-reported position.
-  input.value = ctx.initialProps.target_value ?? ctx.initialProps.value ?? 0;
-  wrap.appendChild(input);
-
-  const tip = document.createElement("div");
-  tip.className = "tip";
-  wrap.appendChild(tip);
-
-  const annRow = document.createElement("div");
-  annRow.className = "ann-row";
-  wrap.appendChild(annRow);
-
-  // -------------------------------------------------------------------------
   // Date formatter
   // -------------------------------------------------------------------------
   let startDate = ctx.initialProps.start_date
@@ -147,6 +80,32 @@ window.hyperdiv.registerPlugin("DateSlider", (ctx) => {
   }
 
   // -------------------------------------------------------------------------
+  // DOM
+  // -------------------------------------------------------------------------
+  const wrap = document.createElement("div");
+  wrap.className = "wrap";
+  ctx.domElement.appendChild(wrap);
+
+  const input = document.createElement("sl-range");
+
+  input.min   = ctx.initialProps.min_value ?? 0;
+  input.max   = ctx.initialProps.max_value ?? 100;
+  input.step  = ctx.initialProps.step ?? 1;
+  // target_value is the Python-owned position; value is the JS-reported position.
+  input.value = ctx.initialProps.target_value ?? ctx.initialProps.value ?? 0;
+  input.tooltipFormatter = formatDate
+  wrap.appendChild(input);
+
+  const tip = document.createElement("div");
+  tip.className = "tip";
+  wrap.appendChild(tip);
+
+  const annRow = document.createElement("div");
+  annRow.className = "ann-row";
+  wrap.appendChild(annRow);
+
+
+  // -------------------------------------------------------------------------
   // Track fill — gradient left of thumb shows elapsed progress
   // -------------------------------------------------------------------------
   function updateFill() {
@@ -156,29 +115,6 @@ window.hyperdiv.registerPlugin("DateSlider", (ctx) => {
     const pct = max > min ? (val - min) / (max - min) * 100 : 0;
     input.style.background =
       `linear-gradient(to right, var(--fill-color) ${pct}%, var(--track-color) ${pct}%)`;
-  }
-
-  // -------------------------------------------------------------------------
-  // Tooltip positioning — called on every input event
-  // -------------------------------------------------------------------------
-  function updateTip() {
-    const min = Number(input.min);
-    const max = Number(input.max);
-    const val = Number(input.value);
-    const pct = max > min ? (val - min) / (max - min) : 0;
-
-    const halfThumb = 11;  // half of --thumb-size (22px)
-    const trackW    = input.offsetWidth || 200;
-    const left      = halfThumb + pct * (trackW - 2 * halfThumb);
-
-    tip.style.left  = left + "px";
-    tip.textContent = formatDate(val);
-  }
-
-  // Combined update called whenever the thumb position changes
-  function updateThumb() {
-    updateTip();
-    updateFill();
   }
 
   // -------------------------------------------------------------------------
@@ -229,7 +165,7 @@ window.hyperdiv.registerPlugin("DateSlider", (ctx) => {
         // Seek to one day before the SB so the SB appears on the next step.
         const seekDay = Math.max(Number(input.min), ann.day - 1);
         input.value = seekDay;
-        updateThumb();
+        updateFill();
         changeId += 1;
         ctx.updateProp("change_id", changeId);
         ctx.updateProp("value", seekDay);
@@ -263,21 +199,11 @@ window.hyperdiv.registerPlugin("DateSlider", (ctx) => {
 
   // Show tooltip and start debounce on every drag movement
   input.addEventListener("input", () => {
-    updateThumb();
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(sendToServer, 250);
   });
 
-  // Show tooltip on press (before any movement)
-  input.addEventListener("mousedown", () => {
-    updateThumb();
-    tip.classList.add("show");
-  });
-  input.addEventListener("touchstart", () => {
-    updateThumb();
-    tip.classList.add("show");
-  }, { passive: true });
-
+  
   // Flush immediately on release (change fires after mouseup/touchend)
   input.addEventListener("change", () => {
     clearTimeout(debounceTimer);
@@ -302,7 +228,6 @@ window.hyperdiv.registerPlugin("DateSlider", (ctx) => {
       // This prop is never written by JS, so HyperDiv never marks it mutated,
       // meaning Python updates are never silently dropped.
       input.value = propValue;
-      updateThumb();
     }
     else if (propName === "max_value")  { input.max  = propValue; buildDots(); updateFill(); }
     else if (propName === "min_value")  { input.min  = propValue; buildDots(); updateFill(); }
