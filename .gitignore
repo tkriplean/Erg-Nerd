@@ -184,7 +184,7 @@ cython_debug/
 references/
 
 # Concept2 local data (contain secrets / personal data, never commit)
-.concept2_token*
+.concept2*
 .rowinglevel_cache.json
 workouts_example.json
 

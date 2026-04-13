@@ -222,6 +222,52 @@ def _pred_dataset(
     }
 
 
+def _wc_cp_dataset(
+    wc_params: dict,
+    x_min: float,
+    x_max: float,
+    is_dark: bool,
+    x_fn=None,
+) -> dict:
+    """
+    Build a Chart.js dataset for the world-class critical power curve.
+
+    The curve is always generated in distance space (x = meters) and then
+    converted via x_fn to duration if needed.  y values are always watts.
+    The caller is responsible for transforming y to % when wc_relative=True.
+    """
+    color = "rgba(60,180,90,0.85)" if is_dark else "rgba(30,140,60,0.85)"
+    # Generate in distance space (x=meters, y=watts), then convert x.
+    pts = critical_power_curve_points(wc_params, x_min=100.0, x_max=50_000.0, show_watts=True)
+    if x_fn is not None:
+        converted = []
+        for p in pts:
+            pace = watts_to_pace(p["y"])
+            new_x = x_fn(p["x"], pace)
+            converted.append({**p, "x": new_x})
+        pts = [p for p in converted if x_min <= p["x"] <= x_max]
+    else:
+        pts = [p for p in pts if x_min <= p["x"] <= x_max]
+    if len(pts) < 2:
+        return {}
+    return {
+        "type": "line",
+        "label": "World Class CP",
+        "data": pts,
+        "borderColor": color,
+        "backgroundColor": "rgba(0,0,0,0)",
+        "borderWidth": 2.5,
+        "borderDash": [],
+        "pointRadius": 0,
+        "pointHoverRadius": 3,
+        "pointHitRadius": 8,
+        "pointBackgroundColor": color,
+        "tension": 0,
+        "order": 4,
+        "isPrediction": True,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Prediction table helpers
 # ---------------------------------------------------------------------------
@@ -1068,6 +1114,8 @@ def build_chart_config(
     pauls_k: float = 5.0,  # personalised Paul's Law constant (sec/500m per doubling)
     excluded_workouts=(),  # workouts for deselected events — plotted faintly
     x_mode: str = "distance",  # "distance" | "duration"
+    wc_cp_params=None,   # fitted CP params for world-class curve (from concept2_records)
+    wc_relative=False,   # if True: transform y-axis to % of world-class CP
 ):
     """Build a Chart.js config dict for the ranked-workouts chart.
 
@@ -1319,17 +1367,121 @@ def build_chart_config(
             _sim_overlay_datasets(sim_overlays, season_idx, _y, pb_color, is_dark)
         )
 
+    # ── World-class CP overlay / relative-mode transform ─────────────────────
+    _wc_color = "rgba(60,180,90,0.85)" if is_dark else "rgba(30,140,60,0.85)"
+    _wc_color_flat = "rgba(60,180,90,0.55)" if is_dark else "rgba(30,140,60,0.55)"
+
+    if wc_cp_params is not None and not wc_relative:
+        # Normal overlay: add the WC CP curve in green (in watts space, same as _y).
+        # _wc_cp_dataset always generates y in watts; we need to convert to _y units.
+        _wc_ds = _wc_cp_dataset(wc_cp_params, x_min, x_max, is_dark, x_fn=_x_fn)
+        if _wc_ds:
+            if not show_watts:
+                # Convert y from watts → pace for all points.
+                _wc_ds["data"] = [
+                    {**p, "y": round(watts_to_pace(p["y"]), 4)} for p in _wc_ds["data"]
+                ]
+            datasets.insert(0, _wc_ds)  # draw behind everything else
+
+    if wc_cp_params is not None and wc_relative:
+        # Relative mode: transform ALL dataset y-values to % of world-class CP.
+        # x is either distance (m) or duration (s); y is watts or pace.
+        def _to_relative(pts: list) -> list:
+            out = []
+            for p in pts:
+                x = p.get("x")
+                y = p.get("y")
+                if x is None or y is None:
+                    out.append(p)
+                    continue
+                user_watts = y if show_watts else compute_watts(y)
+                if _use_duration:
+                    dur_s = x
+                else:
+                    pace = watts_to_pace(y) if show_watts else y
+                    dur_s = x * pace / 500.0
+                if dur_s <= 0:
+                    out.append(p)
+                    continue
+                wc_w = critical_power_model(
+                    dur_s,
+                    wc_cp_params["Pow1"],
+                    wc_cp_params["tau1"],
+                    wc_cp_params["Pow2"],
+                    wc_cp_params["tau2"],
+                )
+                if wc_w <= 0:
+                    out.append(p)
+                    continue
+                out.append({**p, "y": round(user_watts / wc_w * 100.0, 1)})
+            return out
+
+        transformed = []
+        for ds in datasets:
+            if ds.get("data"):
+                transformed.append({**ds, "data": _to_relative(ds["data"])})
+            else:
+                transformed.append(ds)
+        datasets = transformed
+
+        # Add flat 100% world-class reference line.
+        datasets.insert(0, {
+            "type": "line",
+            "label": "World Class",
+            "data": [{"x": x_min, "y": 100.0}, {"x": x_max, "y": 100.0}],
+            "borderColor": _wc_color_flat,
+            "backgroundColor": "rgba(0,0,0,0)",
+            "borderWidth": 2,
+            "borderDash": [8, 4],
+            "pointRadius": 0,
+            "tension": 0,
+            "order": 5,
+            "isPrediction": True,
+        })
+
     # Canvas labels drawn by canvasLabelsPlugin in power_curve_chart_plugin.js
     canvas_labels = _canvas_labels_list(overlay_labels, _y, crossover_labels=_crossover_labels)
 
     # X-axis title and label mode
     _x_title = "Duration (s)" if _use_duration else "Distance (m)"
 
+    # Y-axis config — overridden in relative mode.
+    if wc_cp_params is not None and wc_relative:
+        _y_axis = {
+            "type": "linear",
+            "min": 35,
+            "max": 115,
+            "title": {
+                "display": True,
+                "text": "% of World Class",
+                "font": {"size": 14, "font-weight": "bold"},
+            },
+            "grid": {"color": "rgba(180,180,180,0.35)"},
+            "beginAtZero": False,
+        }
+    else:
+        _y_axis = {
+            "type": "logarithmic" if log_y else "linear",
+            **(
+                {"min": round(y_bounds[0], 2), "max": round(y_bounds[1], 2)}
+                if y_bounds is not None
+                else {}
+            ),
+            "title": {
+                "display": True,
+                "text": "Watts" if show_watts else "Pace (sec/500m)",
+                "font": {"size": 14, "font-weight": "bold"},
+            },
+            "grid": {"color": "rgba(180,180,180,0.35)"},
+            "beginAtZero": False,
+        }
+
     return {
         "type": "scatter",
         "data": {"datasets": datasets},
         "_canvas_labels": canvas_labels,
         "_x_mode": x_mode,  # read by JS for tick formatter and gridline positions
+        "_wc_relative": wc_relative,  # read by JS for y-axis tick formatting
         "options": {
             "responsive": True,
             "maintainAspectRatio": False,
@@ -1351,21 +1503,7 @@ def build_chart_config(
                         "maxRotation": 0,
                     },
                 },
-                "y": {
-                    "type": "logarithmic" if log_y else "linear",
-                    **(
-                        {"min": round(y_bounds[0], 2), "max": round(y_bounds[1], 2)}
-                        if y_bounds is not None
-                        else {}
-                    ),
-                    "title": {
-                        "display": True,
-                        "text": "Watts" if show_watts else "Pace (sec/500m)",
-                        "font": {"size": 14, "font-weight": "bold"},
-                    },
-                    "grid": {"color": "rgba(180,180,180,0.35)"},
-                    "beginAtZero": False,
-                },
+                "y": _y_axis,
             },
             "plugins": {"legend": {"display": False}},
             # Fixed padding so growing/shrinking point radii never shift the plot area.

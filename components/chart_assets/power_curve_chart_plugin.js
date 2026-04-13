@@ -62,7 +62,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
   // Config post-processing: attach JS callbacks that can't be serialised
   // -----------------------------------------------------------------------
 
-  function buildOptions(options, showWatts, xMode) {
+  function buildOptions(options, showWatts, xMode, wcRelative) {
     // Deep-clone so we never mutate the prop value.
     const opts = JSON.parse(JSON.stringify(options));
     const useDuration = xMode === "duration";
@@ -71,10 +71,15 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     // Y-axis: formatter + gridline interval (≥1 per 5 sec pace, ≥1 per 50 W)
     if (opts.scales && opts.scales.y) {
       opts.scales.y.ticks = opts.scales.y.ticks || {};
-      opts.scales.y.ticks.callback = showWatts
-        ? (val) => Math.round(val) + "W"
-        : (val) => formatPace(val);
-      opts.scales.y.ticks.stepSize = showWatts ? 50 : 5;
+      if (wcRelative) {
+        opts.scales.y.ticks.callback = (val) => Math.round(val) + "%";
+        opts.scales.y.ticks.stepSize = 10;
+      } else {
+        opts.scales.y.ticks.callback = showWatts
+          ? (val) => Math.round(val) + "W"
+          : (val) => formatPace(val);
+        opts.scales.y.ticks.stepSize = showWatts ? 50 : 5;
+      }
     }
 
     // X-axis: formatter + gridlines pinned to ranked distances or durations.
@@ -116,9 +121,11 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
           const label = context.dataset.label || "";
           const raw = context.raw;
           const xStr = xLabelFn(raw.x);
-          const valStr = showWatts
-            ? raw.y.toFixed(1) + " W"
-            : formatPace(raw.y) + " /500m";
+          const valStr = wcRelative
+            ? raw.y.toFixed(1) + "% of world class"
+            : showWatts
+              ? raw.y.toFixed(1) + " W"
+              : formatPace(raw.y) + " /500m";
 
           // Prediction points: show event label (if present) or x-axis label + value.
           if (context.dataset.isPrediction) {
@@ -307,7 +314,8 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
   function applyConfig(config, showWatts) {
     if (!config) return;
     const xMode = (config._x_mode) || "distance";
-    const processedOpts = buildOptions(config.options, showWatts, xMode);
+    const wcRelative = !!(config._wc_relative);
+    const processedOpts = buildOptions(config.options, showWatts, xMode, wcRelative);
     const canvasLabels = config._canvas_labels || [];
 
     if (chartInstance) {
