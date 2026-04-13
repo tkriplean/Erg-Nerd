@@ -11,8 +11,6 @@ For the mathematics of the four prediction models, see **[docs/prediction.md](pr
 ## 1. Sections
 
 ```
-Filter bar:
-    Include [All|PBs|SBs]  |  Events [dropdown]  |  Season [dropdown]
 
 Chart box:
     Header: "Qualifying Performances through <date>"
@@ -24,8 +22,9 @@ Chart box:
         Intensity: [Pace | Watts]  Log Y   |   Length: [Distance | Duration]  Log X
     Row 2 settings:
         Power curves: [PBs | SBs | None]
-    Row 3 settings:
-        Prediction: <custom dropdown>   Show components (toggle + description)
+    Row 3 settings (this may be out of date):
+        Prediction: <custom dropdown>   Show components (toggle + description)     Include [All|PBs|SBs]  |  Events [dropdown]  |  Season [dropdown]
+
 
 Prediction table (below chart):
     Columns: Event | Your PB | Critical Power | Log-Log | Avg. Paul's Law |
@@ -47,10 +46,10 @@ All state is declared as `hd.state(...)` at the top of `power_curve_page()`.
 | `time_enabled` | `tuple[bool]` | all True | One flag per RANKED_TIMES entry; controls event filter |
 | `excluded_seasons` | `tuple[str]` | `()` | Seasons hidden from view; entries are "YYYY-YY" format |
 | `best_filter` | `str` | `"SBs"` | Row filter: `"All"` \| `"PBs"` \| `"SBs"` |
-| `chart_metric` | `str` | `"Pace"` | Y-axis mode: `"Pace"` \| `"Watts"` |
-| `chart_x_mode` | `str` | `"distance"` | X-axis mode: `"distance"` \| `"duration"` |
+| `chart_y_metric` | `str` | `"pace"` | Y-axis mode: `"pace"` \| `"watts"` |
+| `chart_x_metric` | `str` | `"distance"` | X-axis mode: `"distance"` \| `"duration"` |
 | `chart_predictor` | `str` | `"loglog"` | Active prediction line: `"none"` \| `"pauls_law"` \| `"loglog"` \| `"rowinglevel"` \| `"critical_power"` \| `"average"` |
-| `chart_lines` | `str` | `"PBs"` | Power-curve overlay: `"PBs"` \| `"SBs"` \| `"None"` |
+| `draw_power_curves` | `str` | `"PBs"` | Power-curve overlay: `"PBs"` \| `"SBs"` \| `"None"` |
 | `chart_log_x` | `bool` | `True` | Log scale on x-axis |
 | `chart_log_y` | `bool` | `False` | Log scale on y-axis |
 | `chart_show_components` | `bool` | `False` | Show per-anchor/component sub-curves |
@@ -167,13 +166,13 @@ upcoming PBs and renders:
 ### Intensity axis (Row 1, left group)
 | Control | State var | Effect |
 |---|---|---|
-| Pace / Watts toggle | `chart_metric` | Switches y-axis between sec/500m and watts |
+| Pace / Watts toggle | `chart_y_metric` | Switches y-axis between sec/500m and watts |
 | Log Y switch | `chart_log_y` | Logarithmic y-axis scale |
 
 ### Length axis (Row 1, right group)
 | Control | State var | Effect |
 |---|---|---|
-| Distance / Duration toggle | `chart_x_mode` | Switches x-axis between meters and seconds |
+| Distance / Duration toggle | `chart_x_metric` | Switches x-axis between meters and seconds |
 | Log X switch | `chart_log_x` | Logarithmic x-axis scale |
 
 When **Duration** is selected, scatter points use `workout["time"] / 10` as x (seconds),
