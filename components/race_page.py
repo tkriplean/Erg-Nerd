@@ -10,7 +10,7 @@ Exported:
 UI LAYOUT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  Race title:   "A [2k ▾] Race Between [Season Bests ▾]!"  (inline dropdowns)
+  Race title:   "A Race Between [Your Season Bests ▾] at [2k ▾]!"  (inline dropdowns)
                 Both dropdowns are interactive — clicking changes event / filter.
                 include_filter options: All Great Efforts | Season Bests
                 Default include_filter: All Great Efforts
@@ -406,9 +406,9 @@ def race_page(
     )
 
     # ── Race title (interactive) ───────────────────────────────────────────────
-    # "A [2k ▾] Race Between [Season Bests ▾]!"
+    # "A Race Between Your [Season Bests ▾] at [2k ▾]!"
     _include_long = {
-        "All": "All Great Efforts",
+        "All": "Great Efforts",
         "SBs": "Season Bests",
     }
     _cur_event_lbl = _fmt_event_long(state.event_type, state.event_value)
@@ -417,7 +417,51 @@ def race_page(
     with hd.box(align="center", gap=1, padding=2):
         with hd.h1():
             with hd.hbox(gap=0.6, align="center", wrap="wrap"):
-                hd.text("A ")
+                hd.text("A Race Between Your")
+
+                # ── Include filter dropdown ─────────────────────────────────────
+                with hd.scope("include_dd"):
+                    with hd.dropdown() as _inc_dd:
+                        _inc_btn = hd.button(
+                            _cur_include_lbl,
+                            caret=True,
+                            size="large",
+                            font_color="neutral-800",
+                            font_size=2,
+                            font_weight="bold",
+                            slot=_inc_dd.trigger,
+                        )
+                        if _inc_btn.clicked:
+                            _inc_dd.opened = not _inc_dd.opened
+                        with hd.box(
+                            gap=0.1,
+                            background_color="neutral-0",
+                            min_width=20,
+                        ):
+                            for val, lbl in _include_long.items():
+                                with hd.scope(f"inc_{val}"):
+                                    _inc_item = hd.button(
+                                        lbl,
+                                        size="small",
+                                        variant="primary"
+                                        if state.include_filter == val
+                                        else "text",
+                                        width="100%",
+                                        border_radius="small",
+                                        font_size="medium",
+                                        font_color="neutral-0"
+                                        if state.include_filter == val
+                                        else "neutral-800",
+                                        label_style=hd.style(
+                                            padding_top=0.5, padding_bottom=0.5
+                                        ),
+                                        hover_background_color="neutral-100",
+                                    )
+                                    if _inc_item.clicked:
+                                        state.include_filter = val
+                                        _inc_dd.opened = False
+
+                hd.text("at")
 
                 # ── Event selector dropdown ─────────────────────────────────────
                 with hd.scope("event_dd"):
@@ -466,50 +510,6 @@ def race_page(
                                         state.event_value = evalue
                                         state.last_batch_key = ""
                                         _ev_dd.opened = False
-
-                hd.text(" Race Between ")
-
-                # ── Include filter dropdown ─────────────────────────────────────
-                with hd.scope("include_dd"):
-                    with hd.dropdown() as _inc_dd:
-                        _inc_btn = hd.button(
-                            _cur_include_lbl,
-                            caret=True,
-                            size="large",
-                            font_color="neutral-800",
-                            font_size=2,
-                            font_weight="bold",
-                            slot=_inc_dd.trigger,
-                        )
-                        if _inc_btn.clicked:
-                            _inc_dd.opened = not _inc_dd.opened
-                        with hd.box(
-                            gap=0.1,
-                            background_color="neutral-0",
-                            min_width=20,
-                        ):
-                            for val, lbl in _include_long.items():
-                                with hd.scope(f"inc_{val}"):
-                                    _inc_item = hd.button(
-                                        lbl,
-                                        size="small",
-                                        variant="primary"
-                                        if state.include_filter == val
-                                        else "text",
-                                        width="100%",
-                                        border_radius="small",
-                                        font_size="medium",
-                                        font_color="neutral-0"
-                                        if state.include_filter == val
-                                        else "neutral-800",
-                                        label_style=hd.style(
-                                            padding_top=0.5, padding_bottom=0.5
-                                        ),
-                                        hover_background_color="neutral-100",
-                                    )
-                                    if _inc_item.clicked:
-                                        state.include_filter = val
-                                        _inc_dd.opened = False
 
                 hd.text("!")
 
