@@ -19,6 +19,11 @@ Public API
   records_to_cp_input(records)
       → [{"duration_s": float, "watts": float}, ...]
         suitable for fit_critical_power()
+
+  records_to_lbest(records)
+      → (lb, lba) dicts compatible with loglog_fit(), _loglog_dataset(), etc.
+        lb  {(etype, evalue): pace_sec_per_500m}
+        lba {(etype, evalue): anchor_distance_metres}
 """
 
 from __future__ import annotations
@@ -331,3 +336,40 @@ def records_to_cp_input(records: dict) -> list[dict]:
 
     result.sort(key=lambda x: x["duration_s"])
     return result
+
+
+def records_to_lbest(records: dict) -> tuple[dict, dict]:
+    """
+    Convert a records dict (from get_age_group_records) to
+    (lifetime_best, lifetime_best_anchor) format, compatible with
+    loglog_fit(), _loglog_dataset(), _pauls_law_datasets(), and
+    _average_datasets() in the chart builder.
+
+    lb  keys: same (etype, evalue) tuples as *records*
+         values: pace in sec/500m
+
+    lba keys: same tuples
+         values: anchor distance in metres (the canonical event distance for
+                 distance events, or the metres-covered for time events)
+    """
+    lb: dict = {}
+    lba: dict = {}
+    for (etype, evalue), value in records.items():
+        if etype == "dist":
+            dist_m = evalue
+            t_sec = value          # value = seconds for this distance
+            if t_sec <= 0 or dist_m <= 0:
+                continue
+            pace = t_sec / (dist_m / 500.0)
+            lb[(etype, evalue)] = pace
+            lba[(etype, evalue)] = dist_m
+        elif etype == "time":
+            tenths = evalue
+            dist_m = value         # value = metres covered in this duration
+            duration_s = tenths / 10.0
+            if duration_s <= 0 or dist_m <= 0:
+                continue
+            pace = duration_s / (dist_m / 500.0)
+            lb[(etype, evalue)] = pace
+            lba[(etype, evalue)] = dist_m
+    return lb, lba

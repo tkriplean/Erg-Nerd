@@ -222,50 +222,156 @@ def _pred_dataset(
     }
 
 
-def _wc_cp_dataset(
-    wc_params: dict,
-    x_min: float,
-    x_max: float,
-    is_dark: bool,
-    x_fn=None,
-) -> dict:
+def _wc_scatter_dataset(wc_lb: dict, wc_lba: dict, _y, _use_duration: bool, is_dark: bool) -> dict:
     """
-    Build a Chart.js dataset for the world-class critical power curve.
-
-    The curve is always generated in distance space (x = meters) and then
-    converted via x_fn to duration if needed.  y values are always watts.
-    The caller is responsible for transforming y to % when wc_relative=True.
+    Build a Chart.js scatter dataset for individual WC record points.
+    Uses green upward triangles to distinguish from user scatter.
     """
-    color = "rgba(60,180,90,0.85)" if is_dark else "rgba(30,140,60,0.85)"
-    # Generate in distance space (x=meters, y=watts), then convert x.
-    pts = critical_power_curve_points(wc_params, x_min=100.0, x_max=50_000.0, show_watts=True)
-    if x_fn is not None:
-        converted = []
-        for p in pts:
-            pace = watts_to_pace(p["y"])
-            new_x = x_fn(p["x"], pace)
-            converted.append({**p, "x": new_x})
-        pts = [p for p in converted if x_min <= p["x"] <= x_max]
-    else:
-        pts = [p for p in pts if x_min <= p["x"] <= x_max]
-    if len(pts) < 2:
-        return {}
+    color = "rgba(50,210,100,0.92)" if is_dark else "rgba(20,160,55,0.92)"
+    pts = []
+    for cat, pace in wc_lb.items():
+        dist = wc_lba.get(cat, 0)
+        if not dist or pace <= 0:
+            continue
+        x = round(dist * pace / 500.0, 2) if _use_duration else dist
+        pts.append({"x": x, "y": _y(pace), "cat": list(cat)})
+    pts.sort(key=lambda p: p["x"])
     return {
-        "type": "line",
-        "label": "World Class CP",
+        "type": "scatter",
+        "label": "World Records",
         "data": pts,
         "borderColor": color,
-        "backgroundColor": "rgba(0,0,0,0)",
-        "borderWidth": 2.5,
-        "borderDash": [],
-        "pointRadius": 0,
-        "pointHoverRadius": 3,
-        "pointHitRadius": 8,
-        "pointBackgroundColor": color,
-        "tension": 0,
-        "order": 4,
-        "isPrediction": True,
+        "backgroundColor": color,
+        "pointStyle": "triangle",
+        "pointRadius": 6,
+        "pointHoverRadius": 8,
+        "pointHitRadius": 10,
+        "order": 1,
+        "isWCRecord": True,
     }
+
+
+def _wc_pred_datasets(
+    wc_data: dict,
+    predictor: str,
+    x_min: float,
+    x_max: float,
+    _y_min: float,
+    _y_max: float,
+    _y,
+    show_watts: bool,
+    is_dark: bool,
+    x_fn,
+    pauls_k: float = 5.0,
+) -> list:
+    """
+    Build WC prediction datasets using the currently selected predictor applied
+    to WC records (lb/lba/cp_params).  WC predictions use the same green colour
+    and the same function as the user's prediction, making them the WC 'synthetic
+    user'.
+
+    rowinglevel has no WC equivalent — falls back to CP then loglog.
+    """
+    wc_color = "rgba(60,180,90,0.85)" if is_dark else "rgba(30,140,60,0.85)"
+    lb, lba, cp = wc_data["lb"], wc_data["lba"], wc_data.get("cp_params")
+
+    if predictor == "none":
+        return []
+
+    eff = predictor
+    if eff == "rowinglevel":
+        # Use WC RowingLevel predictions when available (scraped in _fetch_wc_data
+        # using the WC 2k record as the reference for the user's demographics).
+        wc_rl = wc_data.get("rl_predictions") or {}
+        if wc_rl:
+            ds = _rowinglevel_datasets(wc_rl, wc_color, _y, False, lba, x_fn=x_fn)
+            for d in ds:
+                d["label"] = "_wc_pred"
+            return ds
+        eff = "critical_power"  # fallback when WC RL predictions unavailable
+
+    if eff == "critical_power":
+        if cp is not None:
+            ds_list, _ = _cp_datasets(
+                cp, x_min, x_max, _y_min, _y_max,
+                wc_color, _y, show_watts, False, is_dark, x_fn=x_fn,
+            )
+            for d in ds_list:
+                d["label"] = "_wc_pred"
+            return ds_list
+        eff = "loglog"  # fallback when CP fit unavailable
+
+    if eff == "loglog":
+        ds = _loglog_dataset(lb, lba, wc_color, _y, x_fn=x_fn)
+        for d in ds:
+            d["label"] = "_wc_pred"
+        return ds
+
+    if eff == "pauls_law":
+        ds = _pauls_law_datasets(lb, lba, wc_color, _y, False, pauls_k=5.0, x_fn=x_fn)
+        for d in ds:
+            d["label"] = "_wc_pred"
+        return ds
+
+    if eff == "average":
+        ds = _average_datasets(
+            lb, lba, cp, None, 5.0,
+            x_min, x_max, wc_color, _y, show_watts,
+            show_components=False, x_fn=x_fn,
+        )
+        for d in ds:
+            d["label"] = "_wc_pred"
+        return ds
+
+    return []
+
+
+def _pts_to_relative(user_pts: list, wc_pts: list, show_watts: bool) -> list:
+    """
+    Divide user prediction by WC prediction using numpy interpolation.
+
+    Watts view: pct = user_y / wc_y × 100
+    Pace view:  pct = wc_y  / user_y × 100  (inverted — lower pace = faster)
+    """
+    if len(user_pts) < 2 or len(wc_pts) < 2:
+        return []
+    wc_xs = [p["x"] for p in wc_pts]
+    wc_ys = [p["y"] for p in wc_pts]
+    rel = []
+    for p in user_pts:
+        x = p.get("x")
+        u_y = p.get("y")
+        if x is None or u_y is None:
+            continue
+        if x < wc_xs[0] or x > wc_xs[-1]:
+            continue
+        wc_y = float(np.interp(x, wc_xs, wc_ys))
+        if wc_y == 0:
+            continue
+        pct = (u_y / wc_y * 100.0) if show_watts else (wc_y / u_y * 100.0)
+        rel.append({"x": x, "y": round(pct, 1)})
+    return rel
+
+
+def _wc_ref_fallback(x: float, wc_cp: dict | None, wc_lb: dict, wc_lba: dict,
+                     _use_duration: bool) -> tuple | None:
+    """
+    Return (wc_watts, wc_pace) for non-standard x using WC CP or loglog interpolation.
+    Used when there is no exact WC record for a given event category.
+    """
+    if _use_duration and wc_cp is not None:
+        wc_w = critical_power_model(
+            x, wc_cp["Pow1"], wc_cp["tau1"], wc_cp["Pow2"], wc_cp["tau2"]
+        )
+        if wc_w > 0:
+            return wc_w, watts_to_pace(wc_w)
+    if not _use_duration:
+        fit = loglog_fit(wc_lb, wc_lba)
+        if fit:
+            wc_p = loglog_predict_pace(fit[0], fit[1], x)
+            if PACE_MIN <= wc_p <= PACE_MAX:
+                return compute_watts(wc_p), wc_p
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -831,7 +937,7 @@ def _lifetime_best_datasets(
             c not in seen
             and abs(dp["pace"] - lifetime_best.get(c, float("inf"))) < 1e-9
         ):
-            lb_pts.append({"x": x_fn(dp["dist"], dp["pace"]), "y": y_fn(dp["pace"])})
+            lb_pts.append({"x": x_fn(dp["dist"], dp["pace"]), "y": y_fn(dp["pace"]), "cat": list(c)})
             seen.add(c)
     lb_pts.sort(key=lambda p: p["x"])
     if not lb_pts:
@@ -872,7 +978,7 @@ def _season_line_datasets(
             if dp["season"] != season or c in seen:
                 continue
             if abs(dp["pace"] - season_best.get((season, c), float("inf"))) < 1e-9:
-                s_pts.append({"x": x_fn(dp["dist"], dp["pace"]), "y": y_fn(dp["pace"])})
+                s_pts.append({"x": x_fn(dp["dist"], dp["pace"]), "y": y_fn(dp["pace"]), "cat": list(c)})
                 seen.add(c)
         if not s_pts:
             continue
@@ -949,6 +1055,7 @@ def _scatter_datasets(
                     "y": y_fn(dp["pace"]),
                     "date": dp["date"],
                     "wtype": dp["wtype"],
+                    "cat": list(c),  # needed by _scatter_to_pct for exact WC record lookup
                 }
             )
             bg.append(_season_hsla(idx, 0, alpha))
@@ -969,6 +1076,7 @@ def _scatter_datasets(
                     "y": y_fn(dp["pace"]),
                     "date": dp["date"],
                     "wtype": dp.get("wtype", ""),
+                    "cat": list(dp["cat"]),
                 }
             )
             bg.append(_season_hsla(idx, 0, 0.18))
@@ -1114,8 +1222,8 @@ def build_chart_config(
     pauls_k: float = 5.0,  # personalised Paul's Law constant (sec/500m per doubling)
     excluded_workouts=(),  # workouts for deselected events — plotted faintly
     x_mode: str = "distance",  # "distance" | "duration"
-    wc_cp_params=None,   # fitted CP params for world-class curve (from concept2_records)
-    wc_relative=False,   # if True: transform y-axis to % of world-class CP
+    wc_data=None,        # dict {records, cp_params, lb, lba} from concept2_records
+    wc_relative=False,   # if True: transform y-axis to % of world class
 ):
     """Build a Chart.js config dict for the ranked-workouts chart.
 
@@ -1209,6 +1317,12 @@ def build_chart_config(
         x_min, x_max = x_bounds
     else:
         _all_x = [dp["x"] for dp in data_points + excluded_data_points]
+        # Include WC record x positions so their scatter points are always visible.
+        if wc_data is not None:
+            for cat, pace in wc_data["lb"].items():
+                dist = wc_data["lba"].get(cat, 0)
+                if dist and pace > 0:
+                    _all_x.append(round(dist * pace / 500.0, 2) if _use_duration else dist)
         _x_min_raw, _x_max_raw = min(_all_x), max(_all_x)
         if log_x:
             _pad = 1.45
@@ -1367,67 +1481,109 @@ def build_chart_config(
             _sim_overlay_datasets(sim_overlays, season_idx, _y, pb_color, is_dark)
         )
 
-    # ── World-class CP overlay / relative-mode transform ─────────────────────
-    _wc_color = "rgba(60,180,90,0.85)" if is_dark else "rgba(30,140,60,0.85)"
+    # ── World-class overlay / relative-mode transform ────────────────────────
     _wc_color_flat = "rgba(60,180,90,0.55)" if is_dark else "rgba(30,140,60,0.55)"
 
-    if wc_cp_params is not None and not wc_relative:
-        # Normal overlay: add the WC CP curve in green (in watts space, same as _y).
-        # _wc_cp_dataset always generates y in watts; we need to convert to _y units.
-        _wc_ds = _wc_cp_dataset(wc_cp_params, x_min, x_max, is_dark, x_fn=_x_fn)
-        if _wc_ds:
-            if not show_watts:
-                # Convert y from watts → pace for all points.
-                _wc_ds["data"] = [
-                    {**p, "y": round(watts_to_pace(p["y"]), 4)} for p in _wc_ds["data"]
-                ]
-            datasets.insert(0, _wc_ds)  # draw behind everything else
+    if wc_data is not None and not wc_relative:
+        # Absolute compare mode: add WC scatter points and WC prediction line.
 
-    if wc_cp_params is not None and wc_relative:
-        # Relative mode: transform ALL dataset y-values to % of world-class CP.
-        # x is either distance (m) or duration (s); y is watts or pace.
-        def _to_relative(pts: list) -> list:
+        # WC scatter points (green triangles, drawn at order=1 like user scatter).
+        _wc_scatter = _wc_scatter_dataset(
+            wc_data["lb"], wc_data["lba"], _y, _use_duration, is_dark
+        )
+        datasets.append(_wc_scatter)
+
+        # WC prediction line using the selected predictor (drawn behind everything).
+        _wc_preds = _wc_pred_datasets(
+            wc_data, predictor, x_min, x_max, _y_min, _y_max,
+            _y, show_watts, is_dark, _x_fn, pauls_k,
+        )
+        datasets = _wc_preds + datasets
+
+    if wc_data is not None and wc_relative:
+        # Relative mode: each value is expressed as a % of the WC reference.
+        # Watts view: user_y / wc_y × 100  (higher % = closer to WC power)
+        # Pace view:  wc_y / user_y × 100  (higher % = closer to WC pace; inverted
+        #             because lower pace = faster)
+
+        wc_lb = wc_data["lb"]
+        wc_lba = wc_data["lba"]
+        wc_cp = wc_data.get("cp_params")
+
+        # Build a lookup from event category → (wc_watts, wc_pace) for exact matches.
+        _wc_cat_ref: dict = {}
+        for _cat, _pace in wc_lb.items():
+            _wc_cat_ref[tuple(_cat) if isinstance(_cat, list) else _cat] = (
+                compute_watts(_pace),
+                _pace,
+            )
+
+        def _scatter_to_pct(pts: list) -> list:
             out = []
             for p in pts:
-                x = p.get("x")
-                y = p.get("y")
+                cat_raw = p.get("cat")
+                cat = tuple(cat_raw) if isinstance(cat_raw, list) else cat_raw
+                x, y = p.get("x"), p.get("y")
                 if x is None or y is None:
-                    out.append(p)
                     continue
-                user_watts = y if show_watts else compute_watts(y)
-                if _use_duration:
-                    dur_s = x
+                ref = _wc_cat_ref.get(cat) if cat else None
+                if ref is None:
+                    ref = _wc_ref_fallback(x, wc_cp, wc_lb, wc_lba, _use_duration)
+                if ref is None:
+                    continue
+                wc_w, wc_p = ref
+                if show_watts:
+                    pct_val = round(y / wc_w * 100.0, 1)
                 else:
-                    pace = watts_to_pace(y) if show_watts else y
-                    dur_s = x * pace / 500.0
-                if dur_s <= 0:
-                    out.append(p)
-                    continue
-                wc_w = critical_power_model(
-                    dur_s,
-                    wc_cp_params["Pow1"],
-                    wc_cp_params["tau1"],
-                    wc_cp_params["Pow2"],
-                    wc_cp_params["tau2"],
-                )
-                if wc_w <= 0:
-                    out.append(p)
-                    continue
-                out.append({**p, "y": round(user_watts / wc_w * 100.0, 1)})
+                    pct_val = round(wc_p / y * 100.0, 1)
+                out.append({**p, "y": pct_val})
             return out
 
+        # Extract user prediction datasets before discarding them.
+        user_pred_ds = [ds for ds in datasets if ds.get("isPrediction")]
+
+        # Transform scatter datasets (lifetime best line, season lines, scatter points).
         transformed = []
         for ds in datasets:
+            if ds.get("isPrediction") or ds.get("isWCRecord"):
+                continue  # replaced below
             if ds.get("data"):
-                transformed.append({**ds, "data": _to_relative(ds["data"])})
+                new_data = _scatter_to_pct(ds["data"])
+                if new_data:
+                    transformed.append({**ds, "data": new_data})
             else:
                 transformed.append(ds)
-        datasets = transformed
 
-        # Add flat 100% world-class reference line.
-        datasets.insert(0, {
+        # Relative prediction: user_pred / wc_pred × 100 via interpolation.
+        _wc_pred_ds = _wc_pred_datasets(
+            wc_data, predictor, x_min, x_max, _y_min, _y_max,
+            _y, show_watts, is_dark, _x_fn, pauls_k,
+        )
+        _u_pts: list = []
+        for _ds in user_pred_ds:
+            if _ds.get("data"):
+                _u_pts = _ds["data"]
+                break
+        _wc_pts: list = []
+        for _ds in _wc_pred_ds:
+            if _ds.get("data"):
+                _wc_pts = _ds["data"]
+                break
+        rel_pts = _pts_to_relative(_u_pts, _wc_pts, show_watts)
+        rel_pred_ds = (
+            [_pred_dataset("_rel_pred", rel_pts, pred_color)] if len(rel_pts) >= 2 else []
+        )
+
+        # WC records appear at 100% in relative mode (record / record = 1.0).
+        # Pass original wc_lb (pace) so x positions are correct; _y always returns 100.
+        _wc_scatter_100 = _wc_scatter_dataset(
+            wc_lb, wc_lba, lambda _v: 100.0, _use_duration, is_dark
+        )
+
+        # Flat 100% reference line.
+        flat_ref = {
             "type": "line",
-            "label": "World Class",
+            "label": "World Records",
             "data": [{"x": x_min, "y": 100.0}, {"x": x_max, "y": 100.0}],
             "borderColor": _wc_color_flat,
             "backgroundColor": "rgba(0,0,0,0)",
@@ -1437,7 +1593,9 @@ def build_chart_config(
             "tension": 0,
             "order": 5,
             "isPrediction": True,
-        })
+        }
+
+        datasets = [flat_ref] + rel_pred_ds + transformed + [_wc_scatter_100]
 
     # Canvas labels drawn by canvasLabelsPlugin in power_curve_chart_plugin.js
     canvas_labels = _canvas_labels_list(overlay_labels, _y, crossover_labels=_crossover_labels)
@@ -1446,14 +1604,29 @@ def build_chart_config(
     _x_title = "Duration (s)" if _use_duration else "Distance (m)"
 
     # Y-axis config — overridden in relative mode.
-    if wc_cp_params is not None and wc_relative:
+    if wc_data is not None and wc_relative:
+        _rel_y_title = "% of World Class Power" if show_watts else "% of World Class Pace"
+        # Auto-compute y range from actual % values in the datasets so the axis
+        # fits the data regardless of the user's level or watts-vs-pace view.
+        # (Pace and watts give very different %, due to the cubic relationship.)
+        _rel_y_vals = [
+            pt["y"]
+            for ds in datasets
+            for pt in (ds.get("data") or [])
+            if isinstance(pt.get("y"), (int, float))
+        ]
+        _rel_y_min_data = min(_rel_y_vals) if _rel_y_vals else 0.0
+        _rel_y_max_data = max(_rel_y_vals) if _rel_y_vals else 110.0
+        _rel_pad = max((_rel_y_max_data - _rel_y_min_data) * 0.12, 4.0)
+        _rel_axis_min = max(0.0, round(_rel_y_min_data - _rel_pad, 0))
+        _rel_axis_max = round(_rel_y_max_data + _rel_pad, 0)
         _y_axis = {
             "type": "linear",
-            "min": 35,
-            "max": 115,
+            "min": _rel_axis_min,
+            "max": _rel_axis_max,
             "title": {
                 "display": True,
-                "text": "% of World Class",
+                "text": _rel_y_title,
                 "font": {"size": 14, "font-weight": "bold"},
             },
             "grid": {"color": "rgba(180,180,180,0.35)"},
@@ -1481,7 +1654,8 @@ def build_chart_config(
         "data": {"datasets": datasets},
         "_canvas_labels": canvas_labels,
         "_x_mode": x_mode,  # read by JS for tick formatter and gridline positions
-        "_wc_relative": wc_relative,  # read by JS for y-axis tick formatting
+        "_wc_relative": wc_relative,           # read by JS for y-axis tick formatting
+        "_wc_relative_mode": "watts" if show_watts else "pace",  # for tooltip label
         "options": {
             "responsive": True,
             "maintainAspectRatio": False,

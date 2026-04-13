@@ -132,6 +132,7 @@ from services.rowinglevel import (
     _PROFILE_DEFAULTS,
     age_from_dob,
     fetch_all_pb_predictions,
+    fetch_predictions as rl_fetch_predictions,
     profile_complete,
 )
 from services.rowing_utils import (
@@ -154,6 +155,7 @@ from services.critical_power_model import fit_critical_power
 from services.concept2_records import (
     get_age_group_records,
     records_to_cp_input,
+    records_to_lbest,
     age_category as wc_age_category,
     weight_class_str as wc_weight_class_str,
 )
@@ -871,7 +873,7 @@ def _wc_compare_section(state, profile: dict, wc_task) -> None:
         state.chart_compare_wc and not state.wc_fetch_done and state.wc_fetch_key != ""
     )
     _failed = (
-        state.chart_compare_wc and state.wc_fetch_done and state.wc_cp_params is None
+        state.chart_compare_wc and state.wc_fetch_done and state.wc_data is None
     )
 
     # Compare toggle
@@ -900,7 +902,7 @@ def _wc_compare_section(state, profile: dict, wc_task) -> None:
             )
     if _failed:
         hd.text(
-            "Could not fit CP model to world records.",
+            "Could not fetch world records.",
             font_size="small",
             font_color="warning-600",
         )
@@ -1548,28 +1550,55 @@ def _run_animation_tick(state, total_days: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _fetch_wc_cp(gender_api: str, age: int, weight_kg: float) -> dict | None:
+def _fetch_wc_data(gender_api: str, age: int, weight_kg: float) -> dict | None:
     """
     Blocking function — intended to run inside hd.task().
     Fetches Concept2 world records for the given gender/age/weight,
-    converts them to CP input, and fits the CP model.
-    Returns the CP params dict, or None if fetch/fit failed.
+    fits the CP model (when enough data), builds lb/lba dicts, and
+    optionally fetches RowingLevel predictions using the WC 2k record
+    as the reference performance.
+
+    Returns a dict {"records", "cp_params", "lb", "lba", "rl_predictions"}
+    or None if the API returned no records at all.
     """
     records = get_age_group_records(gender_api, age, weight_kg)
     if not records:
         return None
     cp_input = records_to_cp_input(records)
-    if not cp_input:
-        return None
-    return fit_critical_power(cp_input)
+    cp_params = fit_critical_power(cp_input) if len(cp_input) >= 5 else None
+    lb, lba = records_to_lbest(records)
+
+    # RowingLevel predictions: use WC record at best available dist event as
+    # the reference performance (prefer 2k, the canonical RL anchor).
+    rl_predictions: dict = {}
+    gender_rl = "Male" if gender_api == "M" else "Female"
+    _ref_dist, _ref_time_s = None, None
+    for _d in [2000, 1000, 5000, 6000, 10000, 500, 21097]:
+        _t = records.get(("dist", _d))
+        if _t:
+            _ref_dist, _ref_time_s = _d, _t
+            break
+    if _ref_dist is not None and _ref_time_s is not None:
+        time_tenths = round(_ref_time_s * 10)
+        preds = rl_fetch_predictions(gender_rl, age, weight_kg, _ref_dist, time_tenths)
+        if preds:
+            rl_predictions[str(("dist", _ref_dist))] = preds
+
+    return {
+        "records": records,
+        "cp_params": cp_params,
+        "lb": lb,
+        "lba": lba,
+        "rl_predictions": rl_predictions,
+    }
 
 
 def _load_wc_cp(state, profile: dict) -> tuple:
     """
     HyperDiv component: manage the background task that fetches world-class
-    CP params.  Caches result in state.wc_cp_params.
+    data.  Caches result in state.wc_data.
 
-    Returns (task_or_None, wc_cp_params_or_None).
+    Returns (task_or_None, wc_data_or_None).
     """
     # Derive API-format profile fields.
     gender_raw = profile.get("gender", "")  # "Male" or "Female"
@@ -1591,18 +1620,18 @@ def _load_wc_cp(state, profile: dict) -> tuple:
     if fetch_key != state.wc_fetch_key:
         state.wc_fetch_key = fetch_key
         state.wc_fetch_done = False
-        state.wc_cp_params = None
+        state.wc_data = None
 
     wc_task = None
     with hd.scope(f"wc_task_{fetch_key}"):
         wc_task = hd.task()
         if not wc_task.running and not wc_task.done:
-            wc_task.run(_fetch_wc_cp, gender_api, age, weight_kg)
+            wc_task.run(_fetch_wc_data, gender_api, age, weight_kg)
         if wc_task.done and not state.wc_fetch_done:
             state.wc_fetch_done = True
-            state.wc_cp_params = wc_task.result  # may be None if fit failed
+            state.wc_data = wc_task.result  # None if API returned nothing
 
-    return wc_task, state.wc_cp_params
+    return wc_task, state.wc_data
 
 
 # ---------------------------------------------------------------------------
@@ -1624,7 +1653,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         chart_show_lifetime_line=True,
         chart_y_metric="pace",
         chart_x_metric="distance",
-        chart_predictor="loglog",
+        chart_predictor="critical_power",
         chart_show_components=False,
         chart_season_lines=(),
         draw_power_curves="PBs",
@@ -1643,7 +1672,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         chart_wc_relative=False,
         wc_fetch_key="",
         wc_fetch_done=False,
-        wc_cp_params=None,
+        wc_data=None,
     )
     is_dark = hd.theme().is_dark
 
@@ -1718,7 +1747,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         selected_times,
     )
     rl_task, rl_predictions = _fetch_rowinglevel(state, profile, display, at_today)
-    wc_task, wc_cp_params = (
+    wc_task, wc_data = (
         _load_wc_cp(state, profile) if state.chart_compare_wc else (None, None)
     )
     _run_animation_tick(state, total_days)
@@ -1746,6 +1775,32 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         state.chart_x_metric == "duration",
         state.chart_log_x,
     )
+
+    # Expand y_bounds to include WC records when in absolute compare mode.
+    # _compute_axis_bounds is derived from user PBs only; world-class rowers are
+    # faster (lower pace / higher watts), so without expansion they'd be clipped.
+    _wc_relative_active = (
+        state.chart_compare_wc
+        and wc_data is not None
+        and state.chart_wc_relative
+    )
+    if (
+        y_bounds is not None
+        and wc_data is not None
+        and state.chart_compare_wc
+        and not _wc_relative_active
+    ):
+        _wc_y_vals = [
+            compute_watts(pace) if show_watts else pace
+            for pace in wc_data["lb"].values()
+            if pace > 0
+        ]
+        if _wc_y_vals:
+            _ypad = max((y_bounds[1] - y_bounds[0]) * 0.1, 5.0 if not show_watts else 2.0)
+            y_bounds = (
+                min(y_bounds[0], min(_wc_y_vals) - _ypad),
+                max(y_bounds[1], max(_wc_y_vals) + _ypad),
+            )
 
     # ── Render ────────────────────────────────────────────────────────────────
     with hd.box(gap=1, align="center", padding=(2, 2, 2, 2)):
@@ -1818,6 +1873,10 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
             if at_today or state.chart_predictor != "rowinglevel"
             else "none"
         )
+        # Transparent CP → loglog fallback when not enough data for a CP fit.
+        effective_predictor = predictor
+        if effective_predictor == "critical_power" and cp_params is None:
+            effective_predictor = "loglog"
         chart_cfg = build_chart_config(
             sim_wkts,
             log_x=state.chart_log_x,
@@ -1825,7 +1884,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
             show_lifetime_line=state.draw_power_curves == "PBs",
             show_watts=show_watts,
             is_dark=is_dark,
-            predictor=predictor,
+            predictor=effective_predictor,
             rl_predictions=rl_predictions,
             critical_power_params=cp_params,
             season_lines=set(all_seasons)
@@ -1842,9 +1901,9 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
             pauls_k=pauls_k,
             excluded_workouts=excluded_wkts,
             x_mode=state.chart_x_metric,
-            wc_cp_params=wc_cp_params,
+            wc_data=wc_data,
             wc_relative=state.chart_wc_relative
-            if (state.chart_compare_wc and wc_cp_params is not None)
+            if (state.chart_compare_wc and wc_data is not None)
             else False,
         )
         _chart_section(

@@ -62,7 +62,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
   // Config post-processing: attach JS callbacks that can't be serialised
   // -----------------------------------------------------------------------
 
-  function buildOptions(options, showWatts, xMode, wcRelative) {
+  function buildOptions(options, showWatts, xMode, wcRelative, wcRelativeMode) {
     // Deep-clone so we never mutate the prop value.
     const opts = JSON.parse(JSON.stringify(options));
     const useDuration = xMode === "duration";
@@ -122,7 +122,9 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
           const raw = context.raw;
           const xStr = xLabelFn(raw.x);
           const valStr = wcRelative
-            ? raw.y.toFixed(1) + "% of world class"
+            ? raw.y.toFixed(1) + (wcRelativeMode === "watts"
+                ? "% of world-class power"
+                : "% of world-class pace")
             : showWatts
               ? raw.y.toFixed(1) + " W"
               : formatPace(raw.y) + " /500m";
@@ -315,7 +317,8 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     if (!config) return;
     const xMode = (config._x_mode) || "distance";
     const wcRelative = !!(config._wc_relative);
-    const processedOpts = buildOptions(config.options, showWatts, xMode, wcRelative);
+    const wcRelativeMode = config._wc_relative_mode || "watts";
+    const processedOpts = buildOptions(config.options, showWatts, xMode, wcRelative, wcRelativeMode);
     const canvasLabels = config._canvas_labels || [];
 
     if (chartInstance) {
