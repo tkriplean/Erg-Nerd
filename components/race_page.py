@@ -12,8 +12,8 @@ UI LAYOUT
 
   Race title:   "A [2k ▾] Race Between [Season Bests ▾]!"  (inline dropdowns)
                 Both dropdowns are interactive — clicking changes event / filter.
-                include_filter options: All Great Efforts | Personal Bests | Season Bests
-                Default include_filter: Season Bests (SBs)
+                include_filter options: All Great Efforts | Season Bests
+                Default include_filter: All Great Efforts
   Loading bar:  "Fetching stroke data… N / M"  (while fetching)
   Race canvas:  RaceChart plugin (auto-sized: 26px header + 44px × N lanes)
   Sort toggle:  Sort lanes by [Date | Result]  (below race canvas)
@@ -27,7 +27,7 @@ STATE VARIABLES
 
   event_type      str    "dist" | "time"
   event_value     int    meters or tenths-of-sec
-  include_filter  str    "All" | "PBs" | "SBs"
+  include_filter  str    "All" | "SBs"
   sort_mode       str    "date" | "result"
   strokes_cache_loaded  bool
   strokes_by_id         dict  {str(id): [{t,d}]}

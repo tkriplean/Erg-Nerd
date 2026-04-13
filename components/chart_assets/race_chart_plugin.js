@@ -152,18 +152,6 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   }
 
 
-  function format_time(tenths){
-    total_s = parseInt(tenths / 10);
-    secs = parseInt(total_s % 60);
-    total_m = total_s / 60;
-    mins = parseInt(total_m % 60);
-    hours = parseInt(total_m / 60);
-    if (hours)
-        return `${hours}:${mins}:${secs}`;
-
-    return `${mins}:${secs}`;
-  }
-
   seekInput.tooltipFormatter = fmtTime
   seekInput.className = "race-seek";
   seekInput.min = 0;
@@ -224,6 +212,11 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   // Fraction of the stroke cycle occupied by the drive phase (catch → finish).
   // Recovery fills the remaining (1 - DRIVE_FRAC) of each cycle.
   const DRIVE_FRAC = 0.38;
+
+  // Global animation cadence multiplier.  Values > 1 speed up all stroke
+  // animations proportionally without affecting boat positions or race timing.
+  // 1.20 makes strokes feel snappier while keeping relative SPM differences intact.
+  const STROKE_SPEED = 1.20;
 
   // ── Canvas height sizing ───────────────────────────────────────────────────
   // Keep these in sync with the HEADER_H / LANE_H values used in renderFrame().
@@ -387,19 +380,17 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     return a.t + frac * (b.t - a.t);
   }
 
-  // ── Stroke-phase helpers ─────────────────────────────────────────────────
+  // ── Stroke-period helper ──────────────────────────────────────────────────
   //
-  // getSmoothedPeriod(boat, timeSec)
-  //   Returns the mean stroke period (seconds/stroke) smoothed over a window of
-  //   ±SMOOTH_WIN strokes around the current position.  Wider window eliminates
-  //   the jitter from rough 1-Hz data so animation speed is stable and the
-  //   proportional difference between boats reflects real SPM, not noise.
-  //   Clamped to physiologically plausible range (12–65 SPM).
+  // getSmoothedPeriod(boat, timeSec) → seconds per stroke
+  //   For real-stroke boats: ±SMOOTH_WIN windowed mean of actual timestamps,
+  //   clamped to 12–65 SPM.
+  //   For synthesised boats (has_real_strokes = false): returns 60/avg_spm,
+  //   falling back to fieldBasePeriod if avg_spm is unknown.
   //
-  // getStrokePhase(boat, timeSec, smoothedPeriod)
-  //   Returns [0, 1) position in the current stroke cycle using the supplied
-  //   smoothed period as the cycle length.  Phase resets to 0 at each actual
-  //   recorded stroke event, keeping animation anchored to real stroke timing.
+  // Stroke phase is NOT anchored to individual stroke events.  Instead, a
+  // per-boat phaseAccum accumulates wall-clock deltas ÷ period each rAF tick,
+  // giving smooth animation regardless of playback speed or period changes.
   const SMOOTH_WIN = 10;
 
   function getSmoothedPeriod(boat, timeSec) {
@@ -437,35 +428,13 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     return Math.max(60 / 65, Math.min(60 / 12, p));
   }
 
-  function getStrokePhase(boat, timeSec, smoothedPeriod) {
-    // Synthesised boats have only a handful of split-boundary timestamps, not
-    // real stroke events.  Anchoring to those boundaries causes the phase to
-    // shoot to 0.99 within one stroke period and then freeze until the next
-    // split (~120 s later).  Instead, run a continuous metronome.
-    if (!boat.has_real_strokes) {
-      return (timeSec / smoothedPeriod) % 1;
-    }
-
-    const strokes = boat.strokes;
-    // if (!strokes || strokes.length < 2) return 0.5;
-    // if (timeSec <= strokes[0].t) return 0;
-    // if (timeSec >= strokes[strokes.length - 1].t) return 0.5;
-
-    let lo = 0, hi = strokes.length - 1;
-    while (lo < hi - 1) {
-      const mid = (lo + hi) >> 1;
-      if (strokes[mid].t <= timeSec) lo = mid; else hi = mid;
-    }
-    return Math.min(0.99, (timeSec - strokes[lo].t) / smoothedPeriod);
-  }
-
   // ── Colors ─────────────────────────────────────────────────────────────────
   function bgColor()        { return isDark ? "#1a1a2e" : "#f0f4ff"; }
   function laneLineColor()  { return isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.07)"; }
   function textColor()      { return isDark ? "rgba(255,255,255,1)" : "rgba(0,0,0,1)"; }
-  function dimTextColor()   { return isDark ? "rgba(255,255,255,1)" : "rgba(0,0,0,1)"; }
   function finishLineColor(){ return isDark ? "rgba(255,255,255,1)" : "rgba(0,0,0,1)"; }
   function waterColor()     { return isDark ? "rgba(30,60,120,0.25)" : "rgba(180,210,255,0.30)"; }
+  function waterColor2()    { return isDark ? "rgba(30,60,180,0.25)" : "rgba(180,210,225,0.30)"; }
 
   // ── Canvas DPR helper ──────────────────────────────────────────────────────
   let dpr = window.devicePixelRatio || 1;
@@ -673,7 +642,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
 
     const numBoats = races.length;
     if (numBoats === 0) {
-      ctx2d.fillStyle = dimTextColor();
+      ctx2d.fillStyle = textColor();
       ctx2d.font = "14px sans-serif";
       ctx2d.textAlign = "center";
       ctx2d.fillText("No qualifying workouts for this event.", W / 2, H / 2);
@@ -689,26 +658,16 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     const TRACK_R  = W - RESULT_W;
     const TRACK_W  = TRACK_R - TRACK_L;
     const LANE_H   = Math.max(20, Math.min(44, (H - HEADER_H) / numBoats));
-    const BOAT_R   = 6;   // half-width of scull hull
-    const PB_R     = BOAT_R;   // half-width of PB scull hull
-
-    // ── Header row ──
-    // const eventLabel = _fmtEventLabel();
-    // ctx2d.fillStyle = textColor();
-    // ctx2d.font = "bold 13px sans-serif";
-    // ctx2d.textAlign = "left";
-    // ctx2d.fillText(eventLabel, LABEL_W + 6, 17);
+    const BOAT_R   = 6;   // hull half-width
 
     ctx2d.font = "bold 13px monospace";
     ctx2d.textAlign = "right";
-    ctx2d.fillStyle = dimTextColor();
+    ctx2d.fillStyle = textColor();
     ctx2d.fillText(fmtTime(timeMs), W - RESULT_W - 6, 17);
 
-    // ── Hull geometry constants (used throughout render) ──
+    // ── Hull geometry constants ──
     const BASE_HW = BOAT_R;
     const BASE_HL = BASE_HW * 3.2;
-    const PB_HW   = BASE_HW;
-    const PB_HL   = BASE_HL;
     // TRACK_INNER_BASE: the distance the BASE hull centre travels (stern→bow span)
     // Used to map "metres into race" → canvas X for split lines, consistent with
     // the per-boat position formula below.
@@ -769,7 +728,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       ctx2d.strokeStyle = finishLineColor();
       ctx2d.font = "11px sans-serif";
       ctx2d.textAlign = "center";
-      ctx2d.fillStyle = dimTextColor();
+      ctx2d.fillStyle = textColor();
       for (let sd = splitInterval; sd < normDist; sd += splitInterval) {
         const sx = distToX(sd);
         ctx2d.beginPath();
@@ -795,7 +754,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
         ctx2d.stroke();
         ctx2d.setLineDash([]);
         ctx2d.restore();
-        ctx2d.fillStyle = dimTextColor();
+        ctx2d.fillStyle = textColor();
       }
     }
 
@@ -847,6 +806,9 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       if (i % 2 === 0) {
         ctx2d.fillStyle = waterColor();
         ctx2d.fillRect(LABEL_W, laneY, TRACK_W, LANE_H);
+      } else {
+        ctx2d.fillStyle = waterColor2();
+        ctx2d.fillRect(LABEL_W, laneY, TRACK_W, LANE_H);        
       }
 
       // Lane separator
@@ -858,8 +820,8 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       ctx2d.stroke();
 
       // ── Boat geometry ──
-      const hullHW = boat.is_pb ? PB_HW : BASE_HW;
-      const hullHL = boat.is_pb ? PB_HL : BASE_HL;
+      const hullHW = BASE_HW;
+      const hullHL = BASE_HL;
 
       // ── Boat position ──
       // boatCx travels from (TRACK_L + hullHL) to (TRACK_R - hullHL).
@@ -902,7 +864,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       // affects the rate going forward, never snaps the current phase position.
       const prevPhase  = phaseAccum.get(boat.id) || 0;
       // Stop animating once a distance-event boat crosses the finish line.
-      const nextPhase  = finished ? DRIVE_FRAC : (prevPhase + lastWallDeltaSec / boatPeriod) % 1;
+      const nextPhase  = finished ? DRIVE_FRAC : (prevPhase + lastWallDeltaSec * STROKE_SPEED / boatPeriod) % 1;
       phaseAccum.set(boat.id, nextPhase);
       const strokePhase = nextPhase;
       drawScull(ctx2d, boatCx, midY, hullHL, hullHW, boat.color, boat.is_pb, isDark);
@@ -910,11 +872,11 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       drawRower(ctx2d, boatCx, midY, hullHL, hullHW, strokePhase, isDark);
 
       // ── DEBUG: SPM display ──
-      const debugSpm = Math.round(60 / boatPeriod);
-      ctx2d.fillStyle = hexWithAlpha(boat.color, 0.85);
-      ctx2d.font = "bold 9px monospace";
-      ctx2d.textAlign = "left";
-      ctx2d.fillText(`${debugSpm}`, boatCx + hullHL + 3, midY + 3);
+      // const debugSpm = Math.round(60 / boatPeriod);
+      // ctx2d.fillStyle = hexWithAlpha(boat.color, 0.85);
+      // ctx2d.font = "bold 9px monospace";
+      // ctx2d.textAlign = "left";
+      // ctx2d.fillText(`${debugSpm}`, boatCx + hullHL + 3, midY + 3);
 
       // ── Label (left zone) — always shows date ──
       ctx2d.fillStyle = boat.color;
@@ -930,7 +892,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       if (eventType === "dist" && finished) {
         let textX = TRACK_R + 5;
         const fms = finishTimeMs(boat);
-        ctx2d.fillStyle = boat.is_pb ? "#ffc107" : (rank && rank <= 3 ? textColor() : dimTextColor());
+        ctx2d.fillStyle = boat.is_pb ? "#ffc107" : (rank && rank <= 3 ? textColor() : textColor());
         ctx2d.font = `${boat.is_pb || (rank && rank <= 3) ? "bold " : ""}13px monospace`;
         ctx2d.textAlign = "left";
         ctx2d.fillText(fmtTime(fms)+medal, textX, midY + 4);
@@ -941,7 +903,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
           ? (displayDist / 1000).toFixed(2) + "k"
           : Math.round(displayDist) + "m";
         let textX = TRACK_R + 5;
-        ctx2d.fillStyle = boat.is_pb ? "#ffc107" : (rank && rank <= 3 ? textColor() : dimTextColor());
+        ctx2d.fillStyle = boat.is_pb ? "#ffc107" : (rank && rank <= 3 ? textColor() : textColor());
         ctx2d.font = `${boat.is_pb || (rank && rank <= 3) ? "bold " : ""}13px monospace`;
         ctx2d.textAlign = "left";
         ctx2d.fillText(dStr+medal, textX, midY + 4);
@@ -986,19 +948,6 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     }
 
     ctx2d.restore();
-  }
-
-  // ── Event label helper ─────────────────────────────────────────────────────
-  function _fmtEventLabel() {
-    if (eventType === "dist") {
-      const m = eventValue;
-      if (m >= 1000) return (m / 1000).toFixed(m % 1000 === 0 ? 0 : 3) + "k Race";
-      return m + "m Race";
-    } else {
-      const secs = eventValue / 10;
-      const mins = Math.round(secs / 60);
-      return mins + "-Minute Race";
-    }
   }
 
   // ── Hex color with alpha ───────────────────────────────────────────────────

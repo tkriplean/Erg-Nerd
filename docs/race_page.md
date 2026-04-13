@@ -104,6 +104,9 @@ at a time via `fetch_one_stroke()` from `services/stroke_utils.py`.
   Progress is shown as a progress bar: `fetch_done / fetch_total`.
 - **Batch key**: `last_batch_key` is `"{event_type}_{event_value}_{sorted_ids}"`.
   Changing event or include filter resets the queue for only the newly required IDs.
+- **Synthesised strokes**: when the API returns no stroke data, `synthesize_strokes()`
+  builds sparse `[{t, d}]` points from split boundaries. The JS animation detects
+  these via `boat.has_real_strokes = False` and uses `boat.avg_spm` for cadence.
 
 ---
 
@@ -122,6 +125,21 @@ Python props passed to JS:
 
 JS writes back `change_id` and `current_time_ms` on user seek (not used by Python currently).
 
+### Boat dict schema (from `build_races_data`)
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `int` | Workout ID |
+| `label` | `str` | "Jan. 26th, 2019" |
+| `color` | `str` | CSS hex colour (season-derived) |
+| `strokes` | `list` | `[{t: secs, d: metres}]` sorted by t |
+| `is_pb` | `bool` | True for the all-time best workout |
+| `season` | `str` | e.g. `"2025-26"` |
+| `finish_time_s` | `float\|None` | Official finish time (dist events) |
+| `finish_dist_m` | `float\|None` | Official final metres (time events) |
+| `avg_spm` | `int` | Piece average stroke rate (0 if unknown) |
+| `has_real_strokes` | `bool` | False → strokes synthesised from splits |
+
 ### Canvas sizing
 
 Height is auto-computed in JS by `updateCanvasHeight()`, called from `rebuildMaxTime()`:
@@ -134,9 +152,9 @@ Width is always 100% of the containing block.
 
 ### Boat geometry
 
-Each boat hull is drawn as a rounded ellipse. The centre X position formula
-ensures **stern touches the start line at dist=0** and **bow touches the finish
-line at dist=normDist**:
+Each boat hull is drawn as a bezier-curve ellipse (pointed bow, rounded stern).
+Centre X position ensures **stern touches the start line at dist=0** and **bow
+touches the finish line at dist=normDist**:
 
 ```
 TRACK_INNER = TRACK_W − 2 × hullHL
@@ -145,8 +163,31 @@ boatCx      = TRACK_L + hullHL + (dist / normDist) × TRACK_INNER
 
 For **distance events**, `normDist = event_value` (metres).  
 For **time events**, `normDist = maxDistForTimeEvent` — the furthest official
-`finish_dist_m` across all boats, computed once in `rebuildMaxTime()` from
-Python-authoritative data to avoid the snap-to-edge problem at t=0.
+`finish_dist_m` across all boats, computed once in `rebuildMaxTime()`.
+
+### Oar animation
+
+Each boat has two sculling oars. The oar angle sweeps from catch (~33° bow-ward)
+through finish (~23° stern-ward) during the drive, then swings back during recovery.
+
+**Phase accumulator** — stroke phase is maintained as a per-boat float in `phaseAccum`
+(a `Map<id, phase>`). Each rAF tick, phase advances by `lastWallDeltaSec × STROKE_SPEED / boatPeriod`.
+Using wall-clock time (not race time) keeps the visual cadence correct regardless
+of the playback speed multiplier. `STROKE_SPEED = 1.20` speeds up all animations
+proportionally without affecting relative SPM differences.
+
+**Period** — `getSmoothedPeriod(boat, timeSec)` returns seconds-per-stroke:
+- Real-stroke boats: ±10-stroke windowed mean of actual timestamps, clamped 12–65 SPM.
+- Synthesised boats: `60 / boat.avg_spm` (constant for the whole piece).
+- Fallback: `fieldBasePeriod` (field-wide mean, set in `rebuildMaxTime()`).
+
+**Blade** — drawn as an ellipse at the tip of the shaft. Semi-major axis (along
+shaft) ≈ 28% of oar length; semi-minor ≈ 45% of that, giving a 2:1 elongated
+widening. During drive (blade in water): sliver minor axis + dim opacity. During
+recovery (blade feathered above water): fat minor axis + full opacity.
+
+**Finish** — once a distance-event boat crosses the line, its phase is locked at
+`DRIVE_FRAC` (oars at rest alongside the hull).
 
 ### Split checkpoints
 
@@ -158,7 +199,7 @@ cleared the checkpoint + padding.
 ### Finish ranks & medals
 
 - **Distance events**: `finishRanks` is populated as each boat's bow crosses
-  `distToX(eventValue)`. Rank is assigned in crossing order.
+  the finish line. Rank is assigned in crossing order.
 - **Time events**: `finishRanks` is populated at `atEnd` (timeMs ≥ maxTimeMs − 50ms)
   by sorting boats by `finish_dist_m` descending.
 
