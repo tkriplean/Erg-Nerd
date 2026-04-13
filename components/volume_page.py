@@ -7,12 +7,8 @@ Volume chart:
       Pace mode: zones derived from personal-best pace thresholds (volume_bins.py).
       HR mode:   zones derived from % of HRmax (heartrate_utils.py).
   - Toggle: Weekly | Monthly | Seasonal  (radio button group)
-  - Scope dropdown (per-view, remembers last selection independently):
-      Weekly / Monthly:  Past Year  |  This Season  |  Past 2 Years
-                         Past 5 Years  |  All Time
-      Seasonal:  All Time  (other scopes available but less useful)
-  - Machine filter dropdown: All Machines | Rower | SkiErg | Bike | …
-    (hidden when only one machine type is present)
+  - Season and machine filters are applied globally (from app.py gfilter)
+    before this component receives workouts; no page-level filter UI for these.
 
 HR mode details:
   - Max HR is read from .profile.json (explicit) or estimated at the 98th
@@ -32,6 +28,7 @@ import json
 
 from components.concept2_sync import concept2_sync
 from services.formatters import machine_label
+from services.rowing_utils import get_season
 
 from services.volume_bins import (
     get_reference_sbs,
@@ -225,28 +222,30 @@ def _hr_callout(all_workouts: list, profile: dict) -> tuple:
     return max_hr, max_hr is not None
 
 
-def _volume_section(all_workouts: list, profile: dict) -> None:
+def _volume_section(all_workouts: list, profile: dict, machine: str = "All") -> None:
     """Render the volume controls + stacked bar chart."""
 
-    # Per-view scope state so switching views doesn't reset each other's scope.
     state = hd.state(
         view="weekly",
-        weekly_scope="past_year",
-        monthly_scope="past_year",
-        seasonal_scope="all_time",
-        machine="All",
-        zone_mode="pace intensity",  # "pace" | "hr"
+        zone_mode="pace intensity",  # "pace intensity" | "hr"
     )
     view = state.view
-    current_scope = getattr(state, f"{view}_scope")
+    machine_filter = None if machine == "All" else {machine}
 
     with hd.box(gap=1, align="center"):
         hd.h1("How Does Your Work Stack Up?")
 
-        # ── Compute chart data ────────────────────────────────────────────────────
-        machine_filter = None if state.machine == "All" else {state.machine}
+        # ── HR callout (only in HR mode) — must come before chart to resolve max_hr ──
+        max_hr = None
+        hr_ok = True
+        if state.zone_mode == "hr":
+            max_hr, hr_ok = _hr_callout(all_workouts, profile)
 
-        if state.zone_mode == "hr" and hr_ok:
+        # ── Compute chart data ────────────────────────────────────────────────────
+        if state.zone_mode == "hr" and not hr_ok:
+            # No max HR — skip chart and table; callout already rendered above.
+            return
+        elif state.zone_mode == "hr":
             aggregated = aggregate_workouts(
                 all_workouts,
                 machine_filter=machine_filter,
@@ -255,7 +254,7 @@ def _volume_section(all_workouts: list, profile: dict) -> None:
             chart_config = build_volume_chart_config(
                 aggregated,
                 view=view,
-                scope=current_scope,
+                scope="all_time",
                 today=date.today(),
                 bin_names=HR_ZONE_NAMES,
                 bin_colors=HR_ZONE_COLORS,
@@ -264,7 +263,7 @@ def _volume_section(all_workouts: list, profile: dict) -> None:
             rows = get_period_rows(
                 aggregated,
                 view,
-                current_scope,
+                "all_time",
                 today=date.today(),
                 z1_bins=HR_Z1_BINS,
                 z2_bins=HR_Z2_BINS,
@@ -273,9 +272,6 @@ def _volume_section(all_workouts: list, profile: dict) -> None:
                 z3b_bins=_HR_Z3B_BINS,
                 no_data_bins=_HR_NO_DATA_BINS,
             )
-        elif state.zone_mode == "hr" and not hr_ok:
-            # No max HR — skip chart and table; callout already rendered above.
-            return
         else:
             ref_sbs = get_reference_sbs(all_workouts)
             thresholds = compute_bin_thresholds(ref_sbs, all_workouts)
@@ -283,10 +279,10 @@ def _volume_section(all_workouts: list, profile: dict) -> None:
             chart_config = build_volume_chart_config(
                 aggregated,
                 view=view,
-                scope=current_scope,
+                scope="all_time",
                 today=date.today(),
             )
-            rows = get_period_rows(aggregated, view, current_scope, today=date.today())
+            rows = get_period_rows(aggregated, view, "all_time", today=date.today())
 
         # ── Chart ────────────────────────────────────────────────────────────────
         if chart_config:
@@ -313,41 +309,6 @@ def _volume_section(all_workouts: list, profile: dict) -> None:
             if view_rg.changed:
                 state.view = view_rg.value.lower()
 
-            # Scope dropdown — per-view state.
-            with hd.scope(f"scope_{view}"):
-                scope_sel = hd.select(value=current_scope, size="small")
-                with scope_sel:
-                    hd.option("Past Year", value="past_year")
-                    hd.option("This Season", value="this_season")
-                    hd.option("Past 2 Years", value="past_2_years")
-                    hd.option("Past 5 Years", value="past_5_years")
-                    hd.option("All Time", value="all_time")
-                if scope_sel.changed:
-                    if view == "weekly":
-                        state.weekly_scope = scope_sel.value
-                    elif view == "monthly":
-                        state.monthly_scope = scope_sel.value
-                    else:
-                        state.seasonal_scope = scope_sel.value
-                    current_scope = scope_sel.value
-
-            # Machine filter — only show when the user has more than one machine type.
-            machine_types = sorted(
-                {w.get("type") for w in all_workouts if w.get("type")}
-            )
-            if len(machine_types) > 1:
-                with hd.scope("machine_filter"):
-                    machine_sel = hd.select(value=state.machine, size="small")
-                    with machine_sel:
-                        hd.option("All Machines", value="All")
-                        for mt in machine_types:
-                            hd.option(machine_label(mt), value=mt)
-                    if machine_sel.changed:
-                        state.machine = machine_sel.value
-            else:
-                # Single machine type — force filter off
-                state.machine = "All"
-
             # Zone mode radio group (Pace / HR)
             mode_rg = hd.radio_buttons(
                 "Pace Intensity",
@@ -360,12 +321,6 @@ def _volume_section(all_workouts: list, profile: dict) -> None:
             if mode_rg.changed:
                 state.zone_mode = mode_rg.value.lower()
 
-        # ── HR callout (only in HR mode) ─────────────────────────────────────────
-        max_hr = None
-        hr_ok = True
-        if state.zone_mode == "hr":
-            max_hr, hr_ok = _hr_callout(all_workouts, profile)
-
         # ── Distribution table ───────────────────────────────────────────────────
         if rows:
             _distribution_table(rows, view, zone_mode=state.zone_mode)
@@ -376,13 +331,22 @@ def _volume_section(all_workouts: list, profile: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-def volume_page(client, user_id: str) -> None:
+def volume_page(client, user_id: str, excluded_seasons=(), machine="All") -> None:
     """Top-level component for the Volume tab."""
 
     result = concept2_sync(client)
     if result is None:
         return
     _workouts_dict, all_workouts = result
+
+    # Apply global filters
+    if excluded_seasons:
+        all_workouts = [
+            w for w in all_workouts
+            if get_season(w.get("date", "")) not in set(excluded_seasons)
+        ]
+    if machine != "All":
+        all_workouts = [w for w in all_workouts if w.get("type") == machine]
 
     # Load profile from localStorage
     ls_profile = hd.local_storage.get_item("profile")
@@ -403,4 +367,4 @@ def volume_page(client, user_id: str) -> None:
         return
 
     with hd.box(padding=(2, 2, 2, 2)):
-        _volume_section(all_workouts, profile)
+        _volume_section(all_workouts, profile, machine=machine)

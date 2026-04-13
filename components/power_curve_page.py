@@ -20,7 +20,7 @@ UI LAYOUT (inside power_curve_page)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   Filter bar:
-    Include [All|PBs|SBs]  |  Events [dropdown]  |  Season [dropdown]
+    Include [All|PBs|SBs]  |  Events [dropdown]
 
   Chart box:
     Header: "Qualifying Performances through <date>"
@@ -45,7 +45,6 @@ STATE VARIABLES  (declared at the top of power_curve_page())
 
   dist_enabled       tuple[bool]   one flag per RANKED_DISTANCES entry (index-aligned)
   time_enabled       tuple[bool]   one flag per RANKED_TIMES entry (index-aligned)
-  excluded_seasons   tuple[str]    seasons hidden from the view (sorted)
   best_filter        str           "All" | "PBs" | "SBs" — row filter for display/table
   chart_metric       str           "Pace" | "Watts"
   chart_x_mode       str           "distance" | "duration"
@@ -286,7 +285,7 @@ def _compute_lookahead_overlays(
             w
             for w in all_ranked_raw
             if (w.get("distance") in selected_dists or w.get("time") in selected_times)
-            and get_season(w.get("date", "")) not in set(state.excluded_seasons)
+            and get_season(w.get("date", "")) not in set(excluded_seasons)
             and sim_date < parse_date(w.get("date", "")) <= _lookahead_end
         ]
         _seen_threat_cats: set = set()
@@ -462,8 +461,8 @@ def _compute_lookahead_overlays(
 # ---------------------------------------------------------------------------
 
 
-def _filter_bar(state, all_seasons: list) -> None:
-    """Renders the Include / Events / Seasons filter controls."""
+def _filter_bar(state) -> None:
+    """Renders the Include / Events filter controls."""
     with hd.box(
         padding=1,
         border="1px solid neutral-200",
@@ -544,78 +543,6 @@ def _filter_bar(state, all_seasons: list) -> None:
                                         if cb.checked != state.time_enabled[i]:
                                             cb.checked = state.time_enabled[i]
 
-            hd.text("|", font_color="neutral-300")
-
-            # ---- Season dropdown ----
-            if all_seasons:
-                _excl_valid = set(state.excluded_seasons) & set(all_seasons)
-                _n_seas_sel = len(all_seasons) - len(_excl_valid)
-                _seas_lbl = (
-                    "All" if not _excl_valid else f"{_n_seas_sel} of {len(all_seasons)}"
-                )
-                hd.text("Season", font_weight="semibold", font_size="small")
-                with hd.scope("season_dd"):
-                    with hd.dropdown() as _se_dd:
-                        _se_btn = hd.button(
-                            _seas_lbl, caret=True, size="medium", slot=_se_dd.trigger
-                        )
-                        if _se_btn.clicked:
-                            _se_dd.opened = not _se_dd.opened
-                        with hd.box(padding=1, gap=0.5, background_color="neutral-50"):
-                            with hd.hbox(gap=0.5, padding_bottom=0.5):
-                                if hd.button(
-                                    "Select all", size="small", variant="text"
-                                ).clicked:
-                                    state.excluded_seasons = ()
-                                if hd.button(
-                                    "Clear all", size="small", variant="text"
-                                ).clicked:
-                                    state.excluded_seasons = tuple(all_seasons)
-
-                            with hd.hbox(gap=0.5):
-                                _convenience = [
-                                    (1, "Last season"),
-                                    (2, "Last 2 seasons"),
-                                    (5, "Last 5 seasons"),
-                                    (10, "Last 10 seasons"),
-                                ]
-                                _shown = [
-                                    (n, lbl)
-                                    for n, lbl in _convenience
-                                    if len(all_seasons) >= n
-                                ]
-                                if _shown:
-                                    with hd.hbox(
-                                        gap=0.5, padding_bottom=0.5, wrap="wrap"
-                                    ):
-                                        for _cn, _clbl in _shown:
-                                            with hd.scope(f"conv_{_cn}"):
-                                                if hd.button(
-                                                    _clbl, size="medium", variant="text"
-                                                ).clicked:
-                                                    state.excluded_seasons = tuple(
-                                                        sorted(all_seasons[_cn:])
-                                                    )
-
-                            with hd.hbox(gap=0.75):
-                                with hd.scope(str(state.excluded_seasons)):
-                                    for season in all_seasons:
-                                        with hd.scope(f"season_{season}"):
-                                            _is_sel = (
-                                                season not in state.excluded_seasons
-                                            )
-                                            cb = hd.checkbox(season, checked=_is_sel)
-                                            if cb.changed:
-                                                _excl = set(state.excluded_seasons)
-                                                if cb.checked:
-                                                    _excl.discard(season)
-                                                else:
-                                                    _excl.add(season)
-                                                state.excluded_seasons = tuple(
-                                                    sorted(_excl)
-                                                )
-                                            if cb.checked != _is_sel:
-                                                cb.checked = _is_sel
 
 
 # ---------------------------------------------------------------------------
@@ -679,7 +606,7 @@ def _chart_section(
                                     or w.get("time") in selected_times
                                 )
                                 and get_season(w.get("date", ""))
-                                not in set(state.excluded_seasons)
+                                not in set(excluded_seasons)
                             ]
                             if _earliest:
                                 state.sim_week = max(
@@ -1298,7 +1225,7 @@ def _prediction_table(
 # ---------------------------------------------------------------------------
 
 
-def power_curve_page(client, user_id: str) -> None:
+def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -> None:
     """
     Top-level entry point for the Performance tab.
     Fetches data, computes all derived state, then calls sub-components.
@@ -1306,7 +1233,6 @@ def power_curve_page(client, user_id: str) -> None:
     state = hd.state(
         dist_enabled=tuple(True for _ in RANKED_DISTANCES),
         time_enabled=tuple(True for _ in RANKED_TIMES),
-        excluded_seasons=(),
         best_filter="SBs",  # "All" | "PBs" | "SBs"
         chart_log_x=True,
         chart_log_y=False,
@@ -1353,6 +1279,8 @@ def power_curve_page(client, user_id: str) -> None:
     # ---- base set + quality filters (empty while loading) ----
     if sync_result is not None:
         _workouts_dict, sorted_workouts = sync_result
+        if machine != "All":
+            sorted_workouts = [w for w in sorted_workouts if w.get("type") == machine]
         all_ranked = [r for r in sorted_workouts if is_ranked_noninterval(r)]
         all_ranked = apply_quality_filters(
             all_ranked,
@@ -1368,7 +1296,7 @@ def power_curve_page(client, user_id: str) -> None:
         all_seasons = []
 
     # ---- filter bar (always visible, even while loading) ----
-    _filter_bar(state, all_seasons)
+    _filter_bar(state)
 
     # ---- loading / error gate ----
     if sync_result is None:
@@ -1385,7 +1313,7 @@ def power_curve_page(client, user_id: str) -> None:
         r
         for r in all_ranked
         if (r.get("distance") in selected_dists or r.get("time") in selected_times)
-        and get_season(r.get("date", "")) not in state.excluded_seasons
+        and get_season(r.get("date", "")) not in excluded_seasons
     ]
     if state.best_filter == "PBs":
         display = apply_best_only(filtered)
@@ -1396,7 +1324,7 @@ def power_curve_page(client, user_id: str) -> None:
     chart_workouts = display
 
     # ---- simulation timeline ----
-    _included_seasons = [s for s in all_seasons if s not in set(state.excluded_seasons)]
+    _included_seasons = [s for s in all_seasons if s not in set(excluded_seasons)]
     if _included_seasons:
         _ey = int(min(_included_seasons)[:4])
         sim_start = date(_ey, 5, 1)
@@ -1420,7 +1348,7 @@ def power_curve_page(client, user_id: str) -> None:
     _bounds_src = [
         w
         for w in all_ranked_raw
-        if get_season(w.get("date", "")) not in set(state.excluded_seasons)
+        if get_season(w.get("date", "")) not in set(excluded_seasons)
         and (w.get("distance") in RANKED_DIST_SET or w.get("time") in RANKED_TIME_SET)
     ]
     _bounds_bests = apply_best_only(_bounds_src)
@@ -1458,7 +1386,7 @@ def power_curve_page(client, user_id: str) -> None:
         sim_date,
         selected_dists,
         selected_times,
-        set(state.excluded_seasons),
+        set(excluded_seasons),
         state.best_filter,
     )
 
@@ -1478,7 +1406,7 @@ def power_curve_page(client, user_id: str) -> None:
             for w in all_ranked_raw
             if workout_cat_key(w) in _excluded_cats
             and parse_date(w.get("date", "")) <= sim_date
-            and get_season(w.get("date", "")) not in set(state.excluded_seasons)
+            and get_season(w.get("date", "")) not in set(excluded_seasons)
         ]
         _excluded_wkts = apply_best_only(_excl_src)
 
@@ -1488,7 +1416,7 @@ def power_curve_page(client, user_id: str) -> None:
             w
             for w in all_ranked_raw
             if parse_date(w.get("date", "")) <= sim_date
-            and get_season(w.get("date", "")) not in set(state.excluded_seasons)
+            and get_season(w.get("date", "")) not in set(excluded_seasons)
         ]
     )
     _pauls_k_fit = compute_pauls_constant(_lb, _lb_anchor)
@@ -1499,7 +1427,7 @@ def power_curve_page(client, user_id: str) -> None:
         w
         for w in all_ranked_raw
         if (w.get("distance") in selected_dists or w.get("time") in selected_times)
-        and get_season(w.get("date", "")) not in set(state.excluded_seasons)
+        and get_season(w.get("date", "")) not in set(excluded_seasons)
         and parse_date(w.get("date", "")) <= sim_date
     ]
     _cp_pb_list = []

@@ -55,7 +55,7 @@ import statistics
 
 import hyperdiv as hd
 
-from services.rowing_utils import INTERVAL_WORKOUT_TYPES
+from services.rowing_utils import INTERVAL_WORKOUT_TYPES, get_season
 from components.concept2_sync import concept2_sync
 from services.interval_utils import (
     avg_workpace_tenths,
@@ -949,13 +949,22 @@ def _pagination(state, total: int, total_pages: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-def intervals_page(client, user_id: str) -> None:
+def intervals_page(client, user_id: str, excluded_seasons=(), machine="All") -> None:
     """Top-level HyperDiv component for the Interval Workouts tab."""
 
     result = concept2_sync(client)
     if result is None:
         return
     _workouts_dict, all_workouts = result
+
+    # Apply global filters
+    if excluded_seasons:
+        all_workouts = [
+            w for w in all_workouts
+            if get_season(w.get("date", "")) not in set(excluded_seasons)
+        ]
+    if machine != "All":
+        all_workouts = [w for w in all_workouts if w.get("type") == machine]
 
     ref_sbs = get_reference_sbs(all_workouts)
     thresholds = compute_bin_thresholds(ref_sbs, all_workouts)

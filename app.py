@@ -417,13 +417,33 @@ def _dashboard_view(client, user_id: str, app_state) -> None:
                         user_id,
                     )
         elif current_page == "Volume":
-            volume_page(client, user_id)
+            volume_page(
+                client,
+                user_id,
+                excluded_seasons=gfilter.excluded_seasons,
+                machine=gfilter.machine,
+            )
         elif current_page == "Sessions":
-            sessions_page(client, user_id)
+            sessions_page(
+                client,
+                user_id,
+                excluded_seasons=gfilter.excluded_seasons,
+                machine=gfilter.machine,
+            )
         elif current_page == "Intervals":
-            intervals_page(client, user_id)
+            intervals_page(
+                client,
+                user_id,
+                excluded_seasons=gfilter.excluded_seasons,
+                machine=gfilter.machine,
+            )
         elif current_page == "Power Curve":
-            power_curve_page(client, user_id)
+            power_curve_page(
+                client,
+                user_id,
+                excluded_seasons=gfilter.excluded_seasons,
+                machine=gfilter.machine,
+            )
         elif current_page == "Race":
             race_page(
                 client,
