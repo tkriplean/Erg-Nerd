@@ -649,347 +649,309 @@ def _chart_section(
     """
     is_dark = hd.theme().is_dark
 
-    with shadowed_box(
-        gap=1,
-        padding=2,
-        box_shadow="0 1px 2px rgba(255,255,255,.1)"
-        if is_dark
-        else "0 1px 2px rgba(0,0,0,.5)",
-        background_color="#252525" if is_dark else "#f9f9f9",
-        border_radius="medium",
-    ):
-        # ---- header row ----
-        _date_label = sim_date.strftime("%b %d, %Y")
-        with hd.hbox(gap=1, align="center", padding_bottom=0, justify="center"):
-            hd.text(
-                "Qualifying Performances", font_weight="normal", font_size="2x-large"
-            )
-            hd.text("through ", font_size="medium")
-            hd.text(f"{_date_label}", font_size="2x-large", font_weight="normal")
-
-        # ---- RowingLevel status indicators (only shown when RL predictor selected) ----
-        if _at_today and rl_task is not None and state.chart_predictor == "rowinglevel":
-            if not profile_complete(profile):
-                hd.alert(
-                    "Please complete your profile (Gender, Age, and Bodyweight) "
-                    "in the Profile tab before using RowingLevel predictions.",
-                    variant="warning",
-                    opened=True,
-                )
-
-        # ---- transport bar ----
-        # Three-column layout: [controls (fixed)] | [slider (grows)] | [spacer (= controls width)]
-        with hd.box(align="center"):
-            with hd.hbox(
-                gap=0,
-                align="center",
-                padding_top=1,
-                padding_bottom=0,
-                width="100%",
-                max_width="1280px",
-            ):
-                _CONTROLS_W = "9rem"
-                with hd.hbox(gap=0.5, align="center", width=_CONTROLS_W):
-                    _play_label = "⏸  Pause" if state.sim_playing else "▶  Play"
-                    _play_variant = "default" if state.sim_playing else "primary"
-                    if hd.button(
-                        _play_label, size="medium", variant=_play_variant
-                    ).clicked:
-                        if state.sim_playing:
-                            state.sim_playing = False
-                        else:
-                            if _at_today:
-                                # Start 30 days before the first qualifying event
-                                # so something appears almost immediately.
-                                _earliest = [
-                                    parse_date(w.get("date", ""))
-                                    for w in all_ranked_raw
-                                    if (
-                                        w.get("distance") in selected_dists
-                                        or w.get("time") in selected_times
-                                    )
-                                    and get_season(w.get("date", ""))
-                                    not in set(state.excluded_seasons)
-                                ]
-                                if _earliest:
-                                    state.sim_week = max(
-                                        0, (min(_earliest) - sim_start).days - 30
-                                    )
-                                else:
-                                    state.sim_week = 0
-                            state.sim_tick_id += 1
-                            state.sim_playing = True
-
-                    _sp_idx = (
-                        list(_SPEED_OPTIONS).index(state.sim_speed)
-                        if state.sim_speed in _SPEED_OPTIONS
-                        else 1
-                    )
-                    with hd.tooltip("Playback speed — click to change"):
-                        if hd.button(
-                            state.sim_speed, size="medium", variant="neutral"
-                        ).clicked:
-                            state.sim_speed = _SPEED_OPTIONS[
-                                (_sp_idx + 1) % len(_SPEED_OPTIONS)
-                            ]
-                            if state.sim_playing:
-                                state.sim_tick_id += 1
-
-                with hd.box(grow=1):
-                    _sb_annotations = build_sb_annotations(
-                        all_ranked_raw,
-                        sim_start,
-                        _included_seasons,
-                        selected_dists,
-                        selected_times,
-                    )
-                    ds = DateSlider(
-                        min_value=0,
-                        max_value=max(1, total_days - 1),
-                        target_value=sim_day_idx,
-                        step=1,
-                        start_date=sim_start.isoformat(),
-                        annotations=_sb_annotations,
-                    )
-                    if ds.change_id != state.last_ds_change_id:
-                        state.last_ds_change_id = ds.change_id
-                        state.sim_week = int(ds.value)
+    # ---- transport bar ----
+    # Three-column layout: [controls (fixed)] | [slider (grows)] | [spacer (= controls width)]
+    with hd.box(align="center", width="100%"):
+        with hd.hbox(
+            gap=0,
+            align="center",
+            padding_top=1,
+            padding_bottom=0,
+            width="100%",
+            max_width="1280px",
+        ):
+            _CONTROLS_W = "9rem"
+            with hd.hbox(gap=0.5, align="center", width=_CONTROLS_W):
+                _play_label = "⏸  Pause" if state.sim_playing else "▶  Play"
+                _play_variant = "default" if state.sim_playing else "primary"
+                if hd.button(_play_label, size="medium", variant=_play_variant).clicked:
+                    if state.sim_playing:
                         state.sim_playing = False
+                    else:
+                        if _at_today:
+                            # Start 30 days before the first qualifying event
+                            # so something appears almost immediately.
+                            _earliest = [
+                                parse_date(w.get("date", ""))
+                                for w in all_ranked_raw
+                                if (
+                                    w.get("distance") in selected_dists
+                                    or w.get("time") in selected_times
+                                )
+                                and get_season(w.get("date", ""))
+                                not in set(state.excluded_seasons)
+                            ]
+                            if _earliest:
+                                state.sim_week = max(
+                                    0, (min(_earliest) - sim_start).days - 30
+                                )
+                            else:
+                                state.sim_week = 0
+                        state.sim_tick_id += 1
+                        state.sim_playing = True
 
-                with hd.box(width=_CONTROLS_W):
-                    pass
+                _sp_idx = (
+                    list(_SPEED_OPTIONS).index(state.sim_speed)
+                    if state.sim_speed in _SPEED_OPTIONS
+                    else 1
+                )
+                with hd.tooltip("Playback speed — click to change"):
+                    if hd.button(
+                        state.sim_speed, size="medium", variant="neutral"
+                    ).clicked:
+                        state.sim_speed = _SPEED_OPTIONS[
+                            (_sp_idx + 1) % len(_SPEED_OPTIONS)
+                        ]
+                        if state.sim_playing:
+                            state.sim_tick_id += 1
 
-        # ---- chart ----
-        if chart_cfg:
-            PowerCurveChart(
-                config=chart_cfg,
-                show_watts=show_watts,
-                x_mode=state.chart_x_mode,
-                height="75vh",
+            with hd.box(grow=1):
+                _sb_annotations = build_sb_annotations(
+                    all_ranked_raw,
+                    sim_start,
+                    _included_seasons,
+                    selected_dists,
+                    selected_times,
+                )
+                ds = DateSlider(
+                    min_value=0,
+                    max_value=max(1, total_days - 1),
+                    target_value=sim_day_idx,
+                    step=1,
+                    start_date=sim_start.isoformat(),
+                    annotations=_sb_annotations,
+                )
+                if ds.change_id != state.last_ds_change_id:
+                    state.last_ds_change_id = ds.change_id
+                    state.sim_week = int(ds.value)
+                    state.sim_playing = False
+
+            with hd.box(width=_CONTROLS_W):
+                pass
+
+    # ---- chart ----
+    if chart_cfg:
+        PowerCurveChart(
+            config=chart_cfg,
+            show_watts=show_watts,
+            x_mode=state.chart_x_mode,
+            height="75vh",
+        )
+    else:
+        hd.text("No chart data available.", font_color="neutral-500")
+
+    # ---- Settings Row 1: axis controls + power curves ----
+    with hd.hbox(
+        gap=1.5, align="start", justify="center", padding_top=0.75, wrap="wrap"
+    ):
+        # Intensity group
+        with hd.box(
+            gap=0.5,
+            align="center",
+            background_color="neutral-50",
+            border_radius="large",
+            padding=1,
+            border="1px solid neutral-100",
+        ):
+            with hd.scope("chart_metric"):
+                with radio_group(value=state.chart_metric, size="medium") as rg:
+                    hd.radio_button("Pace")
+                    hd.radio_button("Watts")
+                if rg.changed:
+                    state.chart_metric = rg.value
+
+            with hd.hbox(align="center", gap=0.75):
+                # hd.text("Intensity", font_color="neutral-800", font_size="small")
+                with hd.scope("chart_log_y"):
+                    with hd.button(
+                        size="small",
+                        border_radius="small",
+                        variant="primary" if state.chart_log_y else "default",
+                        pill=True,
+                    ) as _log_y_btn:
+                        with hd.hbox(gap=0.2):
+                            hd.text("Log(")
+                            hd.text(state.chart_metric, font_style="italic")
+                            hd.text(")")
+
+                    if _log_y_btn.clicked:
+                        state.chart_log_y = not state.chart_log_y
+
+        # Length group
+        with hd.box(
+            gap=0.5,
+            align="center",
+            background_color="neutral-50",
+            border_radius="large",
+            padding=1,
+            border="1px solid neutral-100",
+        ):
+            with hd.scope("chart_x_mode"):
+                with radio_group(
+                    value=state.chart_x_mode.capitalize(), size="medium"
+                ) as rg:
+                    hd.radio_button("Distance")
+                    hd.radio_button("Duration")
+                if rg.changed:
+                    state.chart_x_mode = rg.value.lower()
+
+            with hd.hbox(align="center", gap=0.75):
+                # hd.text("Length", font_color="neutral-800", font_size="small")
+                with hd.scope("chart_log_x"):
+                    with hd.button(
+                        size="small",
+                        border_radius="small",
+                        variant="primary" if state.chart_log_x else "default",
+                        pill=True,
+                    ) as _log_x_btn:
+                        with hd.hbox(gap=0.2):
+                            hd.text("Log(")
+                            hd.text(state.chart_x_mode, font_style="italic")
+                            hd.text(")")
+
+                    if _log_x_btn.clicked:
+                        state.chart_log_x = not state.chart_log_x
+
+        # Power curves
+        with hd.box(
+            gap=0.5,
+            align="center",
+            background_color="neutral-50",
+            border_radius="large",
+            padding=1,
+            border="1px solid neutral-100",
+        ):
+            hd.text("Power curves", font_color="neutral-800", font_size="small")
+            with hd.scope("chart_lines"):
+                with radio_group(value=state.chart_lines, size="medium") as rg:
+                    hd.radio_button("PBs")
+                    hd.radio_button("SBs")
+                    hd.radio_button("None")
+                if rg.changed:
+                    state.chart_lines = rg.value
+
+        # ---- Settings Row 2: prediction dropdown + show components ----
+        # Build the dynamic Paul's Law tip (depends on personalized K).
+        if pauls_k_fit is not None:
+            _pl_tip = (
+                f"Predicts +{pauls_k_fit:.1f} s/500m for each doubling of distance "
+                f"(your personalised value), applied from each anchor PB and averaged."
             )
         else:
-            hd.text("No chart data available.", font_color="neutral-500")
-
-        # ---- Settings Row 1: axis controls + power curves ----
-        with hd.hbox(
-            gap=1.5, align="start", justify="center", padding_top=0.75, wrap="wrap"
-        ):
-            # Intensity group
-            with hd.box(
-                gap=0.5,
-                align="center",
-                background_color="neutral-50",
-                border_radius="large",
-                padding=1,
-                border="1px solid neutral-100",
-            ):
-                with hd.scope("chart_metric"):
-                    with radio_group(value=state.chart_metric, size="medium") as rg:
-                        hd.radio_button("Pace")
-                        hd.radio_button("Watts")
-                    if rg.changed:
-                        state.chart_metric = rg.value
-
-                with hd.hbox(align="center", gap=0.75):
-                    # hd.text("Intensity", font_color="neutral-800", font_size="small")
-                    with hd.scope("chart_log_y"):
-                        with hd.button(
-                            size="small",
-                            border_radius="small",
-                            variant="primary" if state.chart_log_y else "default",
-                            pill=True,
-                        ) as _log_y_btn:
-                            with hd.hbox(gap=0.2):
-                                hd.text("Log(")
-                                hd.text(state.chart_metric, font_style="italic")
-                                hd.text(")")
-
-                        if _log_y_btn.clicked:
-                            state.chart_log_y = not state.chart_log_y
-
-            # Length group
-            with hd.box(
-                gap=0.5,
-                align="center",
-                background_color="neutral-50",
-                border_radius="large",
-                padding=1,
-                border="1px solid neutral-100",
-            ):
-                with hd.scope("chart_x_mode"):
-                    with radio_group(
-                        value=state.chart_x_mode.capitalize(), size="medium"
-                    ) as rg:
-                        hd.radio_button("Distance")
-                        hd.radio_button("Duration")
-                    if rg.changed:
-                        state.chart_x_mode = rg.value.lower()
-
-                with hd.hbox(align="center", gap=0.75):
-                    # hd.text("Length", font_color="neutral-800", font_size="small")
-                    with hd.scope("chart_log_x"):
-                        with hd.button(
-                            size="small",
-                            border_radius="small",
-                            variant="primary" if state.chart_log_x else "default",
-                            pill=True,
-                        ) as _log_x_btn:
-                            with hd.hbox(gap=0.2):
-                                hd.text("Log(")
-                                hd.text(state.chart_x_mode, font_style="italic")
-                                hd.text(")")
-
-                        if _log_x_btn.clicked:
-                            state.chart_log_x = not state.chart_log_x
-
-            # Power curves
-            with hd.box(
-                gap=0.5,
-                align="center",
-                background_color="neutral-50",
-                border_radius="large",
-                padding=1,
-                border="1px solid neutral-100",
-            ):
-                hd.text("Power curves", font_color="neutral-800", font_size="small")
-                with hd.scope("chart_lines"):
-                    with radio_group(value=state.chart_lines, size="medium") as rg:
-                        hd.radio_button("PBs")
-                        hd.radio_button("SBs")
-                        hd.radio_button("None")
-                    if rg.changed:
-                        state.chart_lines = rg.value
-
-            # ---- Settings Row 2: prediction dropdown + show components ----
-            # Build the dynamic Paul's Law tip (depends on personalized K).
-            if pauls_k_fit is not None:
-                _pl_tip = (
-                    f"Predicts +{pauls_k_fit:.1f} s/500m for each doubling of distance "
-                    f"(your personalised value), applied from each anchor PB and averaged."
-                )
-            else:
-                _pl_tip = (
-                    "Predicts +5.0 s/500m for each doubling of distance "
-                    "(population default — needs 2 or more PBs to personalise), "
-                    "applied from each anchor PB and averaged."
-                )
-
-            _PRED_OPTIONS = [
-                ("none", "None", "Hide the prediction curve."),
-                ("loglog", "Log-Log Watts Fit", _DESC_LL),
-                ("pauls_law", "Paul's Law (average)", _pl_tip),
-                ("critical_power", "Critical Power", _DESC_CP),
-                ("rowinglevel", "RowingLevel (average)", _DESC_RL),
-                ("average", "Average", _DESC_AVG),
-            ]
-            _pred_name = next(
-                (
-                    name
-                    for val, name, _ in _PRED_OPTIONS
-                    if val == state.chart_predictor
-                ),
-                state.chart_predictor,
+            _pl_tip = (
+                "Predicts +5.0 s/500m for each doubling of distance "
+                "(population default — needs 2 or more PBs to personalise), "
+                "applied from each anchor PB and averaged."
             )
 
-            with hd.box(
-                gap=0.5,
-                align="center",
-                background_color="neutral-50",
-                border_radius="large",
-                padding=1,
-                border="1px solid neutral-100",
-                justify="center",
-                grow=True,
-            ):
-                hd.text("Prediction line", font_color="neutral-800", font_size="small")
+        _PRED_OPTIONS = [
+            ("none", "None", "Hide the prediction curve."),
+            ("loglog", "Log-Log Watts Fit", _DESC_LL),
+            ("pauls_law", "Paul's Law (average)", _pl_tip),
+            ("critical_power", "Critical Power", _DESC_CP),
+            ("rowinglevel", "RowingLevel (average)", _DESC_RL),
+            ("average", "Average", _DESC_AVG),
+        ]
+        _pred_name = next(
+            (name for val, name, _ in _PRED_OPTIONS if val == state.chart_predictor),
+            state.chart_predictor,
+        )
 
-                # Custom prediction dropdown (name + description per option).
-                with hd.scope("pred_dd"):
-                    with hd.dropdown(_pred_name, grow=True) as _pred_dd:
-                        with hd.box(
-                            background_color="neutral-0", align="start", gap=0.2
-                        ):
-                            for _pval, _pname, _pdesc in _PRED_OPTIONS:
-                                with hd.scope(f"pred_{_pval}"):
-                                    _is_active = state.chart_predictor == _pval
-                                    with hd.box(
-                                        grow=True,
-                                        gap=0,
-                                        border="none",
-                                        padding_bottom=0.25,
-                                        border_bottom="1px solid neutral-200",
-                                        background_color="primary-50"
-                                        if _is_active
-                                        else "neutral-0",
-                                        width="100%",
-                                        height="100%",
-                                    ):
-                                        _opt_button = hd.button(
-                                            _pname,
-                                            variant="text",
-                                            font_weight="bold",
-                                            font_size="medium",
-                                            font_color="primary",
-                                            padding=(0, 1, 0, 1),
-                                        )
+        with hd.box(
+            gap=0.5,
+            align="center",
+            background_color="neutral-50",
+            border_radius="large",
+            padding=1,
+            border="1px solid neutral-100",
+            justify="center",
+            grow=True,
+        ):
+            hd.text("Prediction line", font_color="neutral-800", font_size="small")
 
-                                        hd.text(
-                                            _pdesc,
-                                            font_color="neutral-600",
-                                            font_size="small",
-                                            max_width=40,
-                                            padding=(0, 2, 0, 2),
-                                        )
-                                    if _opt_button.clicked:
-                                        state.chart_predictor = _pval
-                                        _pred_dd.opened = False
-
-                # Show components toggle (only when predictor supports it).
-                if state.chart_predictor in _COMP_DESCRIPTIONS:
-                    with hd.scope("chart_show_components"):
-                        with hd.box(gap=0.5, align="center"):
-                            with hd.hbox(align="center", gap=1):
-                                _sw_comp = hd.switch(
-                                    "Show component lines",
-                                    checked=state.chart_show_components,
-                                    size="medium",
-                                )
-                                if _sw_comp.changed:
-                                    state.chart_show_components = _sw_comp.checked
-
-                                with hd.tooltip(
-                                    _COMP_DESCRIPTIONS[state.chart_predictor]
+            # Custom prediction dropdown (name + description per option).
+            with hd.scope("pred_dd"):
+                with hd.dropdown(_pred_name, grow=True) as _pred_dd:
+                    with hd.box(background_color="neutral-0", align="start", gap=0.2):
+                        for _pval, _pname, _pdesc in _PRED_OPTIONS:
+                            with hd.scope(f"pred_{_pval}"):
+                                _is_active = state.chart_predictor == _pval
+                                with hd.box(
+                                    grow=True,
+                                    gap=0,
+                                    border="none",
+                                    padding_bottom=0.25,
+                                    border_bottom="1px solid neutral-200",
+                                    background_color="primary-50"
+                                    if _is_active
+                                    else "neutral-0",
+                                    width="100%",
+                                    height="100%",
                                 ):
-                                    hd.icon(
-                                        "question-circle",
-                                        font_size="small",
-                                        font_color="neutral-700",
-                                    )
-                            # ---- Paul's Law personalised K description ----
-                            if (
-                                state.chart_predictor == "pauls_law"
-                                and pauls_k_fit is not None
-                            ):
-                                with hd.box(align="center", padding_top=0.25):
-                                    hd.text(
-                                        f"Your Paul's constant: {pauls_k_fit:.1f}s/500m per distance doubling.",
-                                        font_color="neutral-900",
-                                        font_size="small",
-                                        max_width=25,
+                                    _opt_button = hd.button(
+                                        _pname,
+                                        variant="text",
+                                        font_weight="bold",
+                                        font_size="medium",
+                                        font_color="primary",
+                                        padding=(0, 1, 0, 1),
                                     )
 
                                     hd.text(
-                                        "Population default is 5.0s/500m. Lower values suggest aerobic dominance; "
-                                        "higher values suggest sprint dominance.",
+                                        _pdesc,
                                         font_color="neutral-600",
-                                        font_size="x-small",
-                                        max_width=22,
+                                        font_size="small",
+                                        max_width=40,
+                                        padding=(0, 2, 0, 2),
                                     )
+                                if _opt_button.clicked:
+                                    state.chart_predictor = _pval
+                                    _pred_dd.opened = False
 
-                else:
-                    # Keep show_components False when predictor doesn't support it.
-                    if state.chart_show_components:
-                        state.chart_show_components = False
+            # Show components toggle (only when predictor supports it).
+            if state.chart_predictor in _COMP_DESCRIPTIONS:
+                with hd.scope("chart_show_components"):
+                    with hd.box(gap=0.5, align="center"):
+                        with hd.hbox(align="center", gap=1):
+                            _sw_comp = hd.switch(
+                                "Show component lines",
+                                checked=state.chart_show_components,
+                                size="medium",
+                            )
+                            if _sw_comp.changed:
+                                state.chart_show_components = _sw_comp.checked
+
+                            with hd.tooltip(_COMP_DESCRIPTIONS[state.chart_predictor]):
+                                hd.icon(
+                                    "question-circle",
+                                    font_size="small",
+                                    font_color="neutral-700",
+                                )
+                        # ---- Paul's Law personalised K description ----
+                        if (
+                            state.chart_predictor == "pauls_law"
+                            and pauls_k_fit is not None
+                        ):
+                            with hd.box(align="center", padding_top=0.25):
+                                hd.text(
+                                    f"Your Paul's constant: {pauls_k_fit:.1f}s/500m per distance doubling.",
+                                    font_color="neutral-900",
+                                    font_size="small",
+                                    max_width=25,
+                                )
+
+                                hd.text(
+                                    "Population default is 5.0s/500m. Lower values suggest aerobic dominance; "
+                                    "higher values suggest sprint dominance.",
+                                    font_color="neutral-600",
+                                    font_size="x-small",
+                                    max_width=22,
+                                )
+
+            else:
+                # Keep show_components False when predictor doesn't support it.
+                if state.chart_show_components:
+                    state.chart_show_components = False
 
 
 # ---------------------------------------------------------------------------
@@ -1642,91 +1604,118 @@ def power_curve_page(client, user_id: str) -> None:
             show_watts,
         )
 
-    # ---- chart config ----
-    _predictor = (
-        state.chart_predictor
-        if _at_today or state.chart_predictor != "rowinglevel"
-        else "none"
-    )
-    chart_cfg = build_chart_config(
-        sim_wkts,
-        log_x=state.chart_log_x,
-        log_y=state.chart_log_y,
-        show_lifetime_line=_show_lb_line,
-        show_watts=show_watts,
-        is_dark=is_dark,
-        predictor=_predictor,
-        rl_predictions=rl_predictions,
-        critical_power_params=_cp_params,
-        season_lines=_season_lines_set,
-        all_seasons=all_seasons,
-        x_bounds=_sim_x_bounds,
-        y_bounds=_sim_y_bounds,
-        sim_overlays=_sim_overlays,
-        overlay_labels=_overlay_labels,
-        show_components=state.chart_show_components,
-        lifetime_best=_lb,
-        lifetime_best_anchor=_lb_anchor,
-        pauls_k=_pauls_k,
-        excluded_workouts=_excluded_wkts,
-        x_mode=state.chart_x_mode,
-    )
+    with hd.box(gap=1, align="center"):
+        with hd.h1():
+            # ---- header row ----
+            _date_label = sim_date.strftime("%b %d, %Y")
+            with hd.hbox(gap=1, align="center", padding_bottom=0, justify="center"):
+                hd.text(
+                    "Qualifying Performances",
+                    font_weight="normal",
+                    font_size="2x-large",
+                )
+                hd.text("through ", font_size="medium")
+                hd.text(f"{_date_label}", font_size="2x-large", font_weight="normal")
 
-    # ---- render chart section ----
-    _chart_section(
-        state,
-        chart_cfg=chart_cfg,
-        rl_task=rl_task,
-        rl_predictions=rl_predictions,
-        profile=profile,
-        show_watts=show_watts,
-        sim_date=sim_date,
-        _at_today=_at_today,
-        sim_day_idx=sim_day_idx,
-        total_days=total_days,
-        sim_start=sim_start,
-        all_ranked_raw=all_ranked_raw,
-        selected_dists=selected_dists,
-        selected_times=selected_times,
-        _included_seasons=_included_seasons,
-        all_seasons=all_seasons,
-        pauls_k_fit=_pauls_k_fit,
-    )
+            # ---- RowingLevel status indicators (only shown when RL predictor selected) ----
+            if (
+                _at_today
+                and rl_task is not None
+                and state.chart_predictor == "rowinglevel"
+            ):
+                if not profile_complete(profile):
+                    hd.alert(
+                        "Please complete your profile (Gender, Age, and Bodyweight) "
+                        "in the Profile tab before using RowingLevel predictions.",
+                        variant="warning",
+                        opened=True,
+                    )
 
-    # ---- RL profile notice (shown between chart and table when profile incomplete) ----
-    _rl_available = profile_complete(profile)
-    if not _rl_available:
-        _rl_profile_notice()
+        # ---- chart config ----
+        _predictor = (
+            state.chart_predictor
+            if _at_today or state.chart_predictor != "rowinglevel"
+            else "none"
+        )
+        chart_cfg = build_chart_config(
+            sim_wkts,
+            log_x=state.chart_log_x,
+            log_y=state.chart_log_y,
+            show_lifetime_line=_show_lb_line,
+            show_watts=show_watts,
+            is_dark=is_dark,
+            predictor=_predictor,
+            rl_predictions=rl_predictions,
+            critical_power_params=_cp_params,
+            season_lines=_season_lines_set,
+            all_seasons=all_seasons,
+            x_bounds=_sim_x_bounds,
+            y_bounds=_sim_y_bounds,
+            sim_overlays=_sim_overlays,
+            overlay_labels=_overlay_labels,
+            show_components=state.chart_show_components,
+            lifetime_best=_lb,
+            lifetime_best_anchor=_lb_anchor,
+            pauls_k=_pauls_k,
+            excluded_workouts=_excluded_wkts,
+            x_mode=state.chart_x_mode,
+        )
 
-    # ---- render prediction table ----
-    _pred_rows = build_prediction_table_data(
-        lifetime_best=_lb,
-        lifetime_best_anchor=_lb_anchor,
-        all_lifetime_best=_lb_all,
-        all_lifetime_best_anchor=_lb_all_anchor,
-        critical_power_params=_cp_params,
-        rl_predictions=rl_predictions if rl_predictions else None,
-        pauls_k=_pauls_k,
-    )
-    _prediction_table(
-        state,
-        _pred_rows,
-        selected_dists,
-        selected_times,
-        rl_available=_rl_available,
-        pauls_k=_pauls_k,
-    )
+        # ---- render chart section ----
+        _chart_section(
+            state,
+            chart_cfg=chart_cfg,
+            rl_task=rl_task,
+            rl_predictions=rl_predictions,
+            profile=profile,
+            show_watts=show_watts,
+            sim_date=sim_date,
+            _at_today=_at_today,
+            sim_day_idx=sim_day_idx,
+            total_days=total_days,
+            sim_start=sim_start,
+            all_ranked_raw=all_ranked_raw,
+            selected_dists=selected_dists,
+            selected_times=selected_times,
+            _included_seasons=_included_seasons,
+            all_seasons=all_seasons,
+            pauls_k_fit=_pauls_k_fit,
+        )
 
-    # ---- result count + table ----
-    count = len(display)
-    hd.text(
-        f"{count} workout{'s' if count != 1 else ''} matched",
-        font_color="neutral-500",
-        font_size="small",
-        padding_top=1,
-    )
-    if not display:
-        hd.text("No workouts match the selected filters.", font_color="neutral-500")
-        return
+        # ---- RL profile notice (shown between chart and table when profile incomplete) ----
+        _rl_available = profile_complete(profile)
+        if not _rl_available:
+            _rl_profile_notice()
 
-    result_table(display, paginate=False)
+        # ---- render prediction table ----
+        _pred_rows = build_prediction_table_data(
+            lifetime_best=_lb,
+            lifetime_best_anchor=_lb_anchor,
+            all_lifetime_best=_lb_all,
+            all_lifetime_best_anchor=_lb_all_anchor,
+            critical_power_params=_cp_params,
+            rl_predictions=rl_predictions if rl_predictions else None,
+            pauls_k=_pauls_k,
+        )
+        _prediction_table(
+            state,
+            _pred_rows,
+            selected_dists,
+            selected_times,
+            rl_available=_rl_available,
+            pauls_k=_pauls_k,
+        )
+
+        # ---- result count + table ----
+        count = len(display)
+        hd.text(
+            f"{count} workout{'s' if count != 1 else ''} matched",
+            font_color="neutral-500",
+            font_size="small",
+            padding_top=1,
+        )
+        if not display:
+            hd.text("No workouts match the selected filters.", font_color="neutral-500")
+            return
+
+        result_table(display, paginate=False)
