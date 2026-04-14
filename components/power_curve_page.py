@@ -862,7 +862,7 @@ def _chart_settings(state, wc_task, profile, pauls_k_fit):
 
 def _wc_compare_section(state, profile: dict, wc_task) -> None:
     """
-    Renders the 'Compare vs World Class' and 'Relative View' toggles.
+    Renders the 'Compare vs World Class' toggle.
     Placed below the Settings Row 2 prediction box.
     """
     _wc_profile_ok = profile_complete(profile)
@@ -1696,7 +1696,6 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         cp_fit_key="",
         cp_fit_result=None,
         chart_compare_wc=False,
-        chart_wc_relative=False,
         wc_fetch_key="",
         wc_fetch_done=False,
         wc_data=None,
@@ -1876,17 +1875,13 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         state._bounds_key = _bounds_key
     x_bounds, y_bounds = state._bounds_data
 
-    # Expand y_bounds to include WC records when in absolute compare mode.
+    # Expand y_bounds to include WC records when comparing.
     # _compute_axis_bounds is derived from user PBs only; world-class rowers are
     # faster (lower pace / higher watts), so without expansion they'd be clipped.
-    _wc_relative_active = (
-        state.chart_compare_wc and wc_data is not None and state.chart_wc_relative
-    )
     if (
         y_bounds is not None
         and wc_data is not None
         and state.chart_compare_wc
-        and not _wc_relative_active
     ):
         _wc_y_vals = [
             compute_watts(pace) if show_watts else pace
@@ -2088,9 +2083,6 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
             excluded_workouts=excluded_wkts,
             x_mode=state.chart_x_metric,
             wc_data=wc_data,
-            wc_relative=state.chart_wc_relative
-            if (state.chart_compare_wc and wc_data is not None)
-            else False,
         )
 
         _chart_section(
