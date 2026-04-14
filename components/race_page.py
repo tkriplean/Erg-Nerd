@@ -29,6 +29,9 @@ STATE VARIABLES
   event_value     int    meters or tenths-of-sec
   include_filter  str    "All" | "SBs"
   sort_mode       str    "date" | "result"
+  show_wr_boat    bool   whether the WR ghost boat is enabled
+  wr_records      dict   cached {(etype,evalue): result} from concept2_records
+  wr_records_key  str    "gender|age|weight_kg" — invalidation key for wr_records
   strokes_cache_loaded  bool
   strokes_by_id         dict  {str(id): [{t,d}]}
   fetch_queue           tuple[int]
@@ -37,6 +40,8 @@ STATE VARIABLES
 """
 
 from __future__ import annotations
+
+import json
 
 import hyperdiv as hd
 
@@ -52,7 +57,9 @@ from services.rowing_utils import (
 )
 from services.ranked_filters import is_ranked_noninterval, apply_quality_filters
 from services.formatters import format_time, fmt_split
-from services.stroke_utils import build_races_data, fetch_one_stroke
+from services.stroke_utils import build_races_data, fetch_one_stroke, build_wr_boat
+from services.concept2_records import get_age_group_records
+from services.rowinglevel import _PROFILE_DEFAULTS, age_from_dob, profile_complete
 from services.local_storage_compression import (
     compress_strokes_cache,
     decompress_strokes_cache,
@@ -235,6 +242,9 @@ def race_page(
         event_value=_DEFAULT_EVENT_VALUE,
         include_filter="All",
         sort_mode="date",  # "date" | "result"
+        show_wr_boat=False,
+        wr_records={},      # {(etype, evalue): result} — cached from concept2_records
+        wr_records_key="",  # "gender|age|weight_kg" — invalidation key
         strokes_cache_loaded=False,
         strokes_by_id={},
         fetch_queue=(),  # tuple of int workout IDs still to fetch
@@ -245,7 +255,19 @@ def race_page(
 
     is_dark = hd.theme().is_dark
 
-    # ── Phase 1: load stroke cache from localStorage (once) ──────────────────
+    # ── Phase 1: load profile + stroke cache from localStorage (once) ────────
+    ls_profile = hd.local_storage.get_item("profile")
+    if not ls_profile.done:
+        with hd.box(align="center", padding=4):
+            hd.spinner()
+        return
+    profile = {**_PROFILE_DEFAULTS}
+    if ls_profile.result:
+        try:
+            profile = {**_PROFILE_DEFAULTS, **json.loads(ls_profile.result)}
+        except Exception:
+            pass
+
     if not state.strokes_cache_loaded:
         ls_strokes = hd.local_storage.get_item(_STROKES_LS_KEY)
         if not ls_strokes.done:
@@ -405,6 +427,47 @@ def race_page(
         else []
     )
 
+    # ── World Record ghost boat ────────────────────────────────────────────────
+    # Available only when: profile is complete, machine filter is rower (WR
+    # records are RowErg only), and the user has enabled the toggle.
+    _wr_available = profile_complete(profile) and machine in ("All", "rower")
+
+    # Compute the profile key regardless of toggle state so UI status text
+    # can reference it when the checkbox is visible.
+    if _wr_available:
+        _g_api = "M" if profile.get("gender") == "Male" else "F"
+        _wr_age = age_from_dob(profile.get("dob", ""))
+        _wr_wt_kg = (
+            float(profile.get("weight") or 0) * 0.453592
+            if profile.get("weight_unit") == "lbs"
+            else float(profile.get("weight") or 0)
+        )
+        _wr_key = f"{_g_api}|{_wr_age}|{_wr_wt_kg:.1f}"
+    else:
+        _wr_key = ""
+
+    _wr_boat: dict | None = None
+    if _wr_available and state.show_wr_boat:
+        # Fetch records if not yet cached or profile changed.
+        if state.wr_records_key != _wr_key:
+            with hd.scope(f"wr_task_{_wr_key}"):
+                _wr_task = hd.task()
+                if not _wr_task.running and not _wr_task.done:
+                    _wr_task.run(get_age_group_records, _g_api, _wr_age, _wr_wt_kg)
+                if _wr_task.done and not _wr_task.error:
+                    state.wr_records = _wr_task.result
+                    state.wr_records_key = _wr_key
+
+        # Build the WR boat if we have a record for the selected event.
+        if state.wr_records_key == _wr_key:
+            _rec = state.wr_records.get((state.event_type, state.event_value))
+            if _rec is not None:
+                _wr_boat = build_wr_boat(state.event_type, state.event_value, _rec)
+
+    # Prepend the WR boat so it occupies the first lane and is always visible.
+    if _wr_boat is not None:
+        races_data = [_wr_boat] + races_data
+
     # ── Race title (interactive) ───────────────────────────────────────────────
     # "A Race Between Your [Season Bests ▾] at [2k ▾]!"
     _include_long = {
@@ -533,14 +596,47 @@ def race_page(
         )
 
         # ── Sort toggle (below the race) ──────────────────────────────────────────
-        with hd.box(gap=0.2, align="center", padding_top=0.75, padding_bottom=0.5):
-            hd.text("Sort lanes by", font_size="medium", font_color="neutral-500")
-            with hd.scope("sort_mode"):
-                with radio_group(value=state.sort_mode, size="medium") as sort_rg:
-                    hd.radio_button("Date", value="date")
-                    hd.radio_button("Result", value="result")
-                if sort_rg.changed:
-                    state.sort_mode = sort_rg.value
+        with hd.hbox(
+            gap=3,
+            align="center",
+            justify="center",
+            wrap="wrap",
+            padding_top=0.75,
+            padding_bottom=0.5,
+        ):
+            # Sort toggle
+            with hd.box(gap=0.2, align="center"):
+                hd.text("Sort lanes by", font_size="medium", font_color="neutral-500")
+                with hd.scope("sort_mode"):
+                    with radio_group(value=state.sort_mode, size="medium") as sort_rg:
+                        hd.radio_button("Date", value="date")
+                        hd.radio_button("Result", value="result")
+                    if sort_rg.changed:
+                        state.sort_mode = sort_rg.value
+
+            # World Record ghost boat toggle (RowErg + complete profile only)
+            if _wr_available:
+                with hd.scope("wr_toggle"):
+                    with hd.box(gap=0.2, align="center"):
+                        _wr_cb = hd.checkbox(
+                            "Include World Record boat",
+                            checked=state.show_wr_boat,
+                        )
+                        if _wr_cb.changed:
+                            state.show_wr_boat = _wr_cb.checked
+                        if state.show_wr_boat and state.wr_records_key != _wr_key:
+                            # Records still loading — show a subtle note
+                            hd.text(
+                                "Loading records…",
+                                font_size="2x-small",
+                                font_color="neutral-400",
+                            )
+                        elif state.show_wr_boat and _wr_boat is None:
+                            hd.text(
+                                "No world record available for this event / category.",
+                                font_size="2x-small",
+                                font_color="neutral-400",
+                            )
 
         # ── Results table ─────────────────────────────────────────────────────────
         if table_wkts:

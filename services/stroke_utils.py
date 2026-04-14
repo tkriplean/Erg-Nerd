@@ -29,6 +29,12 @@ Exported:
                     avg_spm, has_real_strokes}.
         Order is preserved from the input workouts list (Python caller sorts).
 
+    build_wr_boat(event_type, event_value, record_result) → dict
+        Build a synthetic World Record boat dict for the RaceChart plugin.
+        Stroke data is generated at a realistic SPM for the event duration so
+        the animation looks natural; the boat always finishes at the exact
+        world-record result.
+
     season_color_hex(season, sorted_seasons) → str
         Return a CSS hex color for a season, consistent with the SEASON_PALETTE.
 """
@@ -271,6 +277,89 @@ def season_color_hex(season: str, sorted_seasons: list[str]) -> str:
     return "#{:02x}{:02x}{:02x}".format(
         round(r * 255), round(g * 255), round(b * 255)
     )
+
+
+# ---------------------------------------------------------------------------
+# World Record synthetic boat
+# ---------------------------------------------------------------------------
+
+#: Gold color used for the WR boat lane — visually distinct from season palette.
+WR_BOAT_COLOR = "#c9a227"
+
+#: Synthetic ID for the WR boat — negative, can never collide with real IDs.
+WR_BOAT_ID = -999999
+
+
+def _wr_spm(duration_s: float) -> int:
+    """Return a realistic average SPM for a world-class effort of given duration."""
+    if duration_s < 120:
+        return 40       # sub-2-min sprint (100m, 500m)
+    if duration_s < 300:
+        return 36       # 2–5 min (1k, 2k)
+    if duration_s < 900:
+        return 30       # 5–15 min (5k, 4-min piece)
+    if duration_s < 2400:
+        return 26       # 15–40 min (6k, 10k, 30-min)
+    return 22           # ultra-endurance (½ marathon, marathon, 60-min)
+
+
+def build_wr_boat(
+    event_type: str,
+    event_value: int,
+    record_result: float,
+    label: str = "World Record",
+    color: str = WR_BOAT_COLOR,
+) -> dict:
+    """
+    Build a synthetic World Record boat dict for the RaceChart plugin.
+
+    Parameters
+    ----------
+    event_type    "dist" | "time"
+    event_value   meters for dist events; tenths-of-sec for time events
+    record_result For dist events: elapsed seconds (float).
+                  For time events: metres covered (float).
+    label         Lane label shown in the race canvas header.
+    color         CSS hex color for the lane; defaults to gold.
+
+    Returns
+    -------
+    A boat dict matching the build_races_data() output schema, ready to be
+    prepended to the races list.  id is WR_BOAT_ID; season is "WR".
+    """
+    if event_type == "dist":
+        finish_t = float(record_result)   # total elapsed seconds
+        finish_d = float(event_value)     # target distance in metres
+    else:  # "time"
+        finish_t = float(event_value) / 10.0  # event duration in seconds
+        finish_d = float(record_result)        # metres covered
+
+    spm = _wr_spm(finish_t)
+    stroke_interval_s = 60.0 / spm
+    pace_m_per_s = finish_d / finish_t if finish_t > 0 else 0.0
+
+    # Generate one point per stroke at constant pace, plus the exact endpoint.
+    strokes: list[dict] = [{"t": 0.0, "d": 0.0}]
+    t = stroke_interval_s
+    while t < finish_t - 0.01:
+        strokes.append({"t": round(t, 2), "d": round(pace_m_per_s * t, 1)})
+        t += stroke_interval_s
+    strokes.append({"t": finish_t, "d": finish_d})
+
+    return {
+        "id": WR_BOAT_ID,
+        "label": label,
+        "color": color,
+        "strokes": strokes,
+        "is_pb": False,
+        "season": "WR",
+        "finish_time_s": finish_t if event_type == "dist" else None,
+        "finish_dist_m": finish_d if event_type == "time" else None,
+        "avg_spm": spm,
+        # True = JS uses stroke points to drive cadence animation (smooth,
+        # since we generated stroke-level data at a constant rate).
+        "has_real_strokes": len(strokes) > 20,
+    }
 
 
 # ---------------------------------------------------------------------------
