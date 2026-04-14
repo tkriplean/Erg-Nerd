@@ -7,6 +7,7 @@ The app opens at http://localhost:8888
 
 import json
 import os
+from config import SYNTHETIC_MODE
 
 
 # Load .env before importing services so credentials are available.
@@ -294,7 +295,8 @@ def _global_filter_ui(gstate, all_seasons: list, machine_types: list) -> None:
             with machine_sel:
                 hd.option("All Machines", value="All")
                 for mt in machine_types:
-                    hd.option(machine_label(mt), value=mt)
+                    with hd.scope(mt):
+                        hd.option(machine_label(mt), value=mt)
             if machine_sel.changed:
                 gstate.machine = machine_sel.value
 
@@ -339,6 +341,10 @@ def _dashboard_view(client, user_id: str, app_state) -> None:
                 if _mt:
                     _mtype_set.add(_mt)
             _all_seasons_for_filter = sorted(_season_set, reverse=True)
+            # In synthetic mode the augmented machines (skierg, bike) are never
+            # written to localStorage, so inject them manually here.
+            if SYNTHETIC_MODE:
+                _mtype_set.update({"skierg", "bike"})
             _machine_types_for_filter = sorted(_mtype_set)
         except Exception:
             pass
@@ -384,6 +390,9 @@ def _dashboard_view(client, user_id: str, app_state) -> None:
                 )
 
             with hd.hbox(gap=1, align="center", padding_bottom=1):
+                if SYNTHETIC_MODE:
+                    hd.badge("SYNTHETIC DATA", variant="warning")
+
                 if user_task.done and user_task.result:
                     user = user_task.result
                     display_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or user.get(

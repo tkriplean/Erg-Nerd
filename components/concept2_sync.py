@@ -33,6 +33,7 @@ from datetime import datetime
 
 import hyperdiv as hd
 
+from config import SYNTHETIC_MODE
 from services.local_storage_compression import compress_workouts, decompress_workouts
 
 
@@ -50,7 +51,7 @@ def concept2_sync(client) -> tuple | None:
     when ready, or None while the component is still loading.
     """
     # ── Step 1: one-time localStorage read ───────────────────────────────────
-    sync_state = hd.state(written=False, initial_workouts=None, initial_loaded=False)
+    sync_state = hd.state(written=False, initial_workouts=None, initial_loaded=False, synth_cache=None)
 
     if not sync_state.initial_loaded:
         ls_wkts = hd.local_storage.get_item("workouts")
@@ -82,8 +83,14 @@ def concept2_sync(client) -> tuple | None:
     if task.done and not task.error:
         workouts_dict, sorted_workouts = task.result
         if not sync_state.written:
+            # Write real data only — synthetic workouts must never reach localStorage.
             hd.local_storage.set_item("workouts", compress_workouts(workouts_dict))
             sync_state.written = True
+        if SYNTHETIC_MODE:
+            if sync_state.synth_cache is None:
+                from services.synthetic_data import augment_with_synthetic
+                sync_state.synth_cache = augment_with_synthetic(workouts_dict)
+            return sync_state.synth_cache
         return workouts_dict, sorted_workouts
 
     # Loading UI
