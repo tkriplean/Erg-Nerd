@@ -69,86 +69,47 @@ def _season_hsla(idx: int, lightness_offset: int, alpha: float) -> str:
 
 
 def build_sb_annotations(
-    all_ranked_raw: list,
+    featured_workouts: list,
     sim_start: date,
     included_seasons: list,
-    selected_dists: set,
-    selected_times: set,
+    best_filter: str = "SBs",
 ) -> list:
     """
-    Return a list of SB annotation dicts for the DateSlider timeline dots.
+    Return annotation dicts for the DateSlider timeline dots.
     Each dict: {day: int, label: str, color: str}
-    One dot per (season, event) combination — placed at the date the SB was set.
+
+    featured_workouts — pre-computed by compute_featured_workouts(); the
+                        workouts that ever set a new PB or SB at the time
+                        performed, sorted newest-first.
     """
-    inc = set(included_seasons)
-
-    # Workouts visible in the current event + season filter
-    filtered = [
-        w
-        for w in all_ranked_raw
-        if (w.get("distance") in selected_dists or w.get("time") in selected_times)
-        and get_season(w.get("date", "")) in inc
-    ]
-
-    # Best pace per (season, cat) — lower pace = better for both dist and timed pieces
-    season_best: dict = {}
-    for w in filtered:
-        pace = compute_pace(w)
-        if pace is None:
-            continue
-        cat = workout_cat_key(w)
-        if cat is None:
-            continue
-        season = get_season(w.get("date", ""))
-        sk = (season, cat)
-        if sk not in season_best or pace < season_best[sk]:
-            season_best[sk] = pace
-
-    # Earliest workout that achieved each SB pace
-    sb_workout: dict = {}
-    for w in sorted(filtered, key=lambda x: x.get("date", "")):
-        pace = compute_pace(w)
-        if pace is None:
-            continue
-        cat = workout_cat_key(w)
-        if cat is None:
-            continue
-        season = get_season(w.get("date", ""))
-        sk = (season, cat)
-        if (
-            sk in season_best
-            and abs(pace - season_best[sk]) < 1e-9
-            and sk not in sb_workout
-        ):
-            sb_workout[sk] = w
-
-    # Season → color index (same ordering as build_chart_config)
     sorted_seasons = sorted(included_seasons)
     s_idx = {s: i for i, s in enumerate(sorted_seasons)}
+    lbl = "PB" if best_filter == "PBs" else "SB"
+    show_season = best_filter != "PBs"
 
     annotations = []
-    for (season, cat), w in sb_workout.items():
+    for w in featured_workouts:
         dt = parse_date(w.get("date", ""))
         if dt == date.min:
             continue
         day = (dt - sim_start).days
         if day < 0:
             continue
-
-        pace = season_best[(season, cat)]
+        pace = compute_pace(w)
+        cat = workout_cat_key(w)
+        if pace is None or cat is None:
+            continue
+        season = get_season(w.get("date", ""))
         etype, evalue = cat
         if etype == "dist":
-            dist_m = evalue
-            time_tenths = round(pace * 10 * dist_m / 500)
-            time_str = fmt_split(time_tenths)
-            dist_label = _DIST_LABELS.get(dist_m, f"{dist_m:,}m")
-            label = f"{dist_label} SB — {time_str} ({season})"
+            time_tenths = round(pace * 10 * evalue / 500)
+            dist_label = _DIST_LABELS.get(evalue, f"{evalue:,}m")
+            label = f"{dist_label} {lbl} — {fmt_split(time_tenths)}"
         else:
-            # Timed piece: evalue is tenths of seconds; show minutes + distance achieved
-            mins = evalue // 600  # 600 tenths = 60 s = 1 min
-            dist = w.get("distance", 0)
-            label = f"{mins}min SB — {dist:,}m ({season})"
-
+            mins = evalue // 600
+            label = f"{mins}min {lbl} — {w.get('distance', 0):,}m"
+        if show_season:
+            label += f" ({season})"
         color = _season_hsla(s_idx.get(season, 0), 0, 1.0)
         annotations.append({"day": day, "label": label, "color": color})
 
@@ -222,7 +183,9 @@ def _pred_dataset(
     }
 
 
-def _wc_scatter_dataset(wc_lb: dict, wc_lba: dict, _y, _use_duration: bool, is_dark: bool) -> dict:
+def _wc_scatter_dataset(
+    wc_lb: dict, wc_lba: dict, _y, _use_duration: bool, is_dark: bool
+) -> dict:
     """
     Build a Chart.js scatter dataset for individual WC record points.
     Uses green upward triangles to distinguish from user scatter.
@@ -293,8 +256,17 @@ def _wc_pred_datasets(
     if eff == "critical_power":
         if cp is not None:
             ds_list, _ = _cp_datasets(
-                cp, x_min, x_max, _y_min, _y_max,
-                wc_color, _y, show_watts, False, is_dark, x_fn=x_fn,
+                cp,
+                x_min,
+                x_max,
+                _y_min,
+                _y_max,
+                wc_color,
+                _y,
+                show_watts,
+                False,
+                is_dark,
+                x_fn=x_fn,
             )
             for d in ds_list:
                 d["label"] = "_wc_pred"
@@ -315,9 +287,18 @@ def _wc_pred_datasets(
 
     if eff == "average":
         ds = _average_datasets(
-            lb, lba, cp, None, 5.0,
-            x_min, x_max, wc_color, _y, show_watts,
-            show_components=False, x_fn=x_fn,
+            lb,
+            lba,
+            cp,
+            None,
+            5.0,
+            x_min,
+            x_max,
+            wc_color,
+            _y,
+            show_watts,
+            show_components=False,
+            x_fn=x_fn,
         )
         for d in ds:
             d["label"] = "_wc_pred"
@@ -353,8 +334,9 @@ def _pts_to_relative(user_pts: list, wc_pts: list, show_watts: bool) -> list:
     return rel
 
 
-def _wc_ref_fallback(x: float, wc_cp: dict | None, wc_lb: dict, wc_lba: dict,
-                     _use_duration: bool) -> tuple | None:
+def _wc_ref_fallback(
+    x: float, wc_cp: dict | None, wc_lb: dict, wc_lba: dict, _use_duration: bool
+) -> tuple | None:
     """
     Return (wc_watts, wc_pace) for non-standard x using WC CP or loglog interpolation.
     Used when there is no exact WC record for a given event category.
@@ -546,7 +528,9 @@ def _pauls_law_datasets(
     return out
 
 
-def _loglog_dataset(lifetime_best, lifetime_best_anchor, pred_color, y_fn, x_fn=None) -> list:
+def _loglog_dataset(
+    lifetime_best, lifetime_best_anchor, pred_color, y_fn, x_fn=None
+) -> list:
     """Log-log power law fit curve.
 
     x_fn(dist, pace) → x value; defaults to distance (meters) if None.
@@ -617,7 +601,10 @@ def _cp_datasets(
     _cp_x_min_dist = 100.0
     _cp_x_max_dist = 50_000.0
     cp_pts = critical_power_curve_points(
-        critical_power_params, x_min=_cp_x_min_dist, x_max=_cp_x_max_dist, show_watts=show_watts
+        critical_power_params,
+        x_min=_cp_x_min_dist,
+        x_max=_cp_x_max_dist,
+        show_watts=show_watts,
     )
     cp_pts = _convert_pts(cp_pts)
     # After conversion, filter to the actual chart x range.
@@ -663,8 +650,12 @@ def _cp_datasets(
         xo_pace = watts_to_pace(xo["y"]) if show_watts else xo["y"]
         xo_x = x_fn(xo["x"], xo_pace)
         if x_min <= xo_x <= x_max:
-            xo_color = "rgba(20, 210, 190, 0.55)" if is_dark else "rgba(0, 160, 145, 0.55)"
-            xo_text_color = "rgba(20, 210, 190, 0.90)" if is_dark else "rgba(0, 140, 128, 0.90)"
+            xo_color = (
+                "rgba(20, 210, 190, 0.55)" if is_dark else "rgba(0, 160, 145, 0.55)"
+            )
+            xo_text_color = (
+                "rgba(20, 210, 190, 0.90)" if is_dark else "rgba(0, 140, 128, 0.90)"
+            )
             # Dashed vertical line spanning the full y range
             out.append(
                 {
@@ -786,18 +777,22 @@ def _average_datasets(
 
     # ── CP tuple ───────────────────────────────────────────────────────────────
     _cp = critical_power_params
-    _cp_valid = _cp is not None and all(k in _cp for k in ("Pow1", "tau1", "Pow2", "tau2"))
+    _cp_valid = _cp is not None and all(
+        k in _cp for k in ("Pow1", "tau1", "Pow2", "tau2")
+    )
 
     # ── RL string-keyed anchor lookup ─────────────────────────────────────────
-    _str_lba = {str(k): v for k, v in lifetime_best_anchor.items()} if lifetime_best_anchor else {}
+    _str_lba = (
+        {str(k): v for k, v in lifetime_best_anchor.items()}
+        if lifetime_best_anchor
+        else {}
+    )
 
     # ── Sample distances ───────────────────────────────────────────────────────
     # Always sample in distance-space (100m to 42195m) so all models get a
     # consistent input domain.  x_fn converts to the correct chart x at the end.
     _n_pts = 80
-    _sample_dists = list(
-        np.logspace(math.log10(100.0), math.log10(42195.0), _n_pts)
-    )
+    _sample_dists = list(np.logspace(math.log10(100.0), math.log10(42195.0), _n_pts))
 
     # Containers for per-model curves (used when show_components)
     _ll_pts, _pl_pts, _cp_pts_avg, _rl_pts_avg = [], [], [], []
@@ -859,6 +854,7 @@ def _average_datasets(
                 if _p is None:
                     # log-log interpolate within the RL curve for this anchor
                     from services.ranked_predictions import _rl_interp_pace as _rl_ip
+
                     _p = _rl_ip(preds, _d)
                 if _p is not None and PACE_MIN <= _p <= PACE_MAX:
                     anchor_dist = _str_lba.get(cat_key)
@@ -891,14 +887,22 @@ def _average_datasets(
 
     # Filter to chart x range and sort
     def _in_range(pts):
-        return sorted([p for p in pts if x_min <= p["x"] <= x_max], key=lambda p: p["x"])
+        return sorted(
+            [p for p in pts if x_min <= p["x"] <= x_max], key=lambda p: p["x"]
+        )
 
     _avg_pts = _in_range(_avg_pts)
 
     # Main averaged curve
     if len(_avg_pts) >= 2:
         out.append(
-            _pred_dataset("_avg_ensemble", _avg_pts, pred_color, point_radius=1.5, border_width=2.5)
+            _pred_dataset(
+                "_avg_ensemble",
+                _avg_pts,
+                pred_color,
+                point_radius=1.5,
+                border_width=2.5,
+            )
         )
 
     # Component curves at reduced opacity
@@ -912,7 +916,9 @@ def _average_datasets(
         ]:
             pts = _in_range(pts)
             if len(pts) >= 2:
-                out.append(_pred_dataset(label, pts, _dim, point_radius=0, border_width=1.0))
+                out.append(
+                    _pred_dataset(label, pts, _dim, point_radius=0, border_width=1.0)
+                )
 
     return out
 
@@ -937,7 +943,13 @@ def _lifetime_best_datasets(
             c not in seen
             and abs(dp["pace"] - lifetime_best.get(c, float("inf"))) < 1e-9
         ):
-            lb_pts.append({"x": x_fn(dp["dist"], dp["pace"]), "y": y_fn(dp["pace"]), "cat": list(c)})
+            lb_pts.append(
+                {
+                    "x": x_fn(dp["dist"], dp["pace"]),
+                    "y": y_fn(dp["pace"]),
+                    "cat": list(c),
+                }
+            )
             seen.add(c)
     lb_pts.sort(key=lambda p: p["x"])
     if not lb_pts:
@@ -978,7 +990,13 @@ def _season_line_datasets(
             if dp["season"] != season or c in seen:
                 continue
             if abs(dp["pace"] - season_best.get((season, c), float("inf"))) < 1e-9:
-                s_pts.append({"x": x_fn(dp["dist"], dp["pace"]), "y": y_fn(dp["pace"]), "cat": list(c)})
+                s_pts.append(
+                    {
+                        "x": x_fn(dp["dist"], dp["pace"]),
+                        "y": y_fn(dp["pace"]),
+                        "cat": list(c),
+                    }
+                )
                 seen.add(c)
         if not s_pts:
             continue
@@ -1055,7 +1073,9 @@ def _scatter_datasets(
                     "y": y_fn(dp["pace"]),
                     "date": dp["date"],
                     "wtype": dp["wtype"],
-                    "cat": list(c),  # needed by _scatter_to_pct for exact WC record lookup
+                    "cat": list(
+                        c
+                    ),  # needed by _scatter_to_pct for exact WC record lookup
                 }
             )
             bg.append(_season_hsla(idx, 0, alpha))
@@ -1165,7 +1185,7 @@ def _canvas_labels_list(overlay_labels, y_fn, crossover_labels=None) -> list:
     result = []
 
     # Simulation overlay entries (standard format)
-    for _ol in (overlay_labels or []):
+    for _ol in overlay_labels or []:
         result.append(
             {
                 "x": _ol["x"],
@@ -1180,7 +1200,7 @@ def _canvas_labels_list(overlay_labels, y_fn, crossover_labels=None) -> list:
         )
 
     # Crossover annotation entries (bottom-anchored format)
-    for _cl in (crossover_labels or []):
+    for _cl in crossover_labels or []:
         result.append(
             {
                 "x": _cl["x"],
@@ -1222,8 +1242,8 @@ def build_chart_config(
     pauls_k: float = 5.0,  # personalised Paul's Law constant (sec/500m per doubling)
     excluded_workouts=(),  # workouts for deselected events — plotted faintly
     x_mode: str = "distance",  # "distance" | "duration"
-    wc_data=None,        # dict {records, cp_params, lb, lba} from concept2_records
-    wc_relative=False,   # if True: transform y-axis to % of world class
+    wc_data=None,  # dict {records, cp_params, lb, lba} from concept2_records
+    wc_relative=False,  # if True: transform y-axis to % of world class
 ):
     """Build a Chart.js config dict for the ranked-workouts chart.
 
@@ -1322,7 +1342,9 @@ def build_chart_config(
             for cat, pace in wc_data["lb"].items():
                 dist = wc_data["lba"].get(cat, 0)
                 if dist and pace > 0:
-                    _all_x.append(round(dist * pace / 500.0, 2) if _use_duration else dist)
+                    _all_x.append(
+                        round(dist * pace / 500.0, 2) if _use_duration else dist
+                    )
         _x_min_raw, _x_max_raw = min(_all_x), max(_all_x)
         if log_x:
             _pad = 1.45
@@ -1401,7 +1423,9 @@ def build_chart_config(
         )
     if predictor == "loglog":
         datasets.extend(
-            _loglog_dataset(lifetime_best, lifetime_best_anchor, pred_color, _y, x_fn=_x_fn)
+            _loglog_dataset(
+                lifetime_best, lifetime_best_anchor, pred_color, _y, x_fn=_x_fn
+            )
         )
     if predictor == "critical_power" and critical_power_params is not None:
         # Inject active event sets so _cp_datasets can pass them to critical_power_event_points
@@ -1456,7 +1480,13 @@ def build_chart_config(
     # 2. Season-best lines (order=2)
     datasets.extend(
         _season_line_datasets(
-            sorted_seasons, season_lines, data_points, season_best, season_idx, _y, x_fn=_x_fn
+            sorted_seasons,
+            season_lines,
+            data_points,
+            season_best,
+            season_idx,
+            _y,
+            x_fn=_x_fn,
         )
     )
 
@@ -1495,8 +1525,17 @@ def build_chart_config(
 
         # WC prediction line using the selected predictor (drawn behind everything).
         _wc_preds = _wc_pred_datasets(
-            wc_data, predictor, x_min, x_max, _y_min, _y_max,
-            _y, show_watts, is_dark, _x_fn, pauls_k,
+            wc_data,
+            predictor,
+            x_min,
+            x_max,
+            _y_min,
+            _y_max,
+            _y,
+            show_watts,
+            is_dark,
+            _x_fn,
+            pauls_k,
         )
         datasets = _wc_preds + datasets
 
@@ -1556,8 +1595,17 @@ def build_chart_config(
 
         # Relative prediction: user_pred / wc_pred × 100 via interpolation.
         _wc_pred_ds = _wc_pred_datasets(
-            wc_data, predictor, x_min, x_max, _y_min, _y_max,
-            _y, show_watts, is_dark, _x_fn, pauls_k,
+            wc_data,
+            predictor,
+            x_min,
+            x_max,
+            _y_min,
+            _y_max,
+            _y,
+            show_watts,
+            is_dark,
+            _x_fn,
+            pauls_k,
         )
         _u_pts: list = []
         for _ds in user_pred_ds:
@@ -1571,7 +1619,9 @@ def build_chart_config(
                 break
         rel_pts = _pts_to_relative(_u_pts, _wc_pts, show_watts)
         rel_pred_ds = (
-            [_pred_dataset("_rel_pred", rel_pts, pred_color)] if len(rel_pts) >= 2 else []
+            [_pred_dataset("_rel_pred", rel_pts, pred_color)]
+            if len(rel_pts) >= 2
+            else []
         )
 
         # WC records appear at 100% in relative mode (record / record = 1.0).
@@ -1598,14 +1648,18 @@ def build_chart_config(
         datasets = [flat_ref] + rel_pred_ds + transformed + [_wc_scatter_100]
 
     # Canvas labels drawn by canvasLabelsPlugin in power_curve_chart_plugin.js
-    canvas_labels = _canvas_labels_list(overlay_labels, _y, crossover_labels=_crossover_labels)
+    canvas_labels = _canvas_labels_list(
+        overlay_labels, _y, crossover_labels=_crossover_labels
+    )
 
     # X-axis title and label mode
     _x_title = "Duration (s)" if _use_duration else "Distance (m)"
 
     # Y-axis config — overridden in relative mode.
     if wc_data is not None and wc_relative:
-        _rel_y_title = "% of World Class Power" if show_watts else "% of World Class Pace"
+        _rel_y_title = (
+            "% of World Class Power" if show_watts else "% of World Class Pace"
+        )
         # Auto-compute y range from actual % values in the datasets so the axis
         # fits the data regardless of the user's level or watts-vs-pace view.
         # (Pace and watts give very different %, due to the cubic relationship.)
@@ -1641,7 +1695,7 @@ def build_chart_config(
                 else {}
             ),
             "title": {
-                "display": True,
+                "display": False,
                 "text": "Watts" if show_watts else "Pace (sec/500m)",
                 "font": {"size": 14, "font-weight": "bold"},
             },
@@ -1654,7 +1708,7 @@ def build_chart_config(
         "data": {"datasets": datasets},
         "_canvas_labels": canvas_labels,
         "_x_mode": x_mode,  # read by JS for tick formatter and gridline positions
-        "_wc_relative": wc_relative,           # read by JS for y-axis tick formatting
+        "_wc_relative": wc_relative,  # read by JS for y-axis tick formatting
         "_wc_relative_mode": "watts" if show_watts else "pace",  # for tooltip label
         "options": {
             "responsive": True,
@@ -1665,7 +1719,7 @@ def build_chart_config(
                     "min": round(x_min, 1),
                     "max": round(x_max, 1),
                     "title": {
-                        "display": True,
+                        "display": False,
                         "text": _x_title,
                         "font": {"size": 12},
                     },

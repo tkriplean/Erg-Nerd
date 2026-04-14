@@ -153,8 +153,8 @@ def apply_best_only(results: list, by_season: bool = False) -> list:
         if dist in RANKED_DIST_SET:
             key = (season, "dist", dist) if by_season else ("dist", dist)
             prev = best.get(key)
-            if prev is None or (r.get("time") or float("inf")) < (
-                prev.get("time") or float("inf")
+            if prev is None or (
+                r.get("time", float("inf")) < prev.get("time", float("inf"))
             ):
                 best[key] = r
         elif time in RANKED_TIME_SET:
@@ -179,6 +179,39 @@ def apply_best_only(results: list, by_season: bool = False) -> list:
 def apply_season_best_only(results: list) -> list:
     """Keep only the season best per (season, ranked category). Alias for apply_best_only(by_season=True)."""
     return apply_best_only(results, by_season=True)
+
+
+def compute_featured_workouts(workouts: list, best_filter: str) -> list:
+    """
+    Return the subset of *workouts* that were ever a new personal best or
+    season best at the moment they were performed.  These are the workouts
+    that generate chart dots and timeline-slider annotations, and they form a
+    much smaller set than the full quality-filtered list.
+
+    workouts     — sorted newest-first (standard sync order).
+    best_filter  — "PBs": running all-time best per event category.
+                   "SBs": running season best per (season, event) category.
+                   "All": treated as "SBs" (keeps annotation density manageable;
+                          the simulation itself uses the full list for "All").
+
+    Returns the subset sorted newest-first (same relative order, just filtered).
+    """
+    effective = "SBs" if best_filter == "All" else best_filter
+    running_best: dict = {}
+    featured: list = []
+
+    for w in reversed(workouts):       # scan oldest → newest
+        pace = compute_pace(w)
+        cat = workout_cat_key(w)
+        if pace is None or cat is None:
+            continue
+        key = (get_season(w.get("date", "")), cat) if effective == "SBs" else cat
+        if key not in running_best or pace < running_best[key]:
+            running_best[key] = pace
+            featured.append(w)
+
+    featured.reverse()                 # restore newest-first order
+    return featured
 
 
 def compute_duration_s(workout: dict) -> Optional[float]:

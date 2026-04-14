@@ -147,6 +147,7 @@ from services.rowing_utils import (
     workout_cat_key,
     apply_best_only,
     apply_season_best_only,
+    compute_featured_workouts,
     compute_duration_s,
     compute_pauls_constant,
 )
@@ -166,7 +167,6 @@ from services.ranked_filters import (
     is_ranked_noninterval,
     seasons_from,
     apply_quality_filters,
-    sim_workouts_at,
 )
 from components.power_curve_chart_builder import (
     build_sb_annotations,
@@ -208,14 +208,28 @@ _DESC_RL = (
     "Predictions from rowinglevel.com based on your profile (gender, age, bodyweight). "
     "Distance-weighted average across all anchor PBs. Distance events only."
 )
+
+_DESC_PL = (
+    "Predicts +5.0 s/500m for each doubling of distance "
+    "(population default — needs 2 or more PBs to personalise), "
+    "applied from each anchor PB and averaged."
+)
+
 _DESC_AVG = "Mean of all available predictions for this event."
 
-# Predictors that support the "Show components" toggle, and their descriptions.
+# Predictors that support the "Show components" toggle, with tooltip descriptions
+# and checkbox labels customised per technique.
 _COMP_DESCRIPTIONS = {
     "pauls_law": "Shows one curve per PB anchor, before averaging.",
     "rowinglevel": "Shows the RL curve from each PB anchor, before distance-weighted averaging.",
     "critical_power": "Shows the fast-twitch and slow-twitch power components separately.",
     "average": "Shows all individual model curves that were averaged.",
+}
+_COMP_LABELS = {
+    "pauls_law": "Show one curve per anchor",
+    "rowinglevel": "Show one RL curve per anchor",
+    "critical_power": "Show fast-twitch & slow-twitch components",
+    "average": "Show individual model curves",
 }
 
 
@@ -242,16 +256,12 @@ def _profile_hash(profile: dict) -> str:
 
 def _compute_lookahead_overlays(
     sim_wkts: list,
-    all_ranked_raw: list,
+    ranked_prefilt: list,
     sim_date: date,
     sim_day_idx: int,
     state,
     total_days: int,
-    selected_dists: set,
-    selected_times: set,
-    included_seasons: list,
     show_watts: bool,
-    excluded_seasons=(),
 ) -> tuple:
     """
     Compute ghost/arrow/threatened/new-arrival overlay data for the lookahead
@@ -292,10 +302,8 @@ def _compute_lookahead_overlays(
     if _has_any_lines and _cur_best_pace:
         _upcoming_raw = [
             w
-            for w in all_ranked_raw
-            if (w.get("distance") in selected_dists or w.get("time") in selected_times)
-            and get_season(w.get("date", "")) not in set(excluded_seasons)
-            and sim_date < parse_date(w.get("date", "")) <= _lookahead_end
+            for w in ranked_prefilt
+            if sim_date < parse_date(w.get("date", "")) <= _lookahead_end
         ]
         _seen_threat_cats: set = set()
         for _w in sorted(_upcoming_raw, key=lambda w: compute_pace(w) or 999):
@@ -349,14 +357,29 @@ def _compute_lookahead_overlays(
         if _ck and _p and _d:
             if _ck not in _ev_best or _p < _ev_best[_ck][0]:
                 _ev_best[_ck] = (_p, parse_date(_w.get("date", "")), _d)
+
+    # Best pace per event strictly before this step — used both to gate tie
+    # detection and to compute % improvement labels.
+    _det_prev_pace: dict = {}
+    for _w in sim_wkts:
+        _ck2 = workout_cat_key(_w)
+        _p2 = compute_pace(_w)
+        if _ck2 and _p2 and parse_date(_w.get("date", "")) <= _new_step_start:
+            if _ck2 not in _det_prev_pace or _p2 < _det_prev_pace[_ck2]:
+                _det_prev_pace[_ck2] = _p2
+
     for _ck, (_p, _d_date, _d) in _ev_best.items():
+        # Require the best to have arrived in this step AND be strictly faster
+        # than the prior step's best — ties must not trigger a new PB callout.
         if _new_step_start < _d_date <= sim_date:
-            _new_pb_cats.add(_ck)
-            _etype, _evalue = _ck
-            _elabel = f"{_evalue}m" if _etype == "dist" else f"{_evalue // 60}min"
-            _pm = int(_p // 60)
-            _ps = _p % 60
-            _new_pb_events.append(f"{_elabel} — {_pm}:{_ps:04.1f}")
+            _prev = _det_prev_pace.get(_ck)
+            if _prev is None or _p < _prev:
+                _new_pb_cats.add(_ck)
+                _etype, _evalue = _ck
+                _elabel = f"{_evalue}m" if _etype == "dist" else f"{_evalue // 60}min"
+                _pm = int(_p // 60)
+                _ps = _p % 60
+                _new_pb_events.append(f"{_elabel} — {_pm}:{_ps:04.1f}")
 
     # Update PB label + timestamp when a new PB lands this step.
     # Also capture the full overlay label dicts now (while _ev_best and
@@ -365,15 +388,6 @@ def _compute_lookahead_overlays(
     if _new_pb_events:
         state.sim_last_pb_label = "New PB!  " + "  ·  ".join(_new_pb_events)
         state.sim_pb_set_at_day = sim_day_idx
-        # Compute prev bests using the current step start as cutoff
-        # (i.e. everything strictly before this step's new arrivals).
-        _det_prev_pace: dict = {}
-        for _w in sim_wkts:
-            _ck2 = workout_cat_key(_w)
-            _p2 = compute_pace(_w)
-            if _ck2 and _p2 and parse_date(_w.get("date", "")) <= _new_step_start:
-                if _ck2 not in _det_prev_pace or _p2 < _det_prev_pace[_ck2]:
-                    _det_prev_pace[_ck2] = _p2
         _stored: list = []
         for _ck in _new_pb_cats:
             if _ck in _ev_best:
@@ -478,6 +492,7 @@ def _chart_section(
     sim_day_idx: int,
     total_days: int,
     sim_start,
+    sb_annotations: list,
     all_ranked_raw: list,
     selected_dists: set,
     selected_times: set,
@@ -504,8 +519,7 @@ def _chart_section(
             width="100%",
             max_width="1280px",
         ):
-            _CONTROLS_W = "9rem"
-            with hd.hbox(gap=0.5, align="center", width=_CONTROLS_W):
+            with hd.hbox(gap=0.5, align="center"):
                 _play_label = "⏸  Pause" if state.sim_playing else "▶  Play"
                 _play_variant = "default" if state.sim_playing else "primary"
                 if hd.button(_play_label, size="medium", variant=_play_variant).clicked:
@@ -550,195 +564,117 @@ def _chart_section(
                             state.sim_tick_id += 1
 
             with hd.box(grow=1):
-                _sb_annotations = build_sb_annotations(
-                    all_ranked_raw,
-                    sim_start,
-                    _included_seasons,
-                    selected_dists,
-                    selected_times,
-                )
                 ds = DateSlider(
                     min_value=0,
                     max_value=max(1, total_days - 1),
                     target_value=sim_day_idx,
                     step=1,
                     start_date=sim_start.isoformat(),
-                    annotations=_sb_annotations,
+                    annotations=sb_annotations,
                 )
                 if ds.change_id != state.last_ds_change_id:
                     state.last_ds_change_id = ds.change_id
                     state.sim_week = int(ds.value)
                     state.sim_playing = False
 
-            with hd.box(width=_CONTROLS_W):
-                pass
-
-    # ---- chart ----
-    if chart_cfg:
-        PowerCurveChart(
-            config=chart_cfg,
-            show_watts=show_watts,
-            x_mode=state.chart_x_metric,
-            height="75vh",
-        )
-    else:
+    if not chart_cfg:
         hd.text("No chart data available.", font_color="neutral-500")
+        return
+
+    with hd.hbox(align="center"):
+        with hd.box(align="center", gap=0.5):
+            with hd.button(
+                size="small",
+                border_radius="small",
+                variant="primary" if state.chart_log_y else "default",
+                pill=True,
+                width="100%",
+            ) as _log_y_btn:
+                hd.text("Log")
+
+            if _log_y_btn.clicked:
+                state.chart_log_y = not state.chart_log_y
+
+            with radio_group(value=state.chart_y_metric, size="small") as rg:
+                with hd.box(gap=0):
+                    hd.radio_button(
+                        "Pace",
+                        value="pace",
+                        width="100%",
+                        button_style=hd.style(border_radius="0px"),
+                    )
+                    hd.radio_button(
+                        "Watts",
+                        value="watts",
+                        width="100%",
+                        button_style=hd.style(border_radius="0px"),
+                    )
+            if rg.changed:
+                state.chart_y_metric = rg.value
+
+        with hd.box():
+            # ---- chart ----
+            PowerCurveChart(
+                config=chart_cfg,
+                show_watts=show_watts,
+                x_mode=state.chart_x_metric,
+                height="75vh",
+            )
 
     _chart_settings(state, wc_task, profile, pauls_k_fit)
 
 
 def _chart_settings(state, wc_task, profile, pauls_k_fit):
     # ---- Chart settings ----
-    with hd.box(gap=1, align="center"):
-        with hd.hbox(
-            gap=0.5, align="center", justify="center", padding_top=0.75, wrap="wrap"
-        ):
-            # Plot group
-            hd.text("Plot")
+    with hd.box(gap=2, align="center"):
+        with hd.hbox(gap=0.2, align="center"):
+            with hd.button(
+                size="small",
+                border_radius="small",
+                variant="primary" if state.chart_log_x else "default",
+                pill=True,
+                width="100%",
+            ) as _log_x_btn:
+                hd.text("Log")
 
-            cur_intensity = (
-                f"log_{state.chart_y_metric}"
-                if state.chart_log_y
-                else state.chart_y_metric
-            )
-            with hd.select(value=cur_intensity, max_width=9) as intensity_axis:
-                hd.option("Pace", value="pace")
-                hd.option("Watts", value="watts")
-                hd.option("Log( Pace )", value="log_pace")
-                hd.option("Log( Watts )", value="log_watts")
+            if _log_x_btn.clicked:
+                state.chart_log_x = not state.chart_log_x
 
-            if intensity_axis.changed:
-                # the space in log( ... ) gets converted to underscore
-                value = intensity_axis.value.split("_")
-                if len(value) > 1:
-                    metric = value[1]
-                else:
-                    metric = value[0]
+            with radio_group(value=state.chart_x_metric, size="small") as rg:
+                hd.radio_button(
+                    "Distance",
+                    value="distance",
+                    width="100%",
+                    button_style=hd.style(border_radius="0px"),
+                )
+                hd.radio_button(
+                    "Duration",
+                    value="duration",
+                    width="100%",
+                    button_style=hd.style(border_radius="0px"),
+                )
+            if rg.changed:
+                state.chart_x_metric = rg.value
 
-                state.chart_y_metric = metric
-                state.chart_log_y = len(value) > 1
-
-            hd.text("versus")
-
-            cur_length = (
-                f"log_{state.chart_x_metric}"
-                if state.chart_log_x
-                else state.chart_x_metric
-            )
-
-            with hd.select(value=cur_length, max_width=11) as length_axis:
-                hd.option("Distance", value="distance")
-                hd.option("Duration", value="duration")
-                hd.option("Log( Distance )", value="log_distance")
-                hd.option("Log( Duration )", value="log_duration")
-
-            if length_axis.changed:
-                # the space in log( ... ) gets converted to underscore
-                value = length_axis.value.split("_")
-                if len(value) > 1:
-                    metric = value[1]
-                else:
-                    metric = value[0]
-
-                state.chart_x_metric = metric
-                state.chart_log_x = len(value) > 1
-
-            # ---- Events dropdown ----
-            _n_ev_sel = sum(state.dist_enabled) + sum(state.time_enabled)
-            _n_ev_tot = len(RANKED_DISTANCES) + len(RANKED_TIMES)
-            _ev_lbl = (
-                "All Events"
-                if _n_ev_sel == _n_ev_tot
-                else f"{_n_ev_sel} of {_n_ev_tot}"
-            )
-
-            hd.text("for")
-
-            with hd.dropdown() as _ev_dd:
-                _ev_btn = hd.button(_ev_lbl, caret=True, slot=_ev_dd.trigger)
-                if _ev_btn.clicked:
-                    _ev_dd.opened = not _ev_dd.opened
-                with hd.box(padding=1, gap=0.5, background_color="neutral-50"):
-                    with hd.hbox(gap=0.5, padding_bottom=0.5):
-                        if hd.button(
-                            "Select all", size="small", variant="text"
-                        ).clicked:
-                            state.dist_enabled = tuple(True for _ in RANKED_DISTANCES)
-                            state.time_enabled = tuple(True for _ in RANKED_TIMES)
-                        if hd.button("Clear all", size="small", variant="text").clicked:
-                            state.dist_enabled = tuple(False for _ in RANKED_DISTANCES)
-                            state.time_enabled = tuple(False for _ in RANKED_TIMES)
-                    with hd.scope(str(state.dist_enabled)):
-                        with hd.hbox(gap=0.5, wrap="wrap"):
-                            for i, (dist, label) in enumerate(RANKED_DISTANCES):
-                                with hd.scope(f"dist_{dist}"):
-                                    cb = hd.checkbox(
-                                        label, checked=state.dist_enabled[i]
-                                    )
-                                    if cb.changed:
-                                        flags = list(state.dist_enabled)
-                                        flags[i] = cb.checked
-                                        state.dist_enabled = tuple(flags)
-                                    if cb.checked != state.dist_enabled[i]:
-                                        cb.checked = state.dist_enabled[i]
-                    hd.text(
-                        "— timed —",
-                        font_color="neutral-300",
-                        font_size="x-small",
-                        padding_top=0.25,
-                    )
-                    with hd.scope(str(state.time_enabled)):
-                        with hd.hbox(gap=0.5, wrap="wrap"):
-                            for i, (tenths, label) in enumerate(RANKED_TIMES):
-                                with hd.scope(f"time_{tenths}"):
-                                    cb = hd.checkbox(
-                                        label, checked=state.time_enabled[i]
-                                    )
-                                    if cb.changed:
-                                        flags = list(state.time_enabled)
-                                        flags[i] = cb.checked
-                                        state.time_enabled = tuple(flags)
-                                    if cb.checked != state.time_enabled[i]:
-                                        cb.checked = state.time_enabled[i]
-
-            hd.text("while ")
-
-            # ---- World-class comparison toggles ----
-            _wc_compare_section(state, profile, wc_task)
-
-        with hd.hbox(gap=0.5, align="center", justify="center", wrap="wrap"):
-            # Power curves
-            hd.text("Draw power curves for")
-            with hd.select(value=state.draw_power_curves, max_width=7) as curves_sel:
-                hd.option("PBs")
-                hd.option("SBs")
-                hd.option("None")
-            if curves_sel.changed:
-                state.draw_power_curves = curves_sel.value
-
-        with hd.box():
+        with hd.hbox(gap=3, align="center"):
             with hd.hbox(gap=0.5, align="center", justify="center", wrap="wrap"):
-                hd.text("Draw a prediction line based on")
-
-                # Build the dynamic Paul's Law tip (depends on personalized K).
-                if pauls_k_fit is not None:
-                    _pl_tip = (
-                        f"Predicts +{pauls_k_fit:.1f} s/500m for each doubling of distance "
-                        f"(your personalised value), applied from each anchor PB and averaged."
-                    )
-                else:
-                    _pl_tip = (
-                        "Predicts +5.0 s/500m for each doubling of distance "
-                        "(population default — needs 2 or more PBs to personalise), "
-                        "applied from each anchor PB and averaged."
-                    )
+                hd.text("Draw a prediction line based on", font_size="medium")
 
                 _PRED_OPTIONS = [
                     ("critical_power", "Critical Power", _DESC_CP),
                     ("loglog", "Log-Log Watts Fit", _DESC_LL),
-                    ("pauls_law", "Paul's Law (average)", _pl_tip),
+                    (
+                        "pauls_law",
+                        "Paul's Law (average)",
+                        _DESC_PL
+                        + (
+                            f" Personalised to your K = {pauls_k_fit:.1f}s/doubling."
+                            if pauls_k_fit is not None
+                            else ""
+                        ),
+                    ),
                     ("rowinglevel", "RowingLevel (average)", _DESC_RL),
-                    ("average", "Average", _DESC_AVG),
+                    ("average", "Average of all techniques", _DESC_AVG),
                     (
                         "none",
                         "...actually, don't predict",
@@ -785,54 +721,138 @@ def _chart_settings(state, wc_task, profile, pauls_k_fit):
                                         _pdesc,
                                         font_color="neutral-600",
                                         font_size="small",
-                                        max_width=40,
+                                        min_width=40,
                                         padding=(0, 2, 0, 2),
                                     )
                                 if _opt_button.clicked:
                                     state.chart_predictor = _pval
                                     _pred_dd.opened = False
 
-                # Show components toggle (only when predictor supports it).
+                # Gear icon → component lines dropdown (only for predictors that support it).
                 if state.chart_predictor in _COMP_DESCRIPTIONS:
-                    hd.text("and ")
-                    with hd.select(
-                        value=f"{state.chart_show_components}"
-                    ) as component_line_toggle:
-                        hd.option("show its component lines", value="True")
-                        hd.option("hide component lines", value="False")
-
-                        if component_line_toggle.changed:
-                            state.chart_show_components = (
-                                component_line_toggle.value == "True"
+                    with hd.scope("comp_gear"):
+                        with hd.dropdown() as _comp_dd:
+                            _gear_btn = hd.icon_button(
+                                "gear-fill" if state.chart_show_components else "gear",
+                                font_size="medium",
+                                font_color="primary"
+                                if state.chart_show_components
+                                else "neutral-500",
+                                slot=_comp_dd.trigger,
                             )
-                            print(type(state.chart_show_components))
+                            if _gear_btn.clicked:
+                                _comp_dd.opened = not _comp_dd.opened
 
-                    with hd.tooltip(_COMP_DESCRIPTIONS[state.chart_predictor]):
-                        hd.icon(
-                            "question-circle",
-                            font_size="small",
-                            font_color="neutral-700",
-                        )
+                            with hd.box(
+                                gap=2,
+                                padding=1,
+                                background_color="neutral-0",
+                                min_width=22,
+                                align="start",
+                            ):
+                                with hd.box(
+                                    gap=0.75,
+                                ):
+                                    with hd.scope("comp_cb"):
+                                        _comp_cb = hd.checkbox(
+                                            _COMP_LABELS[state.chart_predictor],
+                                            checked=state.chart_show_components,
+                                        )
+                                        if _comp_cb.changed:
+                                            state.chart_show_components = (
+                                                _comp_cb.checked
+                                            )
+                                    hd.text(
+                                        _COMP_DESCRIPTIONS[state.chart_predictor],
+                                        font_size="small",
+                                        font_color="neutral-500",
+                                    )
+
+                                # ---- Paul's Law personalised K scale graphic ----
+                                if (
+                                    state.chart_predictor == "pauls_law"
+                                    and pauls_k_fit is not None
+                                ):
+                                    _K_MIN, _K_MAX = 1.0, 9.0
+                                    _pos_def = (5.0 - _K_MIN) / (_K_MAX - _K_MIN)
+                                    _pos_usr = max(
+                                        0.0,
+                                        min(
+                                            1.0,
+                                            (pauls_k_fit - _K_MIN) / (_K_MAX - _K_MIN),
+                                        ),
+                                    )
+                                    _SC = 1000
+                                    _gd = max(1, round(_pos_def * _SC))
+                                    _gu = max(1, round(_pos_usr * _SC))
+
+                                    with hd.box(gap=0.3, padding=("0.25rem", 0)):
+                                        # Default (5.0s) marker — label + arrow above bar
+                                        with hd.hbox(gap=0, align="end"):
+                                            hd.box(grow=_gd)
+                                            with hd.box(align="center", gap=0):
+                                                hd.text(
+                                                    "5.0s - default",
+                                                    font_size="small",
+                                                    font_color="neutral-500",
+                                                )
+                                                hd.text(
+                                                    "▾",
+                                                    font_size="medium",
+                                                    font_color="neutral-500",
+                                                )
+                                            hd.box(grow=_SC - _gd)
+
+                                        hd.box(
+                                            grow=1,
+                                            height=0.4,
+                                            background_color=f"neutral-600",
+                                        )
+
+                                        # Side labels: aerobic ←→ sprint dominant
+                                        with hd.hbox():
+                                            hd.text(
+                                                "aerobic",
+                                                font_size="small",
+                                                font_color="neutral-500",
+                                            )
+                                            hd.box(grow=1)
+                                            hd.text(
+                                                "sprint dominant",
+                                                font_size="small",
+                                                font_color="neutral-500",
+                                            )
+
+                                        # User marker — arrow + value below bar
+                                        with hd.hbox(gap=0, align="start"):
+                                            hd.box(grow=_gu)
+                                            with hd.box(align="center", gap=0):
+                                                hd.text(
+                                                    "▴",
+                                                    font_size="medium",
+                                                    font_color="primary-500",
+                                                )
+                                                hd.text(
+                                                    f"{pauls_k_fit:.1f}s — you",
+                                                    font_size="small",
+                                                    font_color="primary-600",
+                                                )
+                                            hd.box(grow=_SC - _gu)
+
+                                        hd.text(
+                                            f"Paul's Law predicts a balanced athlete's pace will slow 5 seconds per distance doubling.",
+                                            font_color="neutral-600",
+                                            font_size="small",
+                                        )
+
                 else:
                     # Keep show_components False when predictor doesn't support it.
                     if state.chart_show_components:
                         state.chart_show_components = False
 
-            # ---- Paul's Law personalised K description ----
-            if state.chart_predictor == "pauls_law" and pauls_k_fit is not None:
-                with hd.box(align="center", padding_top=0.25):
-                    hd.text(
-                        f"Your Paul's constant: {pauls_k_fit:.1f}s / 500m per distance doubling.",
-                        font_color="neutral-900",
-                        font_size="small",
-                    )
-
-                    hd.text(
-                        "Paul's Law's default is 5.0s/500m. Lower values suggest aerobic dominance; "
-                        "higher values suggest sprint dominance.",
-                        font_color="neutral-600",
-                        font_size="small",
-                    )
+            with hd.box():
+                # ---- World-class comparison toggles ----
+                _wc_compare_section(state, profile, wc_task)
 
 
 # ---------------------------------------------------------------------------
@@ -872,25 +892,13 @@ def _wc_compare_section(state, profile: dict, wc_task) -> None:
     _loading = (
         state.chart_compare_wc and not state.wc_fetch_done and state.wc_fetch_key != ""
     )
-    _failed = (
-        state.chart_compare_wc and state.wc_fetch_done and state.wc_data is None
-    )
+    _failed = state.chart_compare_wc and state.wc_fetch_done and state.wc_data is None
 
     # Compare toggle
-    with hd.select(
-        value=f"{state.chart_compare_wc}_{state.chart_wc_relative}",
-    ) as compare_to_wr_sel:
-        hd.option("not comparing", value="False_False")
-        hd.option("absolutely comparing", value="True_False")
-        hd.option("relatively comparing (%)", value="True_True")
+    compare_to_wr_sel = hd.switch(f"Show {_wc_label} world records", size="medium")
 
     if compare_to_wr_sel.changed:
-        val = compare_to_wr_sel.value.split("_")
-
-        state.chart_compare_wc = val[0] == "True"
-        state.chart_wc_relative = val[1] == "True"
-
-    hd.text(f"with {_wc_label} world records.")
+        state.chart_compare_wc = compare_to_wr_sel.value
 
     if _loading:
         with hd.hbox(gap=0.5, align="center"):
@@ -1252,6 +1260,22 @@ def _prediction_table(
 # ---------------------------------------------------------------------------
 
 
+def _bisect_date_desc(workouts: list, date_str: str) -> int:
+    """
+    Binary search on a newest-first workout list.
+    Returns the first index i such that workouts[i:] are all dated <= date_str.
+    O(log n) versus the O(n) linear scan.
+    """
+    lo, hi = 0, len(workouts)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if (workouts[mid].get("date") or "")[:10] > date_str:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo
+
+
 def _build_ranked_workouts(sync_result, machine: str) -> tuple:
     """
     Extract and quality-filter the ranked non-interval workouts from sync_result.
@@ -1358,14 +1382,13 @@ def _compute_axis_bounds(
 
 def _build_sim_data(
     state,
-    all_ranked_raw: list,
+    ranked_prefilt: list,
+    featured_data: list,
+    prefilt_excl: list,
     sim_date: date,
-    excluded_seasons,
-    selected_dists: set,
-    selected_times: set,
 ) -> tuple:
     """
-    Build everything that depends on the current sim position:
+    Build everything that depends on the current sim position.
 
       sim_wkts       — filtered workouts visible at sim_date
       excluded_wkts  — PBs of user-disabled events (faint background dots)
@@ -1373,15 +1396,30 @@ def _build_sim_data(
       lb_all, lb_all_anchor — all-event lifetime bests
       pauls_k_fit    — personalised Paul's constant (None if < 2 PBs)
       pauls_k        — pauls_k_fit or population default 5.0
+
+    ranked_prefilt: dist/time/excluded-seasons filtered, newest-first.
+    featured_data:  subset of ranked_prefilt that ever set a historical PB/SB
+                    (much smaller for PBs/SBs mode), newest-first.
+    prefilt_excl:   all_ranked_raw filtered by excluded seasons only, newest-first.
+    All three lists are binary-searched by date — no O(n) scan per tick.
     """
-    sim_wkts = sim_workouts_at(
-        all_ranked_raw,
-        sim_date,
-        selected_dists,
-        selected_times,
-        set(excluded_seasons),
-        state.best_filter,
-    )
+    date_str = sim_date.isoformat()
+
+    if state.best_filter == "All":
+        # "All" shows every quality-filtered workout.
+        in_time = ranked_prefilt[_bisect_date_desc(ranked_prefilt, date_str) :]
+        sim_wkts = in_time
+    else:
+        # PBs/SBs: featured_data is the (much smaller) historical PB/SB list.
+        # apply_best_only on this tiny slice is fast.
+        in_time = featured_data[_bisect_date_desc(featured_data, date_str) :]
+        if state.best_filter == "PBs":
+            sim_wkts = apply_best_only(in_time)
+        else:
+            sim_wkts = apply_season_best_only(in_time)
+
+    # Binary-search prefilt_excl once for lb_all and excluded-event dots.
+    excl_in_time = prefilt_excl[_bisect_date_desc(prefilt_excl, date_str) :]
 
     # Workouts for disabled events — plotted faintly, not used in model fits.
     excluded_cats = set()
@@ -1393,24 +1431,19 @@ def _build_sim_data(
             excluded_cats.add(("time", tenths))
     excluded_wkts: list = []
     if excluded_cats:
-        excl_src = [
-            w
-            for w in all_ranked_raw
-            if workout_cat_key(w) in excluded_cats
-            and parse_date(w.get("date", "")) <= sim_date
-            and get_season(w.get("date", "")) not in set(excluded_seasons)
-        ]
-        excluded_wkts = apply_best_only(excl_src)
+        if state.best_filter == "PBs":
+            excluded_wkts = apply_best_only(
+                [w for w in excl_in_time if workout_cat_key(w) in excluded_cats]
+            )
+        elif state.best_filter == "SBs":
+            excluded_wkts = apply_season_best_only(
+                [w for w in excl_in_time if workout_cat_key(w) in excluded_cats]
+            )
+        else:
+            excluded_wkts = excl_in_time
 
     lb, lb_anchor = compute_lifetime_bests(sim_wkts)
-    lb_all, lb_all_anchor = compute_lifetime_bests(
-        [
-            w
-            for w in all_ranked_raw
-            if parse_date(w.get("date", "")) <= sim_date
-            and get_season(w.get("date", "")) not in set(excluded_seasons)
-        ]
-    )
+    lb_all, lb_all_anchor = compute_lifetime_bests(excl_in_time)
     pauls_k_fit = compute_pauls_constant(lb, lb_anchor)
     pauls_k = pauls_k_fit if pauls_k_fit is not None else 5.0
     return (
@@ -1432,24 +1465,18 @@ def _build_sim_data(
 
 def _update_cp_fit(
     state,
-    all_ranked_raw: list,
+    ranked_prefilt: list,
     sim_date: date,
-    excluded_seasons,
-    selected_dists: set,
-    selected_times: set,
 ):
     """
     Compute (or retrieve from cache) the Critical Power fit for the current sim
     position.  Mutates state.cp_fit_key / state.cp_fit_result; returns the params
     dict (or None if the fit failed / insufficient data).
+
+    ranked_prefilt must already be filtered by selected dists/times and excluded
+    seasons — only parse_date() (fast, C-level) is applied here per tick.
     """
-    cp_src = [
-        w
-        for w in all_ranked_raw
-        if (w.get("distance") in selected_dists or w.get("time") in selected_times)
-        and get_season(w.get("date", "")) not in set(excluded_seasons)
-        and parse_date(w.get("date", "")) <= sim_date
-    ]
+    cp_src = [w for w in ranked_prefilt if parse_date(w.get("date", "")) <= sim_date]
     cp_pb_list = []
     for w in apply_best_only(cp_src):
         dur = compute_duration_s(w)
@@ -1647,7 +1674,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
     state = hd.state(
         dist_enabled=tuple(True for _ in RANKED_DISTANCES),
         time_enabled=tuple(True for _ in RANKED_TIMES),
-        best_filter="All",
+        best_filter="SBs",
         chart_log_x=True,
         chart_log_y=False,
         chart_show_lifetime_line=True,
@@ -1673,6 +1700,20 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         wc_fetch_key="",
         wc_fetch_done=False,
         wc_data=None,
+        _ranked_key="",  # cache invalidation key: f"{machine}:{len(workouts)}"
+        _ranked_data=None,  # cached (all_ranked, all_ranked_raw, all_seasons)
+        _display_key="",  # cache invalidation key for _apply_display_filter
+        _display_data=None,  # cached display list
+        _prefilt_key="",  # cache key for pre-filtered ranked list (dist/time/excluded_seasons)
+        _prefilt_data=None,  # list of workouts already filtered by dist/time/excluded_seasons
+        _prefilt_excl_key="",  # cache key for all-event pre-filter (excluded_seasons only)
+        _prefilt_excl_data=None,  # all_ranked_raw filtered by excluded_seasons only
+        _featured_key="",  # cache key for compute_featured_workouts result
+        _featured_data=None,  # historical PB/SB workouts (newest-first)
+        _annot_key="",  # cache key for slider annotations
+        _annot_data=None,  # cached list of {day, label, color} dicts
+        _bounds_key="",  # cache key for _compute_axis_bounds
+        _bounds_data=None,  # cached (x_bounds, y_bounds)
     )
     is_dark = hd.theme().is_dark
 
@@ -1691,12 +1732,17 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
 
     # ── Data ──────────────────────────────────────────────────────────────────
     sync_result = concept2_sync(client)
-    all_ranked, all_ranked_raw, all_seasons = _build_ranked_workouts(
-        sync_result, machine
-    )
 
     if sync_result is None:
         return
+
+    # Cache _build_ranked_workouts — it's expensive (quality-filters all workouts)
+    # and its inputs only change when new workouts arrive or the machine filter changes.
+    _ranked_key = f"{machine}:{len(sync_result[1])}"
+    if state._ranked_key != _ranked_key or state._ranked_data is None:
+        state._ranked_data = _build_ranked_workouts(sync_result, machine)
+        state._ranked_key = _ranked_key
+    all_ranked, all_ranked_raw, all_seasons = state._ranked_data
 
     # ── Filters ───────────────────────────────────────────────────────────────
     selected_dists = {
@@ -1705,9 +1751,52 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
     selected_times = {
         tenths for i, (tenths, _) in enumerate(RANKED_TIMES) if state.time_enabled[i]
     }
-    display = _apply_display_filter(
-        state, all_ranked, selected_dists, selected_times, excluded_seasons
-    )
+
+    _display_key = f"{state._ranked_key}:{sorted(selected_dists)}:{sorted(selected_times)}:{excluded_seasons}:{state.best_filter}"
+    if state._display_key != _display_key or state._display_data is None:
+        state._display_data = _apply_display_filter(
+            state, all_ranked, selected_dists, selected_times, excluded_seasons
+        )
+        state._display_key = _display_key
+    display = state._display_data
+
+    # Pre-filter all_ranked_raw by selected dists/times and excluded seasons once.
+    # Removes get_season() (strptime) from the hot animation path in _update_cp_fit
+    # and _compute_lookahead_overlays — only fast parse_date() runs per tick.
+    _prefilt_key = f"{state._ranked_key}:{sorted(selected_dists)}:{sorted(selected_times)}:{excluded_seasons}"
+    if state._prefilt_key != _prefilt_key or state._prefilt_data is None:
+        _excl_set = set(excluded_seasons)
+        state._prefilt_data = [
+            w
+            for w in all_ranked_raw
+            if (w.get("distance") in selected_dists or w.get("time") in selected_times)
+            and get_season(w.get("date", "")) not in _excl_set
+        ]
+        state._prefilt_key = _prefilt_key
+    _ranked_prefilt = state._prefilt_data
+
+    # All-event pre-filter: excluded seasons only (no dist/time gate).
+    # Used by _build_sim_data for lb_all (all-event lifetime bests) and
+    # excluded-event dots — removes get_season() from those per-tick paths.
+    _prefilt_excl_key = f"{state._ranked_key}:{excluded_seasons}"
+    if state._prefilt_excl_key != _prefilt_excl_key or state._prefilt_excl_data is None:
+        _excl_set2 = set(excluded_seasons)
+        state._prefilt_excl_data = [
+            w for w in all_ranked_raw if get_season(w.get("date", "")) not in _excl_set2
+        ]
+        state._prefilt_excl_key = _prefilt_excl_key
+    _prefilt_excl = state._prefilt_excl_data
+
+    # Featured workouts: the subset of _ranked_prefilt that ever set a new
+    # historical PB or SB.  Much smaller than _ranked_prefilt for PBs/SBs mode;
+    # used by _build_sim_data (date-sliced per tick) and slider annotations.
+    _featured_key = f"{state._prefilt_key}:{state.best_filter}"
+    if state._featured_key != _featured_key or state._featured_data is None:
+        state._featured_data = compute_featured_workouts(
+            _ranked_prefilt, state.best_filter
+        )
+        state._featured_key = _featured_key
+    _featured_data = state._featured_data
 
     # ── Simulation timeline ───────────────────────────────────────────────────
     (
@@ -1719,6 +1808,18 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         included_seasons,
     ) = _compute_sim_timeline(excluded_seasons, all_seasons, state.sim_week)
     show_watts = state.chart_y_metric == "watts"
+
+    # Slider annotations — stable across animation ticks; only recompute when
+    # filters or sim range changes (same inputs as _featured_data + sim_start).
+    _annot_key = f"{_featured_key}:{sim_start}"
+    if state._annot_key != _annot_key or state._annot_data is None:
+        state._annot_data = build_sb_annotations(
+            _featured_data,
+            sim_start,
+            included_seasons,
+            best_filter=state.best_filter,
+        )
+        state._annot_key = _annot_key
 
     # ── Simulation data ───────────────────────────────────────────────────────
     (
@@ -1732,20 +1833,18 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         pauls_k,
     ) = _build_sim_data(
         state,
-        all_ranked_raw,
+        _ranked_prefilt,
+        _featured_data,
+        _prefilt_excl,
         sim_date,
-        excluded_seasons,
-        selected_dists,
-        selected_times,
     )
+
     cp_params = _update_cp_fit(
         state,
-        all_ranked_raw,
+        _ranked_prefilt,
         sim_date,
-        excluded_seasons,
-        selected_dists,
-        selected_times,
     )
+
     rl_task, rl_predictions = _fetch_rowinglevel(state, profile, display, at_today)
     wc_task, wc_data = (
         _load_wc_cp(state, profile) if state.chart_compare_wc else (None, None)
@@ -1757,32 +1856,31 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
     if not at_today:
         sim_overlays, overlay_labels = _compute_lookahead_overlays(
             sim_wkts,
-            all_ranked_raw,
+            _ranked_prefilt,
             sim_date,
             sim_day_idx,
             state,
             total_days,
-            selected_dists,
-            selected_times,
-            included_seasons,
             show_watts,
-            excluded_seasons=excluded_seasons,
         )
-    x_bounds, y_bounds = _compute_axis_bounds(
-        all_ranked_raw,
-        excluded_seasons,
-        show_watts,
-        state.chart_x_metric == "duration",
-        state.chart_log_x,
-    )
+
+    _bounds_key = f"{state._ranked_key}:{excluded_seasons}:{show_watts}:{state.chart_x_metric}:{state.chart_log_x}"
+    if state._bounds_key != _bounds_key or state._bounds_data is None:
+        state._bounds_data = _compute_axis_bounds(
+            all_ranked_raw,
+            excluded_seasons,
+            show_watts,
+            state.chart_x_metric == "duration",
+            state.chart_log_x,
+        )
+        state._bounds_key = _bounds_key
+    x_bounds, y_bounds = state._bounds_data
 
     # Expand y_bounds to include WC records when in absolute compare mode.
     # _compute_axis_bounds is derived from user PBs only; world-class rowers are
     # faster (lower pace / higher watts), so without expansion they'd be clipped.
     _wc_relative_active = (
-        state.chart_compare_wc
-        and wc_data is not None
-        and state.chart_wc_relative
+        state.chart_compare_wc and wc_data is not None and state.chart_wc_relative
     )
     if (
         y_bounds is not None
@@ -1796,14 +1894,16 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
             if pace > 0
         ]
         if _wc_y_vals:
-            _ypad = max((y_bounds[1] - y_bounds[0]) * 0.1, 5.0 if not show_watts else 2.0)
+            _ypad = max(
+                (y_bounds[1] - y_bounds[0]) * 0.1, 5.0 if not show_watts else 2.0
+            )
             y_bounds = (
                 min(y_bounds[0], min(_wc_y_vals) - _ypad),
                 max(y_bounds[1], max(_wc_y_vals) + _ypad),
             )
 
     # ── Render ────────────────────────────────────────────────────────────────
-    with hd.box(gap=1, align="center", padding=(2, 2, 2, 2)):
+    with hd.box(gap=0, align="center", padding=(2, 2, 2, 2)):
         with hd.h1():
             _date_label = sim_date.strftime("%b %d, %Y")
             _best_long = {
@@ -1829,32 +1929,118 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
                         if _bf_btn.clicked:
                             _bf_dd.opened = not _bf_dd.opened
                         with hd.box(
-                            gap=0.1, background_color="neutral-0", min_width=20
+                            padding=1,
+                            gap=1,
+                            background_color="neutral-0",
+                            min_width=24,
                         ):
-                            for val, lbl in _best_long.items():
-                                with hd.scope(f"bf_{val}"):
-                                    _bf_item = hd.button(
-                                        lbl,
-                                        size="small",
-                                        variant="primary"
-                                        if state.best_filter == val
-                                        else "text",
-                                        width="100%",
-                                        border_radius="small",
-                                        font_size="medium",
-                                        font_color="neutral-0"
-                                        if state.best_filter == val
-                                        else "neutral-800",
-                                        label_style=hd.style(
-                                            padding_top=0.5, padding_bottom=0.5
-                                        ),
-                                        hover_background_color="neutral-100",
-                                    )
-                                    if _bf_item.clicked:
-                                        state.best_filter = val
-                                        _bf_dd.opened = False
+                            # ── Plot in graph ─────────────────────────────
+                            hd.text(
+                                "Plot in graph",
+                                font_size="small",
+                                font_weight="semibold",
+                                font_color="neutral-500",
+                            )
+                            with hd.scope("best_filter_rg"):
+                                with radio_group(
+                                    value=state.best_filter, size="small"
+                                ) as _bf_rg:
+                                    hd.radio_button("All Great Efforts", value="All")
+                                    hd.radio_button("PBs only", value="PBs")
+                                    hd.radio_button("SBs only", value="SBs")
+                                if _bf_rg.changed:
+                                    state.best_filter = _bf_rg.value
+
+                            hd.divider()
+
+                            # ── Draw a Power Curve for ────────────────────
+                            hd.text(
+                                "Draw a Power Curve for",
+                                font_size="small",
+                                font_weight="semibold",
+                                font_color="neutral-500",
+                            )
+                            with hd.scope("draw_curves_rg"):
+                                with radio_group(
+                                    value=state.draw_power_curves, size="small"
+                                ) as _dpc_rg:
+                                    hd.radio_button("SBs", value="SBs")
+                                    hd.radio_button("PBs", value="PBs")
+                                    hd.radio_button("None", value="None")
+                                if _dpc_rg.changed:
+                                    state.draw_power_curves = _dpc_rg.value
+
+                # ---- Events dropdown ----
+                _n_ev_sel = sum(state.dist_enabled) + sum(state.time_enabled)
+                _n_ev_tot = len(RANKED_DISTANCES) + len(RANKED_TIMES)
+                _ev_lbl = "All Events" if _n_ev_sel == _n_ev_tot else "Some Events"
+
+                hd.text("for", font_size="medium")
+
+                with hd.dropdown() as _ev_dd:
+                    _ev_btn = hd.button(
+                        _ev_lbl,
+                        font_color="neutral-800",
+                        font_size=2,
+                        font_weight="bold",
+                        caret=True,
+                        size="large",
+                        slot=_ev_dd.trigger,
+                    )
+                    if _ev_btn.clicked:
+                        _ev_dd.opened = not _ev_dd.opened
+                    with hd.box(padding=1, gap=0.5, background_color="neutral-50"):
+                        with hd.hbox(gap=0.5, padding_bottom=0.5):
+                            if hd.button(
+                                "Select all", size="small", variant="text"
+                            ).clicked:
+                                state.dist_enabled = tuple(
+                                    True for _ in RANKED_DISTANCES
+                                )
+                                state.time_enabled = tuple(True for _ in RANKED_TIMES)
+                            if hd.button(
+                                "Clear all", size="small", variant="text"
+                            ).clicked:
+                                state.dist_enabled = tuple(
+                                    False for _ in RANKED_DISTANCES
+                                )
+                                state.time_enabled = tuple(False for _ in RANKED_TIMES)
+                        with hd.scope(str(state.dist_enabled)):
+                            with hd.hbox(gap=0.5, wrap="wrap"):
+                                for i, (dist, label) in enumerate(RANKED_DISTANCES):
+                                    with hd.scope(f"dist_{dist}"):
+                                        cb = hd.checkbox(
+                                            label, checked=state.dist_enabled[i]
+                                        )
+                                        if cb.changed:
+                                            flags = list(state.dist_enabled)
+                                            flags[i] = cb.checked
+                                            state.dist_enabled = tuple(flags)
+                                        if cb.checked != state.dist_enabled[i]:
+                                            cb.checked = state.dist_enabled[i]
+                        hd.text(
+                            "— timed —",
+                            font_color="neutral-300",
+                            font_size="x-small",
+                            padding_top=0.25,
+                        )
+                        with hd.scope(str(state.time_enabled)):
+                            with hd.hbox(gap=0.5, wrap="wrap"):
+                                for i, (tenths, label) in enumerate(RANKED_TIMES):
+                                    with hd.scope(f"time_{tenths}"):
+                                        cb = hd.checkbox(
+                                            label, checked=state.time_enabled[i]
+                                        )
+                                        if cb.changed:
+                                            flags = list(state.time_enabled)
+                                            flags[i] = cb.checked
+                                            state.time_enabled = tuple(flags)
+                                        if cb.checked != state.time_enabled[i]:
+                                            cb.checked = state.time_enabled[i]
+
                 hd.text("through", font_size="medium")
                 hd.text(_date_label, font_size="2x-large", font_weight="normal")
+
             if (
                 at_today
                 and rl_task is not None
@@ -1906,6 +2092,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
             if (state.chart_compare_wc and wc_data is not None)
             else False,
         )
+
         _chart_section(
             state,
             chart_cfg=chart_cfg,
@@ -1918,6 +2105,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
             sim_day_idx=sim_day_idx,
             total_days=total_days,
             sim_start=sim_start,
+            sb_annotations=state._annot_data,
             all_ranked_raw=all_ranked_raw,
             selected_dists=selected_dists,
             selected_times=selected_times,
