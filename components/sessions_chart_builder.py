@@ -426,8 +426,6 @@ def sessions_chart(workouts: list) -> None:
             if (r.get("distance") or 0) + (r.get("rest_distance") or 0) >= 10_000
         ]
 
-    print(state.filter_ivl)
-
     if state.filter_ivl == "Intervals":
         filtered = [
             r for r in filtered if r.get("workout_type") in INTERVAL_WORKOUT_TYPES

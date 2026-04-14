@@ -226,7 +226,7 @@ def _volume_section(all_workouts: list, profile: dict, machine: str = "All") -> 
     """Render the volume controls + stacked bar chart."""
 
     state = hd.state(
-        view="weekly",
+        view="monthly",
         zone_mode="pace intensity",  # "pace intensity" | "hr"
     )
     view = state.view
@@ -342,7 +342,8 @@ def volume_page(client, user_id: str, excluded_seasons=(), machine="All") -> Non
     # Apply global filters
     if excluded_seasons:
         all_workouts = [
-            w for w in all_workouts
+            w
+            for w in all_workouts
             if get_season(w.get("date", "")) not in set(excluded_seasons)
         ]
     if machine != "All":
