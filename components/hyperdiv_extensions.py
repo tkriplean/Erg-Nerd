@@ -60,3 +60,4 @@ class grid_box(hd.box):
     auto_flow = hd.Prop(hd.CSSField("grid-auto-flow", hd.String))
     justify_items = hd.Prop(hd.CSSField("justify-items", hd.String))
     grid_column = hd.Prop(hd.CSSField("grid-column", hd.String))
+    overflow = hd.Prop(hd.CSSField("overflow", hd.String))

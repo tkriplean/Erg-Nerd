@@ -188,7 +188,7 @@ from components.power_curve_chart_builder import (
     compute_lifetime_bests,
 )
 from services.ranked_predictions import build_prediction_table_data
-from components.hyperdiv_extensions import radio_group, shadowed_box
+from components.hyperdiv_extensions import radio_group, shadowed_box, grid_box
 
 
 # ---------------------------------------------------------------------------
@@ -1022,35 +1022,43 @@ def _prediction_table(
     _PRED_COLS.append(("avg", "Average", _DESC_AVG))
 
     _HEADER_BG = "neutral-100"
-    _COL_PROPS = dict(
-        grow=True,
-        width=0,
-        padding=0.5,  # border_right="1px solid neutral-200"
-    )
+    _ACC_BG = "neutral-100"
 
-    with hd.box(border="1px solid neutral-200", border_radius="medium", width="100%"):
-        # ── header ────────────────────────────────────────────────────────
-        with hd.hbox(background_color=_HEADER_BG):
+    # CSS Grid: fixed Event column + one 1fr column per prediction model
+    _col_template = "8rem " + " ".join(["1fr"] * len(_PRED_COLS))
+
+    with grid_box(
+        grid_template_columns=_col_template,
+        border="1px solid neutral-200",
+        border_radius="medium",
+        width="100%",
+        overflow="hidden",
+    ):
+        # ── header row ────────────────────────────────────────────────────
+        with hd.scope("hdr_event"):
             with hd.box(
                 padding=1,
                 background_color=_HEADER_BG,
                 border_right="1px solid neutral-200",
-                width=8,
+                border_bottom="1px solid neutral-200",
             ):
                 hd.text("Event", font_weight="semibold", font_size="small")
-            for col_key, col_label, col_tip in _PRED_COLS:
-                with hd.scope(col_key):
-                    with hd.box(**_COL_PROPS, background_color=_HEADER_BG):
-                        with hd.hbox(gap=0.5, align="center"):
-                            hd.text(
-                                col_label, font_weight="semibold", font_size="small"
+
+        for col_key, col_label, col_tip in _PRED_COLS:
+            with hd.scope(f"hdr_{col_key}"):
+                with hd.box(
+                    padding=(0.75, 0.5),
+                    background_color=_HEADER_BG,
+                    border_bottom="1px solid neutral-200",
+                ):
+                    with hd.hbox(gap=0.5, align="center"):
+                        hd.text(col_label, font_weight="semibold", font_size="small")
+                        with hd.tooltip(col_tip):
+                            hd.icon(
+                                "question-circle",
+                                font_size="small",
+                                font_color="neutral-500",
                             )
-                            with hd.tooltip(col_tip):
-                                hd.icon(
-                                    "question-circle",
-                                    font_size="small",
-                                    font_color="neutral-500",
-                                )
 
         # ── data rows ─────────────────────────────────────────────────────
         for _ri, _row in enumerate(pred_rows):
@@ -1073,15 +1081,16 @@ def _prediction_table(
                     )
                     _ev_enabled = state.time_enabled[_ev_idx]
 
-                with hd.hbox(border_top="1px solid neutral-200"):
+                # Event cell
+                with hd.scope("ev"):
                     with hd.box(
                         padding=1,
                         background_color=_row_bg,
+                        border_top="1px solid neutral-200",
                         border_right="1px solid neutral-200",
-                        width=8,
                     ):
                         with hd.hbox(gap=0.5, align="center"):
-                            with hd.scope(f"ev_toggle_{_row['label']}"):
+                            with hd.scope("toggle"):
                                 with hd.tooltip(
                                     "Include this event's PB in prediction "
                                     "calculations? More accurate predictions "
@@ -1108,63 +1117,68 @@ def _prediction_table(
                                 else "neutral-400",
                             )
 
-                    for col_key, col_label, _tip in _PRED_COLS:
-                        with hd.scope(col_key):
-                            _pace_val = _row.get(f"{col_key}_pace")
-                            _result_val = _row.get(f"{col_key}_result")
-                            _pred_raw = _row.get(f"{col_key}_raw")
-                            has_delta = (
-                                col_key != "pb"
-                                and _pred_raw is not None
-                                and _pb_raw is not None
-                            )
-                            if has_delta:
-                                _delta = _pred_raw - _pb_raw
-                                _delta_s = f"{_delta:+.1f}s"
-                                _delta_color = (
-                                    "success-600"
-                                    if _delta < 0
-                                    else "danger-600"
-                                    if _delta > 0
-                                    else "neutral-500"
-                                )
-                            _is_pb_col = col_key == "pb"
-                            _pace_color = (
-                                "neutral-300"
-                                if _is_pb_col and not _ev_enabled
-                                else "neutral-900"
-                            )
-                            _result_color = (
-                                "neutral-300"
-                                if _is_pb_col and not _ev_enabled
+                # Prediction cells
+                for col_key, col_label, _tip in _PRED_COLS:
+                    with hd.scope(col_key):
+                        _pace_val = _row.get(f"{col_key}_pace")
+                        _result_val = _row.get(f"{col_key}_result")
+                        _pred_raw = _row.get(f"{col_key}_raw")
+                        has_delta = (
+                            col_key != "pb"
+                            and _pred_raw is not None
+                            and _pb_raw is not None
+                        )
+                        if has_delta:
+                            _delta = _pred_raw - _pb_raw
+                            _delta_s = f"{_delta:+.1f}s"
+                            _delta_color = (
+                                "success-600"
+                                if _delta < 0
+                                else "danger-600"
+                                if _delta > 0
                                 else "neutral-500"
                             )
-                            with hd.box(**_COL_PROPS, background_color=_row_bg):
-                                if _pace_val:
-                                    with hd.hbox(gap=0.5):
+                        _is_pb_col = col_key == "pb"
+                        _pace_color = (
+                            "neutral-300"
+                            if _is_pb_col and not _ev_enabled
+                            else "neutral-900"
+                        )
+                        _result_color = (
+                            "neutral-300"
+                            if _is_pb_col and not _ev_enabled
+                            else "neutral-500"
+                        )
+                        with hd.box(
+                            padding=0.5,
+                            background_color=_row_bg,
+                            border_top="1px solid neutral-200",
+                        ):
+                            if _pace_val:
+                                with hd.hbox(gap=0.5):
+                                    hd.text(
+                                        _pace_val,
+                                        font_size="large",
+                                        font_weight="semibold",
+                                        font_color=_pace_color,
+                                    )
+                                    if has_delta:
                                         hd.text(
-                                            _pace_val,
-                                            font_size="large",
-                                            font_weight="semibold",
-                                            font_color=_pace_color,
+                                            _delta_s,
+                                            font_size="small",
+                                            font_color=_delta_color,
                                         )
-                                        if has_delta:
-                                            hd.text(
-                                                _delta_s,
-                                                font_size="small",
-                                                font_color=_delta_color,
-                                            )
-                                    hd.text(
-                                        _result_val or "",
-                                        font_size="x-small",
-                                        font_color=_result_color,
-                                    )
-                                else:
-                                    hd.text(
-                                        "—",
-                                        font_size="small",
-                                        font_color="neutral-300",
-                                    )
+                                hd.text(
+                                    _result_val or "",
+                                    font_size="x-small",
+                                    font_color=_result_color,
+                                )
+                            else:
+                                hd.text(
+                                    "—",
+                                    font_size="small",
+                                    font_color="neutral-300",
+                                )
 
         # ── accuracy row ──────────────────────────────────────────────────
         _acc_vals: dict = {}
@@ -1194,13 +1208,13 @@ def _prediction_table(
             else:
                 _acc_vals[_ck] = {"rmse": None, "r2": None, "n": 0}
 
-        _ACC_BG = "neutral-100"
-        with hd.hbox(border_top="2px solid neutral-300"):
+        # Accuracy label cell
+        with hd.scope("acc_label"):
             with hd.box(
                 padding=1,
                 background_color=_ACC_BG,
+                border_top="2px solid neutral-300",
                 border_right="1px solid neutral-200",
-                width=8,
             ):
                 with hd.hbox(gap=0.5, align="center"):
                     hd.text(
@@ -1221,33 +1235,44 @@ def _prediction_table(
                             font_color="neutral-600",
                         )
 
-            with hd.box(**_COL_PROPS, background_color=_ACC_BG):
+        # PB column accuracy cell (always —)
+        with hd.scope("acc_pb"):
+            with hd.box(
+                padding=0.5,
+                background_color=_ACC_BG,
+                border_top="2px solid neutral-300",
+            ):
                 hd.text("—", font_size="small", font_color="neutral-600")
 
-            for _ck, _cl, _ct in _PRED_COLS[1:]:
-                with hd.scope(f"acc_{_ck}"):
-                    _av = _acc_vals.get(_ck, {"rmse": None, "r2": None, "n": 0})
-                    with hd.box(**_COL_PROPS, background_color=_ACC_BG):
-                        if _av["rmse"] is not None:
+        # Other model accuracy cells
+        for _ck, _cl, _ct in _PRED_COLS[1:]:
+            with hd.scope(f"acc_{_ck}"):
+                _av = _acc_vals.get(_ck, {"rmse": None, "r2": None, "n": 0})
+                with hd.box(
+                    padding=0.5,
+                    background_color=_ACC_BG,
+                    border_top="2px solid neutral-300",
+                ):
+                    if _av["rmse"] is not None:
+                        hd.text(
+                            f"{_av['rmse']:.2f}s",
+                            font_size="large",
+                            font_weight="semibold",
+                            font_color="neutral-800",
+                        )
+                        if _av["r2"] is not None:
                             hd.text(
-                                f"{_av['rmse']:.2f}s",
-                                font_size="large",
-                                font_weight="semibold",
-                                font_color="neutral-800",
-                            )
-                            if _av["r2"] is not None:
-                                hd.text(
-                                    f"R²={_av['r2']:.3f}",
-                                    font_size="small",
-                                    font_color="neutral-600",
-                                )
-                            hd.text(
-                                f"n={_av['n']}",
+                                f"R²={_av['r2']:.3f}",
                                 font_size="small",
                                 font_color="neutral-600",
                             )
-                        else:
-                            hd.text("—", font_size="small", font_color="neutral-600")
+                        hd.text(
+                            f"n={_av['n']}",
+                            font_size="small",
+                            font_color="neutral-600",
+                        )
+                    else:
+                        hd.text("—", font_size="small", font_color="neutral-600")
 
 
 # ---------------------------------------------------------------------------

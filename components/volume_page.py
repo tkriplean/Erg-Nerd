@@ -50,42 +50,12 @@ from services.heartrate_utils import (
 from services.rowinglevel import _PROFILE_DEFAULTS
 from components.volume_chart_builder import build_volume_chart_config, get_period_rows
 from components.volume_chart_plugin import VolumeChart
+from components.hyperdiv_extensions import grid_box
 
 # HR Z3 sub-zones: bin 2 = Z4 Threshold (80–90 %), bin 1 = Z5 Max (> 90 %)
 _HR_Z3A_BINS = frozenset({2})  # Threshold
 _HR_Z3B_BINS = frozenset({1})  # Max
 _HR_NO_DATA_BINS = frozenset({6})  # "No HR" — excluded from classification denominator
-
-# ---------------------------------------------------------------------------
-# Distribution colour helpers
-# ---------------------------------------------------------------------------
-
-_DIST_COLORS = {
-    "Polarized": ("rgba(50,130,220,0.9)", "rgba(20,105,195,0.9)"),
-    "Pyramidal": ("rgba(55,180,80,0.9)", "rgba(25,150,50,0.9)"),
-    "Threshold": ("rgba(225,125,35,0.9)", "rgba(205,95,15,0.9)"),
-    "High Intensity": ("rgba(215,55,55,0.9)", "rgba(195,35,35,0.9)"),
-    "Easy / LSD": ("rgba(115,170,230,0.9)", "rgba(80,140,205,0.9)"),
-    "Mixed": ("rgba(150,150,150,0.9)", "rgba(120,120,120,0.9)"),
-}
-
-
-def _dist_badge(label: str, is_dark: bool) -> None:
-    """Render a small coloured pill for a distribution classification."""
-    colors = _DIST_COLORS.get(label)
-    if colors is None:
-        hd.text(label, font_size="small", font_color="neutral-500")
-        return
-    color = colors[0] if is_dark else colors[1]
-    hd.box(
-        label,
-        background_color=color,
-        border_radius="full",
-        padding=(0.25, 0.75),
-        font_size="small",
-        font_color="neutral-0",
-        font_weight="semibold",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -100,60 +70,165 @@ _PERIOD_HEADERS = {
 
 
 def _distribution_table(
-    rows: list, view: str, zone_mode: str = "pace intensity"
+    rows: list, view: str, zone_mode: str = "pace_intensity"
 ) -> None:
     """
-    Render a data table with one row per period showing zone breakdowns
-    and a training distribution classification.
+    Render a sortable CSS Grid table with one row per period showing zone
+    breakdowns and a training distribution classification.
 
     Pace mode columns:
-      Period | Total | Rest
-      | Z1 Easy\n(Fast & Slow Aerobic) | Z2 Threshold
-      | Z3 Hard\n(5k + 2k + Fast) | Distribution
+      Period | Total | Rest | Z1 Easy | Z2 Threshold | Z3 Hard | Distribution
 
     HR mode columns:
-      Period | Total | Rest
-      | Easy (<70%) | Tempo (70–80%)
+      Period | Total | Rest | Easy (<70%) | Tempo (70–80%)
       | Threshold (80–90%) | Max (90%+) | Distribution
+
+    Sort state resets when view or zone_mode changes (via scope key).
     """
     period_col = _PERIOD_HEADERS.get(view, "Period")
 
-    col_period = tuple(r["label"] for r in rows)
-    col_total = tuple(r["total"] for r in rows)
-    col_rest = tuple(r["rest"] for r in rows)
-    col_dist = tuple(r["distribution"] for r in rows)
-
+    # Column definitions: (header_label, sort_key, css_width, render_fn)
+    # render_fn=None → Distribution badge rendered specially
     if zone_mode == "hr":
-        col_z1 = tuple(f"{r['z1_m']}  ({r['z1_pct']})" for r in rows)
-        col_z2 = tuple(f"{r['z2_m']}  ({r['z2_pct']})" for r in rows)
-        col_z3a = tuple(f"{r['z3a_m']}  ({r['z3a_pct']})" for r in rows)
-        col_z3b = tuple(f"{r['z3b_m']}  ({r['z3b_pct']})" for r in rows)
-        table_data = {
-            period_col: col_period,
-            "Total": col_total,
-            "Rest": col_rest,
-            "Easy (<70%)": col_z1,
-            "Tempo (70–80%)": col_z2,
-            "Threshold (80–90%)": col_z3a,
-            "Max (90%+)": col_z3b,
-            "Distribution": col_dist,
-        }
+        col_defs = [
+            (period_col, "idx", "9rem", lambda r: r["label"]),
+            ("Total", "total", "7rem", lambda r: r["total"]),
+            ("Rest", "rest", "7rem", lambda r: r["rest"]),
+            (
+                "Easy (<70%)",
+                "z1",
+                "minmax(9rem,1fr)",
+                lambda r: f"{r['z1_m']}  ({r['z1_pct']})",
+            ),
+            (
+                "Tempo (70–80%)",
+                "z2",
+                "minmax(9rem,1fr)",
+                lambda r: f"{r['z2_m']}  ({r['z2_pct']})",
+            ),
+            (
+                "Threshold (80–90%)",
+                "z3a",
+                "minmax(9rem,1fr)",
+                lambda r: f"{r.get('z3a_m', '—')}  ({r.get('z3a_pct', '0%')})",
+            ),
+            (
+                "Max (90%+)",
+                "z3b",
+                "minmax(9rem,1fr)",
+                lambda r: f"{r.get('z3b_m', '—')}  ({r.get('z3b_pct', '0%')})",
+            ),
+            ("Distribution", "dist", "9rem", None),
+        ]
     else:
-        col_z1 = tuple(f"{r['z1_m']}  ({r['z1_pct']})" for r in rows)
-        col_z2 = tuple(f"{r['z2_m']}  ({r['z2_pct']})" for r in rows)
-        col_z3 = tuple(f"{r['z3_m']}  ({r['z3_pct']})" for r in rows)
-        table_data = {
-            period_col: col_period,
-            "Total": col_total,
-            "Rest": col_rest,
-            "Z1 Easy\n(Fast & Slow Aerobic)": col_z1,
-            "Z2 Threshold": col_z2,
-            "Z3 Hard\n(5k + 2k + Fast)": col_z3,
-            "Distribution": col_dist,
-        }
+        col_defs = [
+            (period_col, "idx", "9rem", lambda r: r["label"]),
+            ("Total", "total", "7rem", lambda r: r["total"]),
+            ("Rest", "rest", "7rem", lambda r: r["rest"]),
+            (
+                "Z1 Easy",
+                "z1",
+                "minmax(9rem,1fr)",
+                lambda r: f"{r['z1_m']}  ({r['z1_pct']})",
+            ),
+            (
+                "Z2 Threshold",
+                "z2",
+                "minmax(9rem,1fr)",
+                lambda r: f"{r['z2_m']}  ({r['z2_pct']})",
+            ),
+            (
+                "Z3 Hard",
+                "z3",
+                "minmax(9rem,1fr)",
+                lambda r: f"{r['z3_m']}  ({r['z3_pct']})",
+            ),
+            ("Distribution", "dist", "9rem", None),
+        ]
 
-    with hd.box(padding=(1, 0, 0, 0)):
-        hd.data_table(table_data, rows_per_page=20)
+    col_template = " ".join(w for _, _, w, _ in col_defs)
+    n_cols = len(col_defs)
+
+    # Reset sort when view or zone_mode changes
+    with hd.scope(f"{view}_{zone_mode}"):
+        # Default: idx asc=False → index 0 (newest) first
+        sort = hd.state(col="idx", asc=True)
+
+        # Sort rows (rows are already newest-first at index 0)
+        _SORT_KEYS = {
+            "idx": lambda i, r: i,
+            "total": lambda i, r: r.get("total_raw", 0),
+            "rest": lambda i, r: r.get("rest_raw", 0),
+            "z1": lambda i, r: r.get("z1_raw", 0),
+            "z2": lambda i, r: r.get("z2_raw", 0),
+            "z3": lambda i, r: r.get("z3_raw", 0),
+            "z3a": lambda i, r: r.get("z3a_raw", 0),
+            "z3b": lambda i, r: r.get("z3b_raw", 0),
+            "dist": lambda i, r: r.get("distribution", ""),
+        }
+        key_fn = _SORT_KEYS.get(sort.col, _SORT_KEYS["idx"])
+        indexed = list(enumerate(rows))
+        sorted_rows = sorted(indexed, key=lambda p: key_fn(*p), reverse=not sort.asc)
+
+        with hd.box(padding=(1, 0, 0, 0)):
+            with grid_box(
+                grid_template_columns=col_template,
+                width="100%",
+                border="1px solid neutral-200",
+                border_radius="medium",
+                overflow="hidden",
+            ):
+                # ── Header row ─────────────────────────────────────────────
+                for ci, (header, col_key, _, _) in enumerate(col_defs):
+                    with hd.scope(f"hdr_{col_key}"):
+                        is_sorted = sort.col == col_key
+                        arrow = (" ▲" if sort.asc else " ▼") if is_sorted else ""
+                        cell_props = dict(
+                            padding=(0.5, 0.75),
+                            background_color="neutral-50",
+                            border_bottom="1px solid neutral-200",
+                            align="center",
+                        )
+                        if ci < n_cols - 1:
+                            cell_props["border_right"] = "1px solid neutral-200"
+                        with hd.box(**cell_props):
+                            btn = hd.button(
+                                f"{header}{arrow}",
+                                variant="text",
+                                font_size="small",
+                                font_weight="semibold",
+                                font_color="neutral-700"
+                                if is_sorted
+                                else "neutral-500",
+                            )
+                            if btn.clicked:
+                                if sort.col == col_key:
+                                    sort.asc = not sort.asc
+                                else:
+                                    sort.col = col_key
+                                    # First click: descending for numeric cols, ascending for period/dist
+                                    sort.asc = col_key in ("idx", "dist")
+
+                # ── Data rows ──────────────────────────────────────────────
+                for orig_i, row in sorted_rows:
+                    row_bg = "neutral-50" if orig_i % 2 == 0 else "neutral-0"
+                    with hd.scope(f"row_{orig_i}"):
+                        for ci, (_, col_key, _, render_fn) in enumerate(col_defs):
+                            with hd.scope(f"c{ci}{col_key}"):
+                                cell_props = dict(
+                                    padding=(0.5, 0.75),
+                                    background_color=row_bg,
+                                    border_top="1px solid neutral-100",
+                                    align="end",
+                                    justify="center",
+                                )
+                                if ci < n_cols - 1:
+                                    cell_props["border_right"] = "1px solid neutral-100"
+                                with hd.box(**cell_props):
+                                    if col_key == "dist":
+                                        hd.text(row["distribution"])
+                                    else:
+                                        hd.text(render_fn(row), font_size="small")
 
 
 # ---------------------------------------------------------------------------
@@ -219,15 +294,13 @@ def _hr_callout(all_workouts: list, profile: dict) -> tuple:
             font_color="neutral-400",
         )
 
-    return max_hr, max_hr is not None
-
 
 def _volume_section(all_workouts: list, profile: dict, machine: str = "All") -> None:
     """Render the volume controls + stacked bar chart."""
 
     state = hd.state(
         view="monthly",
-        zone_mode="pace intensity",  # "pace intensity" | "hr"
+        zone_mode="pace_intensity",  # "pace_intensity" | "hr"
     )
     view = state.view
     machine_filter = None if machine == "All" else {machine}
@@ -236,13 +309,10 @@ def _volume_section(all_workouts: list, profile: dict, machine: str = "All") -> 
         hd.h1("How Does Your Work Stack Up?")
 
         # ── HR callout (only in HR mode) — must come before chart to resolve max_hr ──
-        max_hr = None
-        hr_ok = True
-        if state.zone_mode == "hr":
-            max_hr, hr_ok = _hr_callout(all_workouts, profile)
+        max_hr, is_estimated = resolve_max_hr(profile, all_workouts)
 
         # ── Compute chart data ────────────────────────────────────────────────────
-        if state.zone_mode == "hr" and not hr_ok:
+        if state.zone_mode == "hr" and not max_hr:
             # No max HR — skip chart and table; callout already rendered above.
             return
         elif state.zone_mode == "hr":
@@ -299,27 +369,31 @@ def _volume_section(all_workouts: list, profile: dict, machine: str = "All") -> 
         # ── Controls row ─────────────────────────────────────────────────────────
         with hd.hbox(gap=3, align="center", padding=(0, 0, 1, 0), wrap="wrap"):
             # View radio group (Weekly / Monthly / Seasonal)
-            view_rg = hd.radio_buttons(
-                "Weekly",
-                "Monthly",
-                "Seasonal",
-                value=state.view.capitalize(),
+            with hd.radio_buttons(
+                value=state.view,
                 font_size="small",
-            )
+            ) as view_rg:
+                hd.radio_button("Weekly", value="weekly")
+                hd.radio_button("Monthly", value="monthly")
+                hd.radio_button("Seasonal", value="seasonal")
+
             if view_rg.changed:
                 state.view = view_rg.value.lower()
 
             # Zone mode radio group (Pace / HR)
-            mode_rg = hd.radio_buttons(
-                "Pace Intensity",
-                "HR Intensity",
-                value="Pace Intensity"
-                if state.zone_mode == "pace intensity"
-                else "HR Intensity",
+            with hd.radio_buttons(
+                value=state.zone_mode,
                 font_size="small",
-            )
+            ) as mode_rg:
+                hd.radio_button("Pace Intensity", value="pace_intensity")
+                hd.radio_button("HR Intensity", value="hr")
+
             if mode_rg.changed:
-                state.zone_mode = mode_rg.value.lower()
+                state.zone_mode = mode_rg.value
+                print(state.zone_mode)
+
+        if state.zone_mode == "hr":
+            _hr_callout(all_workouts, profile)
 
         # ── Distribution table ───────────────────────────────────────────────────
         if rows:

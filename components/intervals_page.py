@@ -15,8 +15,9 @@ dimensions of interval training are shown simultaneously:
       Continuous (≥10:1)  ·  Short (3–10:1)  ·  Balanced (≈1:1)
       Long (1:2–4)        ·  Very Long (<1:4)
 
-Grid is rendered column-first so all cells in a column share the same width,
-avoiding the misalignment that flex row-first causes. Each populated cell is
+Grid is rendered with CSS Grid (row-first) so column widths are set globally
+via grid_template_columns, eliminating the old column-first flex nesting.
+Each populated cell is
 a full-width button with an hd.tooltip showing a physiological description.
 Button variant encodes average Z3 intensity of sessions in that cell:
     neutral  → mostly aerobic (avg Z3 < 25 %)
@@ -73,7 +74,7 @@ from services.volume_bins import (
     swatch_svg,
 )
 from services.formatters import fmt_date, fmt_distance, fmt_hr, fmt_split, format_time
-from components.hyperdiv_extensions import aligned_button
+from components.hyperdiv_extensions import aligned_button, grid_box
 from components.workout_table import WorkoutTable, ColumnDef, COL_LINK
 
 
@@ -545,10 +546,11 @@ def _zone_filter_legend(state) -> None:
 
 def _grid_browser(zone_workouts: list[dict], state) -> None:
     """
-    Render the 2D work-duration × rest:work grid.
+    Render the 2D work-duration × rest:work grid using CSS Grid.
 
-    Layout is column-first: all cells in a column share one parent box, so
-    column widths are naturally uniform regardless of cell content length.
+    Single grid_box with grid_template_columns = row-label col + N data cols.
+    All cells are direct grid children (row-first order), so CSS Grid guarantees
+    uniform column widths without column-first nesting.
 
     Each populated cell is a full-width button wrapped in an hd.tooltip.
     Clicking a cell toggles it in state.active_cells (multi-select = OR union).
@@ -561,10 +563,13 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
 
     active_cells: frozenset[str] = frozenset(state.active_cells)
 
+    # CSS Grid template: fixed row-label column + equal-width data columns
+    col_template = f"{_ROW_LABEL_W}rem " + " ".join(["1fr"] * _N_COLS)
+
     with hd.box(margin_top=1):
         # Axis label row (small arrows above the grid)
         with hd.hbox(gap=0, align="center", padding=(0, 0, 0.25, 0)):
-            # Corner area — vertical axis label pointing downward
+            # Corner area — spacer aligned with row-label column
             with hd.box(
                 width=_ROW_LABEL_W,
                 align="start",
@@ -572,7 +577,7 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                 padding=(0, 0.5, 0, 0),
             ):
                 pass
-            # Horizontal axis label pointing right — spans the 6 data columns
+            # Horizontal axis label pointing right — spans the data columns
             with hd.hbox(gap=0.4, align="center", grow=True):
                 hd.text(
                     "Work duration",
@@ -582,16 +587,24 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                 )
                 hd.icon("arrow-right", font_size="small", font_color="neutral-400")
 
-        # Main grid — column-first layout
-        with hd.hbox(gap=0, align="stretch"):
-            # Row-labels column
-            with hd.box(width=_ROW_LABEL_W, border_right="1px solid neutral-200"):
+        # Main grid — CSS Grid (row-first; column widths set globally)
+        with grid_box(
+            grid_template_columns=col_template,
+            border="1px solid neutral-200",
+            border_radius="medium",
+            overflow="hidden",
+        ):
+            # ── Header row ────────────────────────────────────────────────
+            # Corner cell
+            with hd.scope("corner"):
                 with hd.hbox(
                     gap=0.4,
                     align="center",
                     justify="end",
                     height=_HEADER_H,
                     padding=(0.4, 0.6),
+                    border_right="1px solid neutral-200",
+                    border_bottom="1px solid neutral-200",
                 ):
                     hd.text(
                         "Work : rest",
@@ -601,14 +614,39 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                     )
                     hd.icon("arrow-down", font_size="small", font_color="neutral-400")
 
-                for ri, (row_label, ratio_range, _, _) in enumerate(_RATIO_ROWS):
-                    with hd.scope(f"rl_{ri}"):
+            # Column header cells
+            for ci, (col_label, _, _) in enumerate(_DUR_COLS):
+                with hd.scope(f"hdr_{ci}"):
+                    cell_props = dict(
+                        height=_HEADER_H,
+                        padding=(0.3, 0.3),
+                        align="center",
+                        justify="center",
+                        border_bottom="1px solid neutral-200",
+                    )
+                    if ci < _N_COLS - 1:
+                        cell_props["border_right"] = "1px solid neutral-200"
+                    with hd.box(**cell_props):
+                        hd.text(
+                            col_label,
+                            font_size="small",
+                            font_weight="bold",
+                            font_color="neutral-600",
+                            text_align="center",
+                        )
+
+            # ── Data rows ─────────────────────────────────────────────────
+            for ri, (row_label, ratio_range, _, _) in enumerate(_RATIO_ROWS):
+                with hd.scope(f"row_{ri}"):
+                    # Row label cell
+                    with hd.scope("lbl"):
                         with hd.box(
                             height=_CELL_H,
                             padding=(0.4, 0.6),
                             align="end",
                             justify="center",
                             border_top="1px solid neutral-200",
+                            border_right="1px solid neutral-200",
                             gap=0.1,
                         ):
                             hd.text(
@@ -616,88 +654,68 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                                 font_size="small",
                                 font_weight="bold",
                                 font_color="neutral-600",
-                                # text_align="right",
                             )
                             hd.text(
                                 ratio_range,
                                 font_size="small",
                                 font_color="neutral-400",
-                                # text_align="right",
                             )
 
-            # Data columns
-            for ci, (col_label, _, _) in enumerate(_DUR_COLS):
-                with hd.scope(f"col_{ci}"):
-                    with hd.box(grow=True, border_left="1px solid neutral-200"):
-                        # Column header
-                        with hd.box(
-                            height=_HEADER_H,
-                            padding=(0.3, 0.3),
-                            align="center",
-                            justify="center",
-                            border_bottom="1px solid neutral-200",
-                        ):
-                            hd.text(
-                                col_label,
-                                font_size="small",
-                                font_weight="bold",
-                                font_color="neutral-600",
-                                text_align="center",
+                    # Data cells
+                    for ci in range(_N_COLS):
+                        k = _cell_key(ci, ri)
+                        workouts_in_cell = cell_workouts.get(k, [])
+                        count = len(workouts_in_cell)
+                        stimulus = _STIMULI[ri][ci]
+                        tooltip_text = _TOOLTIPS[ri][ci]
+                        is_sel = k in active_cells
+                        has_data = count > 0
+
+                        avg_z3 = (
+                            sum(r["_z3"] for r in workouts_in_cell) / count
+                            if has_data
+                            else 0.0
+                        )
+
+                        with hd.scope(f"c{ci}"):
+                            display_label = stimulus if stimulus != "—" else "Other"
+                            cell_props = dict(
+                                border_top="1px solid neutral-200",
+                                height=_CELL_H,
+                                width="100%",
                             )
+                            if ci < _N_COLS - 1:
+                                cell_props["border_right"] = "1px solid neutral-200"
 
-                        # Row cells
-                        for ri in range(_N_ROWS):
-                            k = _cell_key(ci, ri)
-                            workouts_in_cell = cell_workouts.get(k, [])
-                            count = len(workouts_in_cell)
-                            stimulus = _STIMULI[ri][ci]
-                            tooltip_text = _TOOLTIPS[ri][ci]
-                            is_sel = k in active_cells
-                            has_data = count > 0
-
-                            avg_z3 = (
-                                sum(r["_z3"] for r in workouts_in_cell) / count
-                                if has_data
-                                else 0.0
-                            )
-
-                            with hd.scope(f"r{ri}"):
-                                display_label = stimulus if stimulus != "—" else "Other"
-                                if has_data:
-                                    tip = (
-                                        tooltip_text if tooltip_text else display_label
-                                    )
-                                    # Thin border wrapper; button fills width+height.
-                                    with hd.box(
-                                        border_top="1px solid neutral-200",
-                                        padding=0,
-                                        line_height="normal",
-                                        align="center",
-                                        justify="center",
-                                        height="100%",
-                                        width="100%",
-                                        # overflow="hidden",
-                                    ):
-                                        with hd.tooltip(tip, width="100%", distance=20):
-                                            with aligned_button(
-                                                variant=_cell_variant(avg_z3),
-                                                outline=not is_sel,
-                                                width="100%",
-                                                height=_CELL_H,
-                                                padding=(0, 0.2),
-                                                line_height="normal",
-                                                align="center",
-                                            ) as cell_btn:
-                                                hd.text(
-                                                    str(count),
-                                                    font_size="medium",
-                                                    font_weight="bold",
-                                                )
-                                                hd.text(
-                                                    display_label,
-                                                    font_size="x-small",
-                                                    text_align="center",
-                                                )
+                            if has_data:
+                                tip = tooltip_text if tooltip_text else display_label
+                                with hd.box(
+                                    **cell_props,
+                                    padding=0,
+                                    line_height="normal",
+                                    align="center",
+                                    justify="center",
+                                ):
+                                    with hd.tooltip(tip, width="100%", distance=20):
+                                        with aligned_button(
+                                            variant=_cell_variant(avg_z3),
+                                            outline=not is_sel,
+                                            width="100%",
+                                            height=_CELL_H,
+                                            padding=(0, 0.2),
+                                            line_height="normal",
+                                            align="center",
+                                        ) as cell_btn:
+                                            hd.text(
+                                                str(count),
+                                                font_size="medium",
+                                                font_weight="bold",
+                                            )
+                                            hd.text(
+                                                display_label,
+                                                font_size="x-small",
+                                                text_align="center",
+                                            )
                                     if cell_btn.clicked:
                                         sel = set(state.active_cells)
                                         if is_sel:
@@ -705,33 +723,30 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                                         else:
                                             sel.add(k)
                                         state.active_cells = tuple(sorted(sel))
-                                else:
-                                    # Empty cell — muted coverage map, same
-                                    # size as data cells via explicit height.
-                                    with hd.box(
-                                        border_top="1px solid neutral-200",
-                                        padding=(0, 0.2),
-                                        align="center",
-                                        justify="center",
-                                        background_color="neutral-0",
-                                        height="100%",
-                                        width="100%",
-                                    ):
-                                        if tooltip_text:
-                                            with hd.tooltip(tooltip_text, distance=20):
-                                                hd.text(
-                                                    display_label,
-                                                    font_size="x-small",
-                                                    font_color="neutral-200",
-                                                    text_align="center",
-                                                )
-                                        else:
+                            else:
+                                # Empty cell — muted coverage map
+                                with hd.box(
+                                    **cell_props,
+                                    padding=(0, 0.2),
+                                    align="center",
+                                    justify="center",
+                                    background_color="neutral-0",
+                                ):
+                                    if tooltip_text:
+                                        with hd.tooltip(tooltip_text, distance=20):
                                             hd.text(
                                                 display_label,
                                                 font_size="x-small",
                                                 font_color="neutral-200",
                                                 text_align="center",
                                             )
+                                    else:
+                                        hd.text(
+                                            display_label,
+                                            font_size="x-small",
+                                            font_color="neutral-200",
+                                            text_align="center",
+                                        )
 
 
 # ---------------------------------------------------------------------------
@@ -881,7 +896,7 @@ def intervals_page(client, user_id: str, excluded_seasons=(), machine="All") -> 
     with hd.box(align="center", gap=1, padding=(2, 2, 2, 2)):
         hd.h1("Review Your Fondest Interval Sessions")
 
-        with hd.box():
+        with hd.box(width="100%"):
             # Pre-compute non-cell filters so the grid counts stay in sync with
             # the active pace-zone and structure filters.
             pre_filtered = _filter_by_bins(all_intervals, set(state.active_bins))

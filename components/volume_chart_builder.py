@@ -450,6 +450,12 @@ def get_period_rows(
             "z2_pct": _pct(z2_m, work),
             "z3_pct": _pct(z3_m, work),
             "distribution": dist,
+            # Raw numeric values for sort (metres, integers)
+            "total_raw": total,
+            "rest_raw": rest,
+            "z1_raw": z1_m,
+            "z2_raw": z2_m,
+            "z3_raw": z3_m,
         }
 
         if z3a_bins is not None and z3b_bins is not None:
@@ -459,6 +465,8 @@ def get_period_rows(
             row["z3a_pct"] = _pct(z3a_m, work)
             row["z3b_m"] = fmt_meters(z3b_m)
             row["z3b_pct"] = _pct(z3b_m, work)
+            row["z3a_raw"] = z3a_m
+            row["z3b_raw"] = z3b_m
 
         rows.append(row)
     return rows
