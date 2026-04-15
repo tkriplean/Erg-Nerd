@@ -62,7 +62,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
   // Config post-processing: attach JS callbacks that can't be serialised
   // -----------------------------------------------------------------------
 
-  function buildOptions(options, showWatts, xMode) {
+  function buildOptions(options, showWatts, xMode, rankedDists, rankedDurations) {
     // Deep-clone so we never mutate the prop value.
     const opts = JSON.parse(JSON.stringify(options));
     const useDuration = xMode === "duration";
@@ -78,25 +78,18 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     }
 
     // X-axis: formatter + gridlines pinned to ranked distances or durations.
+    // Values come from Python (config._ranked_dists / config._ranked_durations).
     if (opts.scales && opts.scales.x) {
       opts.scales.x.ticks = opts.scales.x.ticks || {};
       opts.scales.x.ticks.callback = (val) => xLabelFn(val);
       const _xMin = opts.scales.x.min || 0;
       const _xMax = opts.scales.x.max || Infinity;
-      if (useDuration) {
-        // Gridlines at standard ranked durations (seconds).
-        opts.scales.x.afterBuildTicks = (axis) => {
-          axis.ticks = [10, 60, 120, 240, 600, 1800, 3600, 7200]
-            .filter(v => v >= _xMin && v <= _xMax)
-            .map(v => ({ value: v }));
-        };
-      } else {
-        opts.scales.x.afterBuildTicks = (axis) => {
-          axis.ticks = [100, 500, 1000, 2000, 5000, 6000, 10000, 21097, 42195]
-            .filter(v => v >= _xMin && v <= _xMax)
-            .map(v => ({ value: v }));
-        };
-      }
+      const gridValues = useDuration ? rankedDurations : rankedDists;
+      opts.scales.x.afterBuildTicks = (axis) => {
+        axis.ticks = gridValues
+          .filter(v => v >= _xMin && v <= _xMax)
+          .map(v => ({ value: v }));
+      };
     }
 
     // Custom tooltip
@@ -307,7 +300,9 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
   function applyConfig(config, showWatts) {
     if (!config) return;
     const xMode = (config._x_mode) || "distance";
-    const processedOpts = buildOptions(config.options, showWatts, xMode);
+    const rankedDists = config._ranked_dists || [100, 500, 1000, 2000, 5000, 6000, 10000, 21097, 42195];
+    const rankedDurations = config._ranked_durations || [10, 60, 120, 240, 600, 1800, 3600, 7200];
+    const processedOpts = buildOptions(config.options, showWatts, xMode, rankedDists, rankedDurations);
     const canvasLabels = config._canvas_labels || [];
 
     if (chartInstance) {

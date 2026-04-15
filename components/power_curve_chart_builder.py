@@ -52,6 +52,11 @@ from services.formatters import fmt_split
 
 _DIST_LABELS: dict = {d: lbl for d, lbl in RANKED_DISTANCES}
 
+# Duration gridlines (seconds) for the x-axis in duration mode.
+# Ranked times are a subset; extras give context at 10 s, 2 min, and 2 hr.
+# Passed to JS via config._ranked_durations so JS doesn't hardcode these.
+_DURATION_GRIDLINES: list[int] = [10, 60, 120, 240, 600, 1800, 3600, 7200]
+
 
 # ---------------------------------------------------------------------------
 # Season colour helpers
@@ -1511,6 +1516,8 @@ def build_chart_config(
         "data": {"datasets": datasets},
         "_canvas_labels": canvas_labels,
         "_x_mode": x_mode,  # read by JS for tick formatter and gridline positions
+        "_ranked_dists": RANKED_DIST_VALUES,      # gridline positions for distance mode
+        "_ranked_durations": _DURATION_GRIDLINES,  # gridline positions for duration mode
         "options": {
             "responsive": True,
             "maintainAspectRatio": False,

@@ -24,6 +24,11 @@ Public API
       → (lb, lba) dicts compatible with loglog_fit(), _loglog_dataset(), etc.
         lb  {(etype, evalue): pace_sec_per_500m}
         lba {(etype, evalue): anchor_distance_metres}
+
+  fetch_wc_data(gender_api, age, weight_kg)
+      → dict{"records", "cp_params", "lb", "lba", "rl_predictions"} or None
+        Blocking: fetch records, fit CP, optionally fetch RL predictions.
+        Intended to run inside hd.task().
 """
 
 from __future__ import annotations
@@ -41,6 +46,8 @@ from services.rowing_utils import (
     age_from_dob,
     profile_complete,
 )
+from services.critical_power_model import fit_critical_power
+from services.rowinglevel import fetch_predictions as rl_fetch_predictions
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -403,3 +410,51 @@ def records_to_lbest(records: dict) -> tuple[dict, dict]:
             lb[(etype, evalue)] = pace
             lba[(etype, evalue)] = dist_m
     return lb, lba
+
+
+# ---------------------------------------------------------------------------
+# Composite world-class fetch (records + CP fit + RL predictions)
+# ---------------------------------------------------------------------------
+
+
+def fetch_wc_data(gender_api: str, age: int, weight_kg: float) -> dict | None:
+    """
+    Blocking function — intended to run inside hd.task().
+    Fetches Concept2 world records for the given gender/age/weight,
+    fits the CP model (when enough data), builds lb/lba dicts, and
+    optionally fetches RowingLevel predictions using the WC 2k record
+    as the reference performance.
+
+    Returns a dict {"records", "cp_params", "lb", "lba", "rl_predictions"}
+    or None if the API returned no records at all.
+    """
+    records = get_age_group_records(gender_api, age, weight_kg)
+    if not records:
+        return None
+    cp_input = records_to_cp_input(records)
+    cp_params = fit_critical_power(cp_input) if len(cp_input) >= 5 else None
+    lb, lba = records_to_lbest(records)
+
+    # RowingLevel predictions: use WC record at best available dist event as
+    # the reference performance (prefer 2k, the canonical RL anchor).
+    rl_predictions: dict = {}
+    gender_rl = "Male" if gender_api == "M" else "Female"
+    _ref_dist, _ref_time_s = None, None
+    for _d in [2000, 1000, 5000, 6000, 10000, 500, 21097]:
+        _t = records.get(("dist", _d))
+        if _t:
+            _ref_dist, _ref_time_s = _d, _t
+            break
+    if _ref_dist is not None and _ref_time_s is not None:
+        time_tenths = round(_ref_time_s * 10)
+        preds = rl_fetch_predictions(gender_rl, age, weight_kg, _ref_dist, time_tenths)
+        if preds:
+            rl_predictions[str(("dist", _ref_dist))] = preds
+
+    return {
+        "records": records,
+        "cp_params": cp_params,
+        "lb": lb,
+        "lba": lba,
+        "rl_predictions": rl_predictions,
+    }

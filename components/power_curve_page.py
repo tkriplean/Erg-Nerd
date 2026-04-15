@@ -126,12 +126,10 @@ import hashlib
 import json
 import time
 from datetime import date, timedelta
+from typing import NamedTuple
 import hyperdiv as hd
 
-from services.rowinglevel import (
-    fetch_all_pb_predictions,
-    fetch_predictions as rl_fetch_predictions,
-)
+from services.rowinglevel import fetch_all_pb_predictions
 from services.rowing_utils import (
     RANKED_DISTANCES,
     RANKED_TIMES,
@@ -156,12 +154,10 @@ from services.rowing_utils import profile_complete
 
 from services.critical_power_model import fit_critical_power
 from services.concept2_records import (
-    get_age_group_records,
-    records_to_cp_input,
-    records_to_lbest,
     age_category as wc_age_category,
     weight_class_str as wc_weight_class_str,
     wr_category_label,
+    fetch_wc_data,
 )
 from components.power_curve_chart_plugin import PowerCurveChart
 from components.date_slider_plugin import DateSlider
@@ -249,6 +245,24 @@ _COMP_LABELS = {
 
 
 # ---------------------------------------------------------------------------
+# Simulation data container
+# ---------------------------------------------------------------------------
+
+
+class SimData(NamedTuple):
+    """Return value of _build_sim_data — all data derived from the current sim position."""
+
+    sim_wkts: list          # workouts visible at sim_date (filtered by best_filter)
+    excluded_wkts: list     # PBs of user-disabled events (plotted faintly, not in fits)
+    lb: dict                # selected-event lifetime bests (pace)
+    lb_anchor: dict         # selected-event lifetime bests (anchor format)
+    lb_all: dict            # all-event lifetime bests (pace)
+    lb_all_anchor: dict     # all-event lifetime bests (anchor format)
+    pauls_k_fit: "float | None"  # personalised Paul's constant; None if < 2 PBs
+    pauls_k: float          # pauls_k_fit or population default 5.0
+
+
+# ---------------------------------------------------------------------------
 # Profile hash helper
 # ---------------------------------------------------------------------------
 
@@ -274,24 +288,32 @@ def _compute_lookahead_overlays(
     ranked_prefilt: list,
     sim_date: date,
     sim_day_idx: int,
-    state,
     total_days: int,
     show_watts: bool,
+    *,
+    sim_speed: str,
+    draw_power_curves: str,
+    sim_pb_set_at_day: int,
+    sim_pb_stored_labels_json: str,
 ) -> tuple:
     """
     Compute ghost/arrow/threatened/new-arrival overlay data for the lookahead
     window during simulation.
 
-    Returns (sim_overlays dict, overlay_labels list, updated state side-effects).
+    Returns (sim_overlays dict, overlay_labels list, pb_update dict | None).
+    pb_update is non-None when a new PB was detected this step; the caller
+    should apply its three fields to state:
+      {"label": str, "day": int, "stored_json": str}
+
     Should only be called when not at today (not _at_today).
     """
-    _step = _SPEED_DAYS.get(state.sim_speed, 7)
+    _step = _SPEED_DAYS.get(sim_speed, 7)
     _lookahead_end = sim_date + timedelta(days=_step * _SIM_LOOKAHEAD_STEPS)
     _new_step_start = sim_date - timedelta(days=_step)
 
     is_dark = hd.theme().is_dark
 
-    _has_any_lines = state.draw_power_curves != "None"
+    _has_any_lines = draw_power_curves != "None"
 
     # Current per-event best (pace + effective dist) from visible sim workouts.
     # Only computed when lines are shown (overlays gate on this).
@@ -396,13 +418,12 @@ def _compute_lookahead_overlays(
                 _ps = _p % 60
                 _new_pb_events.append(f"{_elabel} — {_pm}:{_ps:04.1f}")
 
-    # Update PB label + timestamp when a new PB lands this step.
-    # Also capture the full overlay label dicts now (while _ev_best and
-    # the pre-PB bests are in scope) so they can be replayed during the
-    # celebration window without depending on the rolling step window.
+    # Build pb_update when a new PB lands this step.
+    # Captures the full overlay label dicts now (while _ev_best and the pre-PB
+    # bests are in scope) so they survive the rolling step window moving on.
+    # The caller is responsible for writing these three fields back to state.
+    pb_update: dict | None = None
     if _new_pb_events:
-        state.sim_last_pb_label = "New PB!  " + "  ·  ".join(_new_pb_events)
-        state.sim_pb_set_at_day = sim_day_idx
         _stored: list = []
         for _ck in _new_pb_cats:
             if _ck in _ev_best:
@@ -423,7 +444,11 @@ def _compute_lookahead_overlays(
                         "bold": True,
                     }
                 )
-        state.sim_pb_stored_labels_json = json.dumps(_stored)
+        pb_update = {
+            "label": "New PB!  " + "  ·  ".join(_new_pb_events),
+            "day": sim_day_idx,
+            "stored_json": json.dumps(_stored),
+        }
 
     sim_overlays = {
         "ghost_pts": _ghost_pts,
@@ -434,19 +459,18 @@ def _compute_lookahead_overlays(
     }
 
     # ---- canvas label overlays (drawn by JS plugin, not HyperDiv) ----
-    _pb_celebrating = False
     overlay_labels = []
 
     # Show "New PB!" for ~40 sim-steps after it was set.  Labels are
     # captured in full (with % improvement) at detection time and stored
     # as JSON so they survive the rolling step window moving on.
-    _pb_celebrating = state.sim_pb_set_at_day >= 0 and (
-        0 <= sim_day_idx - state.sim_pb_set_at_day <= _step * 40
+    _pb_celebrating = sim_pb_set_at_day >= 0 and (
+        0 <= sim_day_idx - sim_pb_set_at_day <= _step * 40
     )
 
-    # New PB badges — loaded from state, not recomputed from rolling window
+    # New PB badges — loaded from caller-supplied state, not recomputed
     if _pb_celebrating:
-        for _lbl in json.loads(state.sim_pb_stored_labels_json):
+        for _lbl in json.loads(sim_pb_stored_labels_json):
             # Stored color was computed at detection time; re-apply current
             # theme so dark/light mode switches work instantly.
             _lbl["color"] = "black" if not is_dark else "white"
@@ -486,7 +510,24 @@ def _compute_lookahead_overlays(
             }
         )
 
-    return sim_overlays, overlay_labels
+    return sim_overlays, overlay_labels, pb_update
+
+
+# ---------------------------------------------------------------------------
+# Sub-component helpers
+# ---------------------------------------------------------------------------
+
+
+def _compute_rewind_day(ranked_prefilt: list, sim_start: date) -> int:
+    """Start day for the Play button: 30 days before the earliest qualifying event.
+
+    ranked_prefilt is already filtered by selected dists/times and excluded seasons,
+    so no further filtering is needed here.
+    """
+    dates = [parse_date(w.get("date", "")) for w in ranked_prefilt if w.get("date")]
+    if not dates:
+        return 0
+    return max(0, (min(dates) - sim_start).days - 30)
 
 
 # ---------------------------------------------------------------------------
@@ -508,12 +549,7 @@ def _chart_section(
     total_days: int,
     sim_start,
     sb_annotations: list,
-    all_ranked_raw: list,
-    selected_dists: set,
-    selected_times: set,
-    _included_seasons: list,
-    all_seasons: list,
-    excluded_seasons=(),
+    rewind_day: int,
     pauls_k_fit: float | None = None,
     wc_task=None,
 ) -> None:
@@ -542,24 +578,7 @@ def _chart_section(
                         state.sim_playing = False
                     else:
                         if _at_today:
-                            # Start 30 days before the first qualifying event
-                            # so something appears almost immediately.
-                            _earliest = [
-                                parse_date(w.get("date", ""))
-                                for w in all_ranked_raw
-                                if (
-                                    w.get("distance") in selected_dists
-                                    or w.get("time") in selected_times
-                                )
-                                and get_season(w.get("date", ""))
-                                not in set(excluded_seasons)
-                            ]
-                            if _earliest:
-                                state.sim_week = max(
-                                    0, (min(_earliest) - sim_start).days - 30
-                                )
-                            else:
-                                state.sim_week = 0
+                            state.sim_week = rewind_day
                         state.sim_tick_id += 1
                         state.sim_playing = True
 
@@ -1342,6 +1361,33 @@ def _compute_sim_timeline(excluded_seasons, all_seasons: list, sim_week: int) ->
     return sim_start, total_days, sim_day_idx, sim_date, at_today, included_seasons
 
 
+def _expand_y_bounds_for_wc(
+    y_bounds: tuple | None,
+    wc_data: dict | None,
+    show_watts: bool,
+) -> tuple | None:
+    """Expand y_bounds to include world-class pace/watts values.
+
+    _compute_axis_bounds uses user PBs only; WC rowers are faster, so without
+    expansion the WC overlay points would be clipped.  Returns the original
+    y_bounds unchanged when wc_data is absent or empty.
+    """
+    if y_bounds is None or not wc_data:
+        return y_bounds
+    _wc_y_vals = [
+        compute_watts(pace) if show_watts else pace
+        for pace in wc_data["lb"].values()
+        if pace > 0
+    ]
+    if not _wc_y_vals:
+        return y_bounds
+    _ypad = max((y_bounds[1] - y_bounds[0]) * 0.1, 5.0 if not show_watts else 2.0)
+    return (
+        min(y_bounds[0], min(_wc_y_vals) - _ypad),
+        max(y_bounds[1], max(_wc_y_vals) + _ypad),
+    )
+
+
 def _compute_axis_bounds(
     all_ranked_raw: list,
     excluded_seasons,
@@ -1395,7 +1441,7 @@ def _build_sim_data(
     featured_data: list,
     prefilt_excl: list,
     sim_date: date,
-) -> tuple:
+) -> SimData:
     """
     Build everything that depends on the current sim position.
 
@@ -1455,15 +1501,15 @@ def _build_sim_data(
     lb_all, lb_all_anchor = compute_lifetime_bests(excl_in_time)
     pauls_k_fit = compute_pauls_constant(lb, lb_anchor)
     pauls_k = pauls_k_fit if pauls_k_fit is not None else 5.0
-    return (
-        sim_wkts,
-        excluded_wkts,
-        lb,
-        lb_anchor,
-        lb_all,
-        lb_all_anchor,
-        pauls_k_fit,
-        pauls_k,
+    return SimData(
+        sim_wkts=sim_wkts,
+        excluded_wkts=excluded_wkts,
+        lb=lb,
+        lb_anchor=lb_anchor,
+        lb_all=lb_all,
+        lb_all_anchor=lb_all_anchor,
+        pauls_k_fit=pauls_k_fit,
+        pauls_k=pauls_k,
     )
 
 
@@ -1586,50 +1632,6 @@ def _run_animation_tick(state, total_days: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _fetch_wc_data(gender_api: str, age: int, weight_kg: float) -> dict | None:
-    """
-    Blocking function — intended to run inside hd.task().
-    Fetches Concept2 world records for the given gender/age/weight,
-    fits the CP model (when enough data), builds lb/lba dicts, and
-    optionally fetches RowingLevel predictions using the WC 2k record
-    as the reference performance.
-
-    Returns a dict {"records", "cp_params", "lb", "lba", "rl_predictions"}
-    or None if the API returned no records at all.
-    """
-    records = get_age_group_records(gender_api, age, weight_kg)
-    if not records:
-        return None
-    cp_input = records_to_cp_input(records)
-    cp_params = fit_critical_power(cp_input) if len(cp_input) >= 5 else None
-    lb, lba = records_to_lbest(records)
-
-    # RowingLevel predictions: use WC record at best available dist event as
-    # the reference performance (prefer 2k, the canonical RL anchor).
-    rl_predictions: dict = {}
-    gender_rl = "Male" if gender_api == "M" else "Female"
-    _ref_dist, _ref_time_s = None, None
-    for _d in [2000, 1000, 5000, 6000, 10000, 500, 21097]:
-        _t = records.get(("dist", _d))
-        if _t:
-            _ref_dist, _ref_time_s = _d, _t
-            break
-    if _ref_dist is not None and _ref_time_s is not None:
-        time_tenths = round(_ref_time_s * 10)
-        preds = rl_fetch_predictions(gender_rl, age, weight_kg, _ref_dist, time_tenths)
-        if preds:
-            rl_predictions[str(("dist", _ref_dist))] = preds
-
-    return {
-        "records": records,
-        "cp_params": cp_params,
-        "lb": lb,
-        "lba": lba,
-        "rl_predictions": rl_predictions,
-    }
-
-
-# TODO: I don't like this function defined here in the power_curve_page.
 def _load_wc_cp(state, profile: dict) -> tuple:
     """
     HyperDiv component: manage the background task that fetches world-class
@@ -1663,7 +1665,7 @@ def _load_wc_cp(state, profile: dict) -> tuple:
     with hd.scope(f"wc_task_{fetch_key}"):
         wc_task = hd.task()
         if not wc_task.running and not wc_task.done:
-            wc_task.run(_fetch_wc_data, gender_api, age, weight_kg)
+            wc_task.run(fetch_wc_data, gender_api, age, weight_kg)
         if wc_task.done and not state.wc_fetch_done:
             state.wc_fetch_done = True
             state.wc_data = wc_task.result  # None if API returned nothing
@@ -1820,22 +1822,19 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         state._annot_key = _annot_key
 
     # ── Simulation data ───────────────────────────────────────────────────────
-    (
-        sim_wkts,
-        excluded_wkts,
-        lb,
-        lb_anchor,
-        lb_all,
-        lb_all_anchor,
-        pauls_k_fit,
-        pauls_k,
-    ) = _build_sim_data(
+    _sim = _build_sim_data(
         state,
         _ranked_prefilt,
         _featured_data,
         _prefilt_excl,
         sim_date,
     )
+    sim_wkts = _sim.sim_wkts
+    excluded_wkts = _sim.excluded_wkts
+    lb, lb_anchor = _sim.lb, _sim.lb_anchor
+    lb_all, lb_all_anchor = _sim.lb_all, _sim.lb_all_anchor
+    pauls_k_fit = _sim.pauls_k_fit
+    pauls_k = _sim.pauls_k
 
     cp_params = _update_cp_fit(
         state,
@@ -1852,15 +1851,22 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
     # ── Overlays + bounds ─────────────────────────────────────────────────────
     sim_overlays, overlay_labels = None, []
     if not at_today:
-        sim_overlays, overlay_labels = _compute_lookahead_overlays(
+        sim_overlays, overlay_labels, _pb_update = _compute_lookahead_overlays(
             sim_wkts,
             _ranked_prefilt,
             sim_date,
             sim_day_idx,
-            state,
             total_days,
             show_watts,
+            sim_speed=state.sim_speed,
+            draw_power_curves=state.draw_power_curves,
+            sim_pb_set_at_day=state.sim_pb_set_at_day,
+            sim_pb_stored_labels_json=state.sim_pb_stored_labels_json,
         )
+        if _pb_update:
+            state.sim_last_pb_label = _pb_update["label"]
+            state.sim_pb_set_at_day = _pb_update["day"]
+            state.sim_pb_stored_labels_json = _pb_update["stored_json"]
 
     _bounds_key = f"{state._ranked_key}:{excluded_seasons}:{show_watts}:{state.chart_x_metric}:{state.chart_log_x}"
     if state._bounds_key != _bounds_key or state._bounds_data is None:
@@ -1877,20 +1883,8 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
     # Expand y_bounds to include WC records when comparing.
     # _compute_axis_bounds is derived from user PBs only; world-class rowers are
     # faster (lower pace / higher watts), so without expansion they'd be clipped.
-    if y_bounds is not None and wc_data is not None and state.chart_compare_wc:
-        _wc_y_vals = [
-            compute_watts(pace) if show_watts else pace
-            for pace in wc_data["lb"].values()
-            if pace > 0
-        ]
-        if _wc_y_vals:
-            _ypad = max(
-                (y_bounds[1] - y_bounds[0]) * 0.1, 5.0 if not show_watts else 2.0
-            )
-            y_bounds = (
-                min(y_bounds[0], min(_wc_y_vals) - _ypad),
-                max(y_bounds[1], max(_wc_y_vals) + _ypad),
-            )
+    if state.chart_compare_wc:
+        y_bounds = _expand_y_bounds_for_wc(y_bounds, wc_data, show_watts)
 
     # ── Render ────────────────────────────────────────────────────────────────
     with hd.box(gap=5, align="center", padding=(2, 2, 2, 2)):
@@ -2104,12 +2098,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
                 total_days=total_days,
                 sim_start=sim_start,
                 sb_annotations=state._annot_data,
-                all_ranked_raw=all_ranked_raw,
-                selected_dists=selected_dists,
-                selected_times=selected_times,
-                _included_seasons=included_seasons,
-                all_seasons=all_seasons,
-                excluded_seasons=excluded_seasons,
+                rewind_day=_compute_rewind_day(_ranked_prefilt, sim_start),
                 pauls_k_fit=pauls_k_fit,
                 wc_task=wc_task,
             )
