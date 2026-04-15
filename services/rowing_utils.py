@@ -106,6 +106,21 @@ def get_season(date_str: str) -> str:
         return "Unknown"
 
 
+def age_from_dob(dob: str) -> int:
+    """
+    Compute age in whole years from a 'YYYY-MM-DD' date-of-birth string.
+    Returns 0 if the string is absent, malformed, or in the future.
+    """
+    if not dob:
+        return 0
+    try:
+        bd = date.fromisoformat(dob)
+        today = date.today()
+        return today.year - bd.year - ((today.month, today.day) < (bd.month, bd.day))
+    except (ValueError, TypeError):
+        return 0
+
+
 # ---------------------------------------------------------------------------
 # Workout helpers
 # ---------------------------------------------------------------------------
@@ -200,7 +215,7 @@ def compute_featured_workouts(workouts: list, best_filter: str) -> list:
     running_best: dict = {}
     featured: list = []
 
-    for w in reversed(workouts):       # scan oldest → newest
+    for w in reversed(workouts):  # scan oldest → newest
         pace = compute_pace(w)
         cat = workout_cat_key(w)
         if pace is None or cat is None:
@@ -210,7 +225,7 @@ def compute_featured_workouts(workouts: list, best_filter: str) -> list:
             running_best[key] = pace
             featured.append(w)
 
-    featured.reverse()                 # restore newest-first order
+    featured.reverse()  # restore newest-first order
     return featured
 
 

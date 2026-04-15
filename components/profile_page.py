@@ -15,7 +15,48 @@ import json
 
 import hyperdiv as hd
 
-from services.rowinglevel import _PROFILE_DEFAULTS, age_from_dob
+from services.rowing_utils import age_from_dob
+
+
+# ---------------------------------------------------------------------------
+# Profile helpers
+# ---------------------------------------------------------------------------
+
+_PROFILE_DEFAULTS: dict = {
+    "gender": "",  # "" = not set; "Male" | "Female" when set
+    "dob": "",  # "YYYY-MM-DD" date of birth; "" = not set
+    "weight": 0.0,  # 0.0 = not set
+    "weight_unit": "kg",  # "kg" | "lbs"
+    "weight_class": "",  # "" = not set; "Heavyweight" | "Lightweight"
+    "max_heart_rate": None,  # None = not set
+}
+
+
+def profile_complete(profile: dict) -> bool:
+    """Return True only if all fields required for RowingLevel are filled."""
+    return (
+        profile.get("gender") in ("Male", "Female")
+        and age_from_dob(profile.get("dob", "")) > 0
+        and float(profile.get("weight") or 0.0) > 0.0
+    )
+
+
+def get_profile():
+    # ── Profile ───────────────────────────────────────────────────────────────
+    ls_profile = hd.local_storage.get_item("profile")
+    if not ls_profile.done:
+        with hd.box(align="center", padding=4):
+            hd.spinner()
+        return None
+
+    profile = {**_PROFILE_DEFAULTS}
+    if ls_profile.result:
+        try:
+            profile = {**_PROFILE_DEFAULTS, **json.loads(ls_profile.result)}
+            return profile
+        except Exception:
+            pass
+    return profile
 
 
 def profile_page() -> None:

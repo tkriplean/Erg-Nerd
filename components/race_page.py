@@ -54,12 +54,13 @@ from services.rowing_utils import (
     apply_best_only,
     compute_pace,
     compute_watts,
+    age_from_dob,
 )
 from services.ranked_filters import is_ranked_noninterval, apply_quality_filters
 from services.formatters import format_time, fmt_split
 from services.stroke_utils import build_races_data, fetch_one_stroke, build_wr_boat
 from services.concept2_records import get_age_group_records
-from services.rowinglevel import _PROFILE_DEFAULTS, age_from_dob, profile_complete
+from components.profile_page import get_profile, profile_complete
 from services.local_storage_compression import (
     compress_strokes_cache,
     decompress_strokes_cache,
@@ -220,17 +221,10 @@ def race_page(
     is_dark = hd.theme().is_dark
 
     # ── Phase 1: load profile + stroke cache from localStorage (once) ────────
-    ls_profile = hd.local_storage.get_item("profile")
-    if not ls_profile.done:
-        with hd.box(align="center", padding=4):
-            hd.spinner()
+
+    profile = get_profile()
+    if profile is None:
         return
-    profile = {**_PROFILE_DEFAULTS}
-    if ls_profile.result:
-        try:
-            profile = {**_PROFILE_DEFAULTS, **json.loads(ls_profile.result)}
-        except Exception:
-            pass
 
     if not state.strokes_cache_loaded:
         ls_strokes = hd.local_storage.get_item(_STROKES_LS_KEY)

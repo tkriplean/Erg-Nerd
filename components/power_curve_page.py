@@ -129,11 +129,8 @@ from datetime import date, timedelta
 import hyperdiv as hd
 
 from services.rowinglevel import (
-    _PROFILE_DEFAULTS,
-    age_from_dob,
     fetch_all_pb_predictions,
     fetch_predictions as rl_fetch_predictions,
-    profile_complete,
 )
 from services.rowing_utils import (
     RANKED_DISTANCES,
@@ -150,8 +147,12 @@ from services.rowing_utils import (
     compute_featured_workouts,
     compute_duration_s,
     compute_pauls_constant,
+    age_from_dob,
 )
 from components.concept2_sync import concept2_sync
+from components.profile_page import get_profile, profile_complete
+
+
 from services.critical_power_model import fit_critical_power
 from services.concept2_records import (
     get_age_group_records,
@@ -159,6 +160,7 @@ from services.concept2_records import (
     records_to_lbest,
     age_category as wc_age_category,
     weight_class_str as wc_weight_class_str,
+    wr_category_label,
 )
 from components.power_curve_chart_plugin import PowerCurveChart
 from components.date_slider_plugin import DateSlider
@@ -877,29 +879,6 @@ def _wc_compare_section(state, profile: dict, wc_task) -> None:
     Renders the 'Compare vs World Class' toggle.
     Placed below the Settings Row 2 prediction box.
     """
-    _wc_profile_ok = profile_complete(profile)
-
-    if not _wc_profile_ok:
-        hd.text(
-            "Set age, gender and weight in Profile to compare vs world class.",
-            font_color="neutral-500",
-            font_size="small",
-        )
-        return
-
-    # Derive current age-category label for display when loaded.
-    _wc_label = ""
-
-    gender_raw = profile.get("gender", "")
-    gender_api = "M" if gender_raw == "Male" else "F"
-    _age = age_from_dob(profile.get("dob", ""))
-    _wt = profile.get("weight") or 0.0
-    _wt_unit = profile.get("weight_unit", "kg")
-    _wt_kg = _wt * 0.453592 if _wt_unit == "lbs" else float(_wt)
-    if _age is not None and _wt_kg > 0:
-        _age_cat = wc_age_category(_age)
-        _wt_cls = wc_weight_class_str(_wt_kg, gender_api)
-        _wc_label = f"{gender_api} {_age_cat} {_wt_cls}"
 
     _loading = (
         state.chart_compare_wc and not state.wc_fetch_done and state.wc_fetch_key != ""
@@ -907,7 +886,16 @@ def _wc_compare_section(state, profile: dict, wc_task) -> None:
     _failed = state.chart_compare_wc and state.wc_fetch_done and state.wc_data is None
 
     # Compare toggle
-    compare_to_wr_sel = hd.switch(f"Show {_wc_label} world records", size="medium")
+    wc_label = wr_category_label()
+    if wc_label is None:
+        hd.text(
+            "Set age, gender and weight in Profile to compare vs world class.",
+            font_color="neutral-500",
+            font_size="small",
+        )
+        return
+
+    compare_to_wr_sel = hd.switch(f"Show {wc_label} world records", size="medium")
 
     if compare_to_wr_sel.changed:
         state.chart_compare_wc = compare_to_wr_sel.value
@@ -1640,6 +1628,7 @@ def _fetch_wc_data(gender_api: str, age: int, weight_kg: float) -> dict | None:
     }
 
 
+# TODO: I don't like this function defined here in the power_curve_page.
 def _load_wc_cp(state, profile: dict) -> tuple:
     """
     HyperDiv component: manage the background task that fetches world-class
@@ -1660,7 +1649,7 @@ def _load_wc_cp(state, profile: dict) -> tuple:
         return None, None
 
     age_cat = wc_age_category(age)
-    wt_class = wc_weight_class_str(weight_kg, gender_api)
+    wt_class = wc_weight_class_str(weight_kg, gender_api, age)
     fetch_key = f"{gender_api}|{age_cat}|{wt_class}"
 
     # Reset when profile changes.
@@ -1737,17 +1726,9 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
     is_dark = hd.theme().is_dark
 
     # ── Profile ───────────────────────────────────────────────────────────────
-    ls_profile = hd.local_storage.get_item("profile")
-    if not ls_profile.done:
-        with hd.box(align="center", padding=4):
-            hd.spinner()
+    profile = get_profile()
+    if profile is None:
         return
-    profile = {**_PROFILE_DEFAULTS}
-    if ls_profile.result:
-        try:
-            profile = {**_PROFILE_DEFAULTS, **json.loads(ls_profile.result)}
-        except Exception:
-            pass
 
     # ── Data ──────────────────────────────────────────────────────────────────
     sync_result = concept2_sync(client)

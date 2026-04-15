@@ -47,7 +47,7 @@ from services.heartrate_utils import (
     HR_Z3_BINS,
     is_valid_hr,
 )
-from services.rowinglevel import _PROFILE_DEFAULTS
+from components.profile_page import get_profile, profile_complete
 from components.volume_chart_builder import build_volume_chart_config, get_period_rows
 from components.volume_chart_plugin import VolumeChart
 from components.hyperdiv_extensions import grid_box
@@ -423,18 +423,9 @@ def volume_page(client, user_id: str, excluded_seasons=(), machine="All") -> Non
     if machine != "All":
         all_workouts = [w for w in all_workouts if w.get("type") == machine]
 
-    # Load profile from localStorage
-    ls_profile = hd.local_storage.get_item("profile")
-    if not ls_profile.done:
-        with hd.box(align="center", padding=4):
-            hd.spinner()
+    profile = get_profile()
+    if not profile:
         return
-    profile = {**_PROFILE_DEFAULTS}
-    if ls_profile.result:
-        try:
-            profile = {**_PROFILE_DEFAULTS, **json.loads(ls_profile.result)}
-        except Exception:
-            pass
 
     if not all_workouts:
         with hd.box(padding=4, align="center"):

@@ -109,7 +109,7 @@ A JSON object persisted immediately on every field change:
 }
 ```
 
-Defaults (from `services/rowinglevel._PROFILE_DEFAULTS`) are applied when the key is absent or unparseable.
+Defaults (from `components/profile_page._PROFILE_DEFAULTS`) are applied when the key is absent or unparseable.
 
 ---
 

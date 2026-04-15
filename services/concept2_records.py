@@ -38,7 +38,10 @@ from services.rowing_utils import (
     RANKED_DISTANCES,
     RANKED_TIMES,
     compute_watts,
+    age_from_dob,
 )
+
+from components.profile_page import get_profile, profile_complete
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -72,7 +75,7 @@ _AGE_BANDS: list[tuple[int, str]] = [
     (17, "17-18"),
     (15, "15-16"),
     (13, "13-14"),
-    (0,  "12 and Under"),
+    (0, "12 and Under"),
 ]
 
 # Distance event: value = meters, matches RANKED_DISTANCES[*][0]
@@ -92,14 +95,17 @@ def age_category(age: int) -> str:
     for lower, label in _AGE_BANDS:
         if age >= lower:
             return label
+
     return "12 and Under"
 
 
-def weight_class_str(weight_kg: float, gender: str) -> str | None:
+def weight_class_str(weight_kg: float, gender: str, age: int) -> str | None:
     """
     Return 'Lwt', 'Hwt', or None (youth categories < 17 have no weight class).
     gender: 'M' or 'F' (as stored by the Concept2 API).
     """
+    if age < 17:
+        return None
     threshold = _LWT_M_KG if gender == "M" else _LWT_F_KG
     return "Lwt" if weight_kg <= threshold else "Hwt"
 
@@ -150,6 +156,36 @@ def _ranked_event_for(event: int, event_type: str) -> tuple | None:
     return None
 
 
+def wr_category_label():
+    profile = get_profile()
+    if not profile:
+        return ""
+
+    _wc_profile_ok = profile_complete(profile)
+
+    if not _wc_profile_ok:
+        return None
+
+    # Derive current age-category label for display when loaded.
+    _wc_label = ""
+
+    gender_raw = profile.get("gender", "")
+    gender_api = "M" if gender_raw == "Male" else "F"
+    _age = age_from_dob(profile.get("dob", ""))
+    _wt = profile.get("weight") or 0.0
+    _wt_unit = profile.get("weight_unit", "kg")
+    _wt_kg = _wt * 0.453592 if _wt_unit == "lbs" else float(_wt)
+
+    _age_cat = age_category(_age)
+    _wt_cls = weight_class_str(_wt_kg, gender_api, _age)
+    if _age < 17:
+        _wc_label = f"{gender_api} {_age_cat}"
+    else:
+        _wc_label = f"{gender_api} {_age_cat} {_wt_cls}"
+
+    return _wc_label
+
+
 # ---------------------------------------------------------------------------
 # Cache helpers
 # ---------------------------------------------------------------------------
@@ -187,7 +223,9 @@ def _fetch_raw_records_from_api() -> list[dict]:
         return json.loads(resp.read())["data"]
 
 
-def _filter_records(raw: list[dict], gender: str, age_cat: str, wt_class: str | None) -> dict:
+def _filter_records(
+    raw: list[dict], gender: str, age_cat: str, wt_class: str | None
+) -> dict:
     """
     Filter the raw API payload and return {(etype, evalue): best_result} for
     RowErg world records matching the specified gender/age/weight.
@@ -256,7 +294,8 @@ def get_age_group_records(gender: str, age: int, weight_kg: float) -> dict:
     Empty dict if the API is unreachable and no cache is available.
     """
     age_cat = age_category(age)
-    wt_class = weight_class_str(weight_kg, gender)
+
+    wt_class = weight_class_str(weight_kg, gender, age)
     filter_key = f"{gender}|{age_cat}|{wt_class}"
 
     cache = _load_cache()
@@ -357,7 +396,7 @@ def records_to_lbest(records: dict) -> tuple[dict, dict]:
     for (etype, evalue), value in records.items():
         if etype == "dist":
             dist_m = evalue
-            t_sec = value          # value = seconds for this distance
+            t_sec = value  # value = seconds for this distance
             if t_sec <= 0 or dist_m <= 0:
                 continue
             pace = t_sec / (dist_m / 500.0)
@@ -365,7 +404,7 @@ def records_to_lbest(records: dict) -> tuple[dict, dict]:
             lba[(etype, evalue)] = dist_m
         elif etype == "time":
             tenths = evalue
-            dist_m = value         # value = metres covered in this duration
+            dist_m = value  # value = metres covered in this duration
             duration_s = tenths / 10.0
             if duration_s <= 0 or dist_m <= 0:
                 continue

@@ -32,45 +32,9 @@ _MIN_INTERVAL = 3.0  # seconds between requests
 
 _last_request_at: float = 0.0
 
-# ---------------------------------------------------------------------------
-# Profile helpers
-# ---------------------------------------------------------------------------
-
-_PROFILE_DEFAULTS: dict = {
-    "gender": "",           # "" = not set; "Male" | "Female" when set
-    "dob": "",              # "YYYY-MM-DD" date of birth; "" = not set
-    "weight": 0.0,          # 0.0 = not set
-    "weight_unit": "kg",    # "kg" | "lbs"
-    "weight_class": "",     # "" = not set; "Heavyweight" | "Lightweight"
-    "max_heart_rate": None, # None = not set
-}
 
 # Standard lightweight upper limits in kg (open/elite categories)
 _LW_LIMIT_KG = {"Male": 72.5, "Female": 59.0}
-
-
-def age_from_dob(dob: str) -> int:
-    """
-    Compute age in whole years from a 'YYYY-MM-DD' date-of-birth string.
-    Returns 0 if the string is absent, malformed, or in the future.
-    """
-    if not dob:
-        return 0
-    try:
-        bd = date.fromisoformat(dob)
-        today = date.today()
-        return today.year - bd.year - ((today.month, today.day) < (bd.month, bd.day))
-    except (ValueError, TypeError):
-        return 0
-
-
-def profile_complete(profile: dict) -> bool:
-    """Return True only if all fields required for RowingLevel are filled."""
-    return (
-        profile.get("gender") in ("Male", "Female")
-        and age_from_dob(profile.get("dob", "")) > 0
-        and float(profile.get("weight") or 0.0) > 0.0
-    )
 
 
 # ---------------------------------------------------------------------------
