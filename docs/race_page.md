@@ -12,7 +12,7 @@ stroke-level data fetched from the Concept2 API.
 ## UI Layout
 
 ```
-A [2k ▾] Race Between [Season Bests ▾]!      ← interactive h1 title
+A Race Between [Your Season Bests ▾] at [2k ▾]!  ← interactive h1 title
 ─────────────────────────────────────────────
 Fetching stroke data…  3 / 7   ████░░░░       ← progress bar (while loading)
 ┌─────────────────────────────────────────┐
@@ -37,16 +37,15 @@ widgets that double as the filter controls:
 
 | Token | Control | Changes |
 |---|---|---|
+| **[Your Season Bests ▾]** | Include filter dropdown | `state.include_filter` |
 | **[2k ▾]** | Event dropdown | `state.event_type` + `state.event_value`; resets fetch queue |
-| **[Season Bests ▾]** | Include filter dropdown | `state.include_filter` |
 
 Include filter options and their state values:
 
 | Label | `state.include_filter` |
 |---|---|
-| All Great Efforts | `"All"` |
-| Personal Bests | `"PBs"` |
-| Season Bests *(default)* | `"SBs"` |
+| Great Efforts *(default)* | `"All"` |
+| Season Bests | `"SBs"` |
 
 ---
 
@@ -56,8 +55,11 @@ Include filter options and their state values:
 |---|---|---|
 | `event_type` | `str` | `"dist"` or `"time"` |
 | `event_value` | `int` | metres (dist events) or tenths-of-second (time events) |
-| `include_filter` | `str` | `"All"` / `"PBs"` / `"SBs"` — default `"SBs"` |
+| `include_filter` | `str` | `"All"` / `"SBs"` — default `"All"` |
 | `sort_mode` | `str` | `"date"` (newest first) or `"result"` (fastest first) |
+| `show_wr_boat` | `bool` | Whether the age-group WR ghost boat is enabled |
+| `wr_records` | `dict` | Cached `{(etype, evalue): result}` from `concept2_records` |
+| `wr_records_key` | `str` | `"gender\|age\|weight_kg"` — invalidation key for `wr_records` |
 | `strokes_cache_loaded` | `bool` | True once the localStorage stroke cache has been read |
 | `strokes_by_id` | `dict` | `{str(workout_id): [{t, d}, …]}` — in-memory stroke cache |
 | `fetch_queue` | `tuple[int]` | Workout IDs still waiting for stroke fetch |
@@ -82,12 +84,12 @@ all_workouts (all synced workouts)
         ├─ _event_workouts()         match event_type + event_value
         │    └─▶ table_wkts          used for the results table (all pieces)
         │
-        └─ _include_filtered()       apply "All" / "PBs" / "SBs" filter
+        └─ _include_filtered()       apply "All" / "SBs" filter
              └─▶ race_wkts           boats on the canvas
 ```
 
 `_include_filtered()` uses `apply_best_only()` from `services/rowing_utils.py`:
-- `"PBs"` → single all-time best
+- `"All"` → all qualifying workouts (default)
 - `"SBs"` → one best per season
 
 ---
@@ -107,6 +109,17 @@ at a time via `fetch_one_stroke()` from `services/stroke_utils.py`.
 - **Synthesised strokes**: when the API returns no stroke data, `synthesize_strokes()`
   builds sparse `[{t, d}]` points from split boundaries. The JS animation detects
   these via `boat.has_real_strokes = False` and uses `boat.avg_spm` for cadence.
+
+---
+
+## World Record Ghost Boat
+
+When the user's profile is complete (gender, date of birth, weight), a toggle adds a **WR ghost boat** representing the applicable Concept2 age-group world record for the current event.
+
+- `state.show_wr_boat` — boolean toggle, off by default.
+- `state.wr_records` — cached `{(etype, evalue): result}` dict from `get_age_group_records()` in `services/concept2_records.py`. Records are fetched at most once per profile (keyed on `state.wr_records_key = "gender|age|weight_kg"`).
+- The WR boat is built via `build_wr_boat(event_type, event_value, record_result)` from `services/stroke_utils.py`, which synthesises strokes from the official result. `has_real_strokes = False` on WR boats; the JS uses `avg_spm` for oar cadence.
+- Profile incompleteness (missing gender, DOB, or weight) silently suppresses the toggle.
 
 ---
 
@@ -219,11 +232,13 @@ Columns: Date · Season · Time (or Distance for time events) · Avg Pace · Avg
 
 | Module | Used for |
 |---|---|
-| `services/stroke_utils.py` | `build_races_data()`, `fetch_one_stroke()` |
+| `services/stroke_utils.py` | `build_races_data()`, `fetch_one_stroke()`, `build_wr_boat()`, `synthesize_strokes()` |
+| `services/concept2_records.py` | `get_age_group_records()` — fetches/caches Concept2 WR records for WR ghost boat |
 | `services/ranked_filters.py` | `is_ranked_noninterval()`, `apply_quality_filters()` |
-| `services/rowing_utils.py` | `RANKED_DISTANCES`, `RANKED_TIMES`, `get_season()`, `apply_best_only()`, `compute_pace()`, `compute_watts()` |
+| `services/rowing_utils.py` | `RANKED_DISTANCES`, `RANKED_TIMES`, `get_season()`, `apply_best_only()`, `compute_pace()`, `compute_watts()`, `age_from_dob()`, `profile_complete()` |
 | `services/formatters.py` | `format_time()`, `fmt_split()` |
 | `services/local_storage_compression.py` | Compress/decompress stroke cache for localStorage |
 | `components/race_chart_plugin.py` | `RaceChart` HyperDiv plugin |
 | `components/concept2_sync.py` | `concept2_sync()` — ensures workouts are loaded |
 | `components/hyperdiv_extensions.py` | `radio_group` — sort toggle |
+| `components/profile_page.py` | `get_profile()` — reads user profile for WR boat |

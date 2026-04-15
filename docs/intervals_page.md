@@ -208,9 +208,9 @@ All reactive state lives in a single `hd.state()` call in `intervals_page()`:
 |---|---|---|
 | `active_cells` | `tuple[str]` | Selected grid cells, e.g. `("2,1", "3,1")`. OR filter. |
 | `active_bins` | `tuple[int]` | Selected pace bins 1–6. AND filter. |
-| `sort_col` | `str` | Active sort column id |
-| `sort_asc` | `bool` | Sort direction |
-| `page` | `int` | Current table page (0-indexed) |
+| `structure_filter` | `str \| None` | Exact-match structure key filter. Toggled by clicking the Structure column in the table; shows only workouts with that structure key. Click again to clear. |
+
+Note: sort column, sort direction, and page are internal state belonging to the `WorkoutTable` component, not to `intervals_page` directly.
 
 Pace-bin filter is applied after cell filter:
 `all_intervals → _filter_by_cells → _filter_by_bins → table`

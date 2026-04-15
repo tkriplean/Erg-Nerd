@@ -150,10 +150,9 @@ def _time_value(w: dict) -> str:
 
 def _link_cell(w: dict) -> None:
     hd.link(
-        "view",  # "↗",
+        "view",
         href=f"/session/{w.get('id')}",
         font_size="small",
-        # font_color="neutral-400",
         underline=False,
         text_align="center",
     )

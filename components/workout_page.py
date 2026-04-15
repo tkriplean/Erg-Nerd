@@ -1,26 +1,29 @@
 """
 components/workout_page.py — Full-screen workout detail overlay.
 
-Renders when app_state.selected_session_id is set.  Displays:
+Activated by URL routing: app.py renders this component when
+loc.path starts with "/session/".  The view icon in every result table
+navigates to /session/{id}; the Back link returns to the previous tab.
 
-  1. Header bar      — back button, date/machine/type title
+Displays:
+
+  1. Header bar      — date/machine/type title (with workout comment if present)
   2. Summary stats   — compact multi-column metric grid
   3. Chart + splits  — pace/watts chart (left) beside splits/intervals table (right)
-                       Chart has Pace/Watts toggle and Reset zoom button.
+                       Chart has Pace/Watts toggle, Stack mode, and Reset zoom button.
                        Clicking a split/interval row zooms the chart to that band.
   4. Similar sessions — WorkoutTable() of workouts with matching structure
 
 Entry point::
 
-    workout_page(
-        session_id,         # int — key into _workouts_dict
-        client,             # Concept2Client (for fetching strokes)
-        user_id,            # str
-    )
+    workout_page(session_id, client, user_id)
 
-All workout data and the full workout list are fetched internally via
-concept2_sync(), which is task-cached so repeat calls within a render
-cycle are free.
+    session_id  int   — extracted from loc.path ("/session/<id>")
+    client      Concept2Client
+    user_id     str
+
+Workout data and the full list are fetched via concept2_sync(), which is
+task-cached so repeated calls within a render cycle are free.
 """
 
 from __future__ import annotations
@@ -177,8 +180,6 @@ def _custom_splits_ui(
             rem = total_dist_m % 500
             s.inputs = [500] * n + ([rem] if rem else [])
         s.loaded = True
-
-    _theme = hd.theme()
 
     with hd.box(gap=0.5, padding_bottom=0.5):
         with hd.hbox(gap=1, align="center"):
@@ -351,7 +352,6 @@ def _splits_table(
     Clicking a row calls on_focus(i, row) to zoom the chart to that band.
     focused_idx highlights the currently zoomed row.
     """
-    _theme = hd.theme()
     header_color = "neutral-500"
     ts = "small"
     wo = workout.get("workout") or {}
@@ -361,7 +361,6 @@ def _splits_table(
     if is_interval:
         _intervals_table(
             wo.get("intervals") or [],
-            _theme,
             header_color,
             ts,
             focused_idx=focused_idx,
@@ -406,7 +405,6 @@ def _splits_table(
         splits_data,
         col_w,
         headers,
-        _theme,
         header_color,
         ts,
         focused_idx=focused_idx,
@@ -466,7 +464,6 @@ def _split_row(i, sp, col_w, ts, has_hr):
 
 def _intervals_table(
     intervals: list,
-    _theme,
     header_color: str,
     ts: str,
     focused_idx: int = -1,
@@ -495,7 +492,6 @@ def _intervals_table(
         rows,
         col_w,
         headers,
-        _theme,
         header_color,
         ts,
         focused_idx=focused_idx,
@@ -541,7 +537,7 @@ def _interval_row(i, r, col_w, ts, has_hr):
 
 
 def _table_frame(
-    rows, col_w, headers, _theme, header_color, ts, focused_idx, on_focus, row_renderer
+    rows, col_w, headers, header_color, ts, focused_idx, on_focus, row_renderer
 ):
     """Shared table chrome: header + body rows with click-to-focus.
 

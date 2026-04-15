@@ -102,9 +102,10 @@ A JSON object persisted immediately on every field change:
 ```json
 {
   "gender": "Male",
-  "age": 35,
+  "dob": "1990-05-15",
   "weight": 75.0,
   "weight_unit": "kg",
+  "weight_class": "Heavyweight",
   "max_heart_rate": 185
 }
 ```

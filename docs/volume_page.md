@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Volume tab provides a stacked bar chart of training meters broken down by physiological intensity zone, with a distribution data table beneath it. It supports two zone modes — **Pace** and **HR** — that share the same chart widget, aggregation layer, and table structure but differ in how metres are classified.
+The Volume tab provides a stacked bar chart of training meters broken down by physiological intensity zone, with a distribution data table beneath it. It supports two zone modes — **Pace Intensity** and **HR** — that share the same chart widget, aggregation layer, and table structure but differ in how metres are classified.
 
 ### Files Involved
 
@@ -10,11 +10,10 @@ The Volume tab provides a stacked bar chart of training meters broken down by ph
 |---|---|
 | `components/volume_page.py` | UI entry point: controls, HR callout, data flow, calls chart/table |
 | `components/volume_chart_builder.py` | Pure chart config builder and table row generator |
-| `components/volume_chart.py` | HyperDiv plugin wrapper for `VolumeChart` (Chart.js) |
+| `components/volume_chart_plugin.py` | HyperDiv plugin wrapper for `VolumeChart` (Chart.js) |
 | `components/rowing_chart_assets/volume_chart.js` | JS plugin: Y-axis formatter, Chart.js tooltips |
 | `services/volume_bins.py` | Pace-zone binning, thresholds, aggregation (`aggregate_workouts`) |
 | `services/heartrate_utils.py` | HR validation, max HR resolution, zone classification, HR binning |
-| `services/rowinglevel.py` | `load_profile()` / `save_profile()` — max HR persisted to `.profile.json` |
 
 For chart design and pace zone definitions see `docs/volume_chart.md`.
 For HR data handling details see `docs/heartrate.md`.
@@ -23,21 +22,16 @@ For HR data handling details see `docs/heartrate.md`.
 
 ## Controls
 
-All controls live in a single `hd.hbox` row at the top of `_volume_section()`.
+All controls live in a single `hd.hbox` row at the bottom of `_volume_section()`, rendered
+**after** the chart.
 
 ### View (Weekly / Monthly / Seasonal)
 `hd.radio_buttons("Weekly", "Monthly", "Seasonal")` backed by `state.view` (lowercase). Determines which bucket from `aggregate_workouts()` output is used (`weeks` / `months` / `seasons`).
 
-### Scope Dropdown
-A `hd.select` with per-view state (`state.weekly_scope`, `state.monthly_scope`, `state.seasonal_scope`). Options: Past Year, This Season, Past 2 Years, Past 5 Years, All Time. Weekly and Monthly default to Past Year; Seasonal defaults to All Time.
+### Zone Mode (Pace Intensity / HR)
+`hd.radio_buttons("Pace Intensity", "HR Intensity")` backed by `state.zone_mode` (`"pace_intensity"` or `"hr"`). Switches between pace-zone binning and HR-zone binning. See the _Aggregation Paths_ section below.
 
-The dropdown is keyed with `hd.scope(f"scope_{view}")` so that switching views doesn't carry over the previous view's selection widget state.
-
-### Machine Filter
-A `hd.select` populated dynamically from `{w.get("type") for w in all_workouts}`. **Only rendered when the user has more than one machine type.** When a single type is present, `state.machine` is forced to `"All"` and no dropdown is shown.
-
-### Zone Mode (Pace / HR)
-`hd.radio_buttons("Pace", "HR")` backed by `state.zone_mode` ("pace" or "hr"). Switches between pace-zone binning and HR-zone binning. See the _Aggregation Paths_ section below.
+**Note:** Season and machine filtering are applied globally (passed in from `app.py`). The volume page itself does not render a scope or machine dropdown — those controls live in the nav bar.
 
 ---
 
@@ -45,43 +39,51 @@ A `hd.select` populated dynamically from `{w.get("type") for w in all_workouts}`
 
 ```python
 state = hd.state(
-    view="weekly",           # "weekly" | "monthly" | "seasonal"
-    weekly_scope="past_year",
-    monthly_scope="past_year",
-    seasonal_scope="all_time",
-    machine="All",           # "All" or a Concept2 type string (e.g. "rower")
-    zone_mode="pace",        # "pace" | "hr"
+    view="monthly",            # "weekly" | "monthly" | "seasonal"
+    zone_mode="pace_intensity", # "pace_intensity" | "hr"
 )
 ```
 
-All state is `hd.state` (session-scoped, not persisted across page refreshes). Scope is intentionally kept per-view so switching from Weekly to Monthly doesn't reset the monthly scope the user had selected.
+All state is `hd.state` (session-scoped, not persisted across page refreshes).
+
+---
+
+## Rendering Order
+
+Within `_volume_section()`, UI is rendered top-to-bottom as:
+
+1. H1 heading ("How Does Your Work Stack Up?")
+2. Chart (stacked bar) — or "Not enough data" notice if `chart_config` is empty
+3. Controls row (view toggle + zone mode toggle)
+4. HR callout (HR mode only, rendered after controls)
+5. Distribution table
 
 ---
 
 ## HR Callout
 
-When `state.zone_mode == "hr"`, an info bar is rendered below the controls row by `_hr_callout(all_workouts)`.
+When `state.zone_mode == "hr"`, an info bar is rendered below the controls row by `_hr_callout(all_workouts, profile)`.
 
 ### What it shows
 - **Max HR** — resolved by `resolve_max_hr(profile, all_workouts)`. Displays the value and source note:
   - `"(estimated)"` — 98th percentile of all valid HR readings; no user input needed.
-  - `"(from profile)"` — explicit value from `.profile.json`.
-  - `"not set — enter below"` — if neither source yields a value.
+  - `"(from profile)"` — explicit value from browser localStorage (`"profile"` key).
+  - No label shown if neither source yields a value.
 - **Inline edit field** — always visible for overriding the max HR.
 - **Save button** — only rendered when the field value differs from the stored max HR, preventing accidental saves.
 - **HR coverage** — "HR data in N of M workouts."
 
 ### Saving max HR
-The Save button calls `save_profile({**profile, "max_heart_rate": new_val})` which writes `.profile.json`. On the next render, `resolve_max_hr` will find the explicit value and use it.
+The Save button writes directly to `hd.local_storage.set_item("profile", ...)`, merging the new `max_heart_rate` into the existing profile JSON. On the next render, `resolve_max_hr` will find the explicit value and use it.
 
 ### No max HR available
-If `_hr_callout` returns `(None, False)` — both the estimate and profile are absent — `_volume_section` returns early, showing only the callout prompt. The chart and table are suppressed until a max HR is entered.
+`max_hr` is resolved by `resolve_max_hr()` **before** the chart is rendered. If `state.zone_mode == "hr"` and `max_hr` is falsy, `_volume_section` returns early, showing only the controls row and HR callout prompt. The chart and table are suppressed until a max HR is entered.
 
 ---
 
 ## Aggregation Paths
 
-### Pace mode
+### Pace Intensity mode
 
 ```python
 ref_sbs = get_reference_sbs(all_workouts)
@@ -109,15 +111,15 @@ aggregated = aggregate_workouts(
 
 `build_volume_chart_config(aggregated, ...)` in `components/volume_chart_builder.py` returns a Chart.js config dict. In HR mode, `bin_names`, `bin_colors`, and `draw_order` are overridden with their HR equivalents from `heartrate_utils.py`; in pace mode the defaults apply.
 
-The chart is rendered at `height="42vh"` in an `hd.box`. If `chart_config` is empty (no data for the scope), a "Not enough data" message is shown instead.
+The chart is rendered at `height="42vh"` in an `hd.box`. If `chart_config` is empty (no data), a "Not enough data" message is shown instead.
 
 ---
 
 ## Distribution Table
 
-`get_period_rows(aggregated, view, scope, ...)` returns one row per time period. `_distribution_table(rows, view, zone_mode)` renders it with `hd.data_table`.
+`get_period_rows(aggregated, view, scope, ...)` returns one row per time period. `_distribution_table(rows, view, zone_mode)` renders it with a custom CSS Grid table.
 
-### Column layout — Pace mode
+### Column layout — Pace Intensity mode
 
 | Column | Contents |
 |---|---|
@@ -153,27 +155,24 @@ Six possible values: **Easy / LSD**, **Polarized**, **Pyramidal**, **Threshold**
 
 ```
 volume_page()
-  └── hd.task(_fetch)              # load workouts from API or cache
-        └── _volume_section(all_workouts)
-              ├── controls row     # radio_buttons, scope select, machine select
-              ├── _hr_callout()    # [HR mode only] max HR resolve + edit UI
-              │     └── resolve_max_hr() → load_profile() + estimate_max_hr()
-              ├── aggregate_workouts(bin_fn=…)   # pace or HR path
-              ├── build_volume_chart_config()    # Chart.js config dict
-              ├── VolumeChart(config=…)          # renders chart
-              ├── get_period_rows()              # table row dicts
-              └── _distribution_table()          # hd.data_table
+  └── concept2_sync(client, user_id)   # load/sync workouts
+        └── _volume_section(all_workouts, profile, machine)
+              ├── max_hr = resolve_max_hr()   # computed before chart
+              ├── aggregate_workouts(bin_fn=…) # pace or HR path
+              ├── build_volume_chart_config()  # Chart.js config dict
+              ├── VolumeChart(config=…)        # renders chart
+              ├── controls row                 # view + zone mode toggles
+              ├── _hr_callout()                # [HR mode only] after controls
+              └── _distribution_table()        # CSS Grid table
 ```
 
 ---
 
 ## How to Change Things
 
-**Add a new scope option**: add an `hd.option(...)` inside each scope select and update `_scope_date_range()` in `volume_chart_builder.py`.
-
 **Add a new machine type label**: add an entry to the `_LABELS` dict in `machine_label()`.
 
-**Change the zone mode toggle options**: edit the `hd.radio_buttons("Pace", "HR", ...)` call and add a new aggregation branch in `_volume_section`.
+**Change the zone mode toggle options**: edit the `hd.radio_buttons(...)` call and add a new aggregation branch in `_volume_section`.
 
 **Change HR zone thresholds**: edit `hr_zone_idx()` in `heartrate_utils.py`. No other files need to change.
 

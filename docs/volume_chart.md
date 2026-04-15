@@ -87,17 +87,11 @@ Seasons run **May 1 → Apr 30**, consistent with the rest of the app.
 
 ---
 
-## Scope Filter
+## Time Windowing
 
-| Scope         | Date range                          | Default for    |
-|---------------|-------------------------------------|----------------|
-| Past Year     | today − 365 days → today            | Weekly/Monthly |
-| This Season   | May 1 of current season → Apr 30    |                |
-| Past 2 Years  | today − 730 days → today            |                |
-| Past 5 Years  | today − 1825 days → today           |                |
-| All Time      | no lower bound                      | Seasonal       |
-
-Each view (weekly / monthly / seasonal) remembers its own scope selection independently in `hd.state`.
+Time-windowing is handled by the global `excluded_seasons` filter in `app.py` — the volume
+page itself does not have a scope selector. All periods are shown by default; the user can
+hide specific seasons via the global filter in the nav bar.
 
 ---
 
@@ -182,7 +176,7 @@ Registered as `VolumeChart` in the HyperDiv plugin system. Injects:
 - Y-axis tick formatter: meters → `"10.5k"` / `"500m"`
 - Tooltip (`index` mode): shows each non-zero bin + footer total
 
-### HyperDiv plugin wrapper (`components/volume_chart.py`)
+### HyperDiv plugin wrapper (`components/volume_chart_plugin.py`)
 
 `VolumeChart(hd.Plugin)` loads the same Chart.js CDN URL as `RowingChart` (deduplicated by HyperDiv) plus the `volume_chart.js` plugin.
 

@@ -11,7 +11,8 @@ custom splits work, and how similar sessions are found.
 Any result table in the app (Performance, Sessions, or Intervals tab) has a
 small **⬡ view icon** at the right edge of each row.  Clicking it opens a
 full-screen detail view for that workout.  The detail view replaces the tab
-content until the user clicks **← Back**.
+content until the user navigates away (e.g. by clicking a nav tab or using
+the browser back button).
 
 The detail view is composed of five sections rendered top-to-bottom:
 
@@ -27,28 +28,25 @@ The detail view is composed of five sections rendered top-to-bottom:
 
 ### How a workout is opened
 
-Each tab (`power_curve_page`, `sessions_page`, `intervals_page`) receives an
-`on_session_click(workout_id)` callback from `app.py`.  Clicking the view
-icon calls this callback, which sets `app_state.selected_session_id`.
+Every result table in the app includes a **view** link in its rightmost column
+(rendered by `COL_LINK` → `_link_cell()` in `workout_table.py`).  Clicking
+it navigates the browser to `/session/{id}`.
 
-`_dashboard_view()` in `app.py` checks this value on every render.  When
-set, it renders `workout_page(...)` instead of the normal tab content.
-When cleared, the tab view reappears.
+`_dashboard_view()` in `app.py` detects `in_session = loc.path.startswith("/session/")`,
+extracts the integer ID from the path, and calls `workout_page(session_id, client, user_id)`
+instead of the normal tab content.
 
 ### Closing the view
 
-The **← Back** button calls `on_close()`, which sets
-`app_state.selected_session_id = None`.  The tab the user was on is still
-the active tab — they return exactly where they left off.
-
-Switching tabs (clicking the tab bar) also clears the overlay automatically,
-so the user cannot be left in a "workout detail on the wrong tab" state.
+Clicking any tab in the nav bar navigates away from the `/session/…` path,
+which returns the user to that tab.  The browser's own back button also works.
+There is no explicit "Back" button in the UI — it was removed; navigation
+relies entirely on tab clicks or browser-native navigation.
 
 ### Chaining sessions
 
-The **Similar sessions** table at the bottom uses the same `on_session_click`
-callback, so clicking a row there navigates directly to that workout without
-returning to the tab first.
+The **Similar sessions** table at the bottom uses the same `COL_LINK` column,
+so clicking a row there navigates directly to `/session/{id}` for that workout.
 
 ---
 
@@ -257,36 +255,28 @@ When pace cannot be computed, results fall back to date descending.
 | File | Responsibility |
 |---|---|
 | `components/workout_page.py` | Top-level overlay component; all sections; custom-split recalculation; similar-session logic |
+| `components/concept2_sync.py` | Ensures workouts are synced from the API before the detail view loads |
 | `components/workout_chart_builder.py` | `build_stroke_chart_config()` — pure Python Chart.js config builder |
 | `components/workout_chart_plugin.py` | `StrokeChart` HyperDiv plugin class |
 | `components/chart_assets/workout_chart_plugin.js` | Chart.js rendering, band click-to-zoom, stacked mode, dual Y-axis setup |
-| `components/workout_table.py` | `result_table()` — accepts `on_click` for clickable rows + manual pagination |
+| `components/workout_table.py` | `WorkoutTable()` — CSS Grid sortable table; `COL_LINK` / `_link_cell()` renders the per-row view link |
 | `services/concept2.py` | `Concept2Client.get_strokes()` — fetches and sanitises the `/strokes` list for a result |
-| `app.py` | `selected_session_id` in `app_state`; overlay dispatch in `_dashboard_view()` |
+| `app.py` | URL routing via `loc.path`; dispatches `workout_page()` for `/session/{id}` paths |
 
 ### Entry point
 
 ```python
 # app.py — _dashboard_view()
-if app_state.selected_session_id is not None:
-    wo = _workouts_dict.get(str(app_state.selected_session_id))
-    workout_page(wo, client, user_id, all_workouts,
-                 on_session_click=_open_session)
-    return
+if in_session:
+    session_id = int(loc.path.split("/")[2])
+    workout_page(session_id, client, user_id)
 ```
 
 ### Clickable result tables
 
-`result_table()` in `workout_table.py` accepts an optional `on_click` callback:
-
-```python
-result_table(workouts, on_click=lambda wid: app_state.__setattr__("selected_session_id", wid))
-```
-
-When `on_click=None` (the default), the function renders the original read-only
-`hd.data_table()`.  When provided, it switches to a custom row renderer using
-`hd.scope(r["id"])` per row, with a view icon button at the right edge of each row
-and manual prev/next pagination (25 rows per page).
+Every table that should support drill-in includes `COL_LINK` in its column list.
+`COL_LINK` uses `_link_cell()`, which renders an `hd.link("view", href=f"/session/{id}")`.
+Navigating to that URL triggers the routing logic in `_dashboard_view()`.
 
 ---
 

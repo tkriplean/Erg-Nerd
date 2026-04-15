@@ -11,8 +11,8 @@ Volume chart:
     before this component receives workouts; no page-level filter UI for these.
 
 HR mode details:
-  - Max HR is read from .profile.json (explicit) or estimated at the 98th
-    percentile of all valid HR readings (is_estimated=True).
+  - Max HR is read from browser localStorage (key "profile", explicit value) or
+    estimated at the 98th percentile of all valid HR readings (is_estimated=True).
   - An inline callout below the controls row shows the active max HR and
     allows in-situ editing which persists to browser localStorage via profile key.
   - If no max HR can be determined, the chart is replaced by a prompt to
@@ -28,7 +28,7 @@ import json
 
 from components.concept2_sync import concept2_sync
 from services.formatters import machine_label
-from services.rowing_utils import get_season
+from services.rowing_utils import get_season, profile_complete
 
 from services.volume_bins import (
     get_reference_sbs,
@@ -47,7 +47,7 @@ from services.heartrate_utils import (
     HR_Z3_BINS,
     is_valid_hr,
 )
-from components.profile_page import get_profile, profile_complete
+from components.profile_page import get_profile
 from components.volume_chart_builder import build_volume_chart_config, get_period_rows
 from components.volume_chart_plugin import VolumeChart
 from components.hyperdiv_extensions import grid_box

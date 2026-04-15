@@ -150,7 +150,8 @@ from services.rowing_utils import (
     age_from_dob,
 )
 from components.concept2_sync import concept2_sync
-from components.profile_page import get_profile, profile_complete
+from components.profile_page import get_profile
+from services.rowing_utils import profile_complete
 
 
 from services.critical_power_model import fit_critical_power
@@ -886,7 +887,7 @@ def _wc_compare_section(state, profile: dict, wc_task) -> None:
     _failed = state.chart_compare_wc and state.wc_fetch_done and state.wc_data is None
 
     # Compare toggle
-    wc_label = wr_category_label()
+    wc_label = wr_category_label(profile)
     if wc_label is None:
         hd.text(
             "Set age, gender and weight in Profile to compare vs world class.",
@@ -1686,14 +1687,11 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         best_filter="SBs",
         chart_log_x=True,
         chart_log_y=False,
-        chart_show_lifetime_line=True,
         chart_y_metric="pace",
         chart_x_metric="distance",
         chart_predictor="critical_power",
         chart_show_components=False,
-        chart_season_lines=(),
         draw_power_curves="PBs",
-        show_chart_settings=False,
         sim_playing=False,
         sim_week=_SIM_TODAY,
         sim_speed="1x",

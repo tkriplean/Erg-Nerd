@@ -121,6 +121,15 @@ def age_from_dob(dob: str) -> int:
         return 0
 
 
+def profile_complete(profile: dict) -> bool:
+    """Return True only if all fields required for RowingLevel / WR lookup are filled."""
+    return (
+        profile.get("gender") in ("Male", "Female")
+        and age_from_dob(profile.get("dob", "")) > 0
+        and float(profile.get("weight") or 0.0) > 0.0
+    )
+
+
 # ---------------------------------------------------------------------------
 # Workout helpers
 # ---------------------------------------------------------------------------

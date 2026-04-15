@@ -44,15 +44,18 @@ All state is declared as `hd.state(...)` at the top of `power_curve_page()`.
 |---|---|---|---|
 | `dist_enabled` | `tuple[bool]` | all True | One flag per RANKED_DISTANCES entry; controls event filter |
 | `time_enabled` | `tuple[bool]` | all True | One flag per RANKED_TIMES entry; controls event filter |
-| `excluded_seasons` | `tuple[str]` | `()` | Seasons hidden from view; entries are "YYYY-YY" format |
 | `best_filter` | `str` | `"SBs"` | Row filter: `"All"` \| `"PBs"` \| `"SBs"` |
 | `chart_y_metric` | `str` | `"pace"` | Y-axis mode: `"pace"` \| `"watts"` |
 | `chart_x_metric` | `str` | `"distance"` | X-axis mode: `"distance"` \| `"duration"` |
-| `chart_predictor` | `str` | `"loglog"` | Active prediction line: `"none"` \| `"pauls_law"` \| `"loglog"` \| `"rowinglevel"` \| `"critical_power"` \| `"average"` |
+| `chart_predictor` | `str` | `"critical_power"` | Active prediction line: `"none"` \| `"pauls_law"` \| `"loglog"` \| `"rowinglevel"` \| `"critical_power"` \| `"average"` |
 | `draw_power_curves` | `str` | `"PBs"` | Power-curve overlay: `"PBs"` \| `"SBs"` \| `"None"` |
 | `chart_log_x` | `bool` | `True` | Log scale on x-axis |
 | `chart_log_y` | `bool` | `False` | Log scale on y-axis |
 | `chart_show_components` | `bool` | `False` | Show per-anchor/component sub-curves |
+| `chart_compare_wc` | `bool` | `False` | Overlay a CP curve fit to age-group world records |
+| `wc_fetch_key` | `str` | `""` | `"gender\|age\|weight_kg"` — invalidation key for WC data |
+| `wc_fetch_done` | `bool` | `False` | True once the WC data fetch task has completed |
+| `wc_data` | `dict\|None` | `None` | Cached world-class CP params and metadata |
 | `sim_playing` | `bool` | `False` | Whether the animation ticker is running |
 | `sim_week` | `int` | `999999` | Day offset from sim_start; `999999` = "show all data" |
 | `sim_speed` | `str` | `"1x"` | Playback speed: `"0.5x"` \| `"1x"` \| `"4x"` \| `"16x"` |
@@ -63,6 +66,15 @@ All state is declared as `hd.state(...)` at the top of `power_curve_page()`.
 | `last_ds_change_id` | `int` | `0` | Tracks DateSlider changes to avoid re-applying stale scrubs |
 | `cp_fit_key` | `str` | `""` | Hash of CP input data; used to cache the CP fit result |
 | `cp_fit_result` | `dict\|None` | `None` | Cached CP fit params from `fit_critical_power()` |
+| `_ranked_key` / `_ranked_data` | `str` / `tuple\|None` | `""` / `None` | Render-to-render cache for quality-filtered ranked workouts |
+| `_display_key` / `_display_data` | `str` / `list\|None` | `""` / `None` | Cache for `_apply_display_filter()` result |
+| `_prefilt_key` / `_prefilt_data` | `str` / `list\|None` | `""` / `None` | Cache for dist/time/season-filtered ranked list |
+| `_prefilt_excl_key` / `_prefilt_excl_data` | `str` / `list\|None` | `""` / `None` | Cache for season-only filtered ranked list |
+| `_featured_key` / `_featured_data` | `str` / `list\|None` | `""` / `None` | Cache for `compute_featured_workouts()` |
+| `_annot_key` / `_annot_data` | `str` / `list\|None` | `""` / `None` | Cache for DateSlider annotation list |
+| `_bounds_key` / `_bounds_data` | `str` / `tuple\|None` | `""` / `None` | Cache for axis bounds `(x_bounds, y_bounds)` |
+
+**Note on `excluded_seasons`:** this is a *parameter* passed into `power_curve_page()` from the global filter in `app.py`, not an internal state variable.
 
 ---
 
@@ -282,7 +294,37 @@ When the profile is incomplete:
 
 ---
 
-## 10. Axis Bounds
+## 10. World-Class Comparison
+
+When the user's profile is complete (gender, date of birth, weight), the chart settings
+row exposes a **"Compare vs. World-Class"** toggle (`chart_compare_wc`).  When enabled,
+an additional CP model curve is drawn representing the age-group world record holder for
+the user's category.
+
+### How it works
+
+1. `_load_wc_cp()` manages a lazy `hd.task()` that calls `_fetch_wc_data()`.
+2. `_fetch_wc_data(gender, age, weight_kg)` calls `get_age_group_records()` from
+   `services/concept2_records.py` to retrieve Concept2 official age-group world records.
+3. The records are converted to CP model inputs via `records_to_cp_input()` and fitted
+   with `fit_critical_power()`, producing the same four-parameter WC curve.
+4. WC data is cached in `state.wc_data` and invalidated via `state.wc_fetch_key`
+   (`"gender|age|weight_kg"`).  Re-fetching only occurs when the profile changes.
+
+### State variables
+| Variable | Description |
+|---|---|
+| `chart_compare_wc` | Toggle — show/hide the WC comparison curve |
+| `wc_fetch_key` | Profile fingerprint used to detect stale WC data |
+| `wc_fetch_done` | True once the WC fetch task has completed |
+| `wc_data` | Cached dict with fitted CP params and category label |
+
+### Requirement
+Profile must be complete.  If gender, DOB, or weight is missing, the toggle is hidden.
+
+---
+
+## 11. Axis Bounds
 
 To prevent the chart from shifting as the simulation scrubs backward in time, axis bounds are
 computed once from the **full** end-state dataset (all qualified workouts across all selected

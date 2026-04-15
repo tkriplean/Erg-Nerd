@@ -60,7 +60,8 @@ from services.ranked_filters import is_ranked_noninterval, apply_quality_filters
 from services.formatters import format_time, fmt_split
 from services.stroke_utils import build_races_data, fetch_one_stroke, build_wr_boat
 from services.concept2_records import get_age_group_records
-from components.profile_page import get_profile, profile_complete
+from components.profile_page import get_profile
+from services.rowing_utils import profile_complete
 from services.local_storage_compression import (
     compress_strokes_cache,
     decompress_strokes_cache,
@@ -142,8 +143,6 @@ def _event_workouts(workouts: list, etype: str, evalue: int, machine: str) -> li
 def _include_filtered(workouts: list, include_filter: str) -> list:
     if include_filter == "All":
         return workouts
-    if include_filter == "PBs":
-        return apply_best_only(workouts, by_season=False)
     return apply_best_only(workouts, by_season=True)
 
 

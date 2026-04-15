@@ -32,15 +32,6 @@ _PROFILE_DEFAULTS: dict = {
 }
 
 
-def profile_complete(profile: dict) -> bool:
-    """Return True only if all fields required for RowingLevel are filled."""
-    return (
-        profile.get("gender") in ("Male", "Female")
-        and age_from_dob(profile.get("dob", "")) > 0
-        and float(profile.get("weight") or 0.0) > 0.0
-    )
-
-
 def get_profile():
     # ── Profile ───────────────────────────────────────────────────────────────
     ls_profile = hd.local_storage.get_item("profile")

@@ -199,7 +199,7 @@ tooltip and/or in a small summary panel below the chart.
 
 ## Architecture
 
-### New file: `services/critical_power_model.py`
+### `services/critical_power_model.py`
 
 ```python
 def critical_power_model(t, Pow1, tau1, Pow2, tau2) -> float:
@@ -235,35 +235,31 @@ def stayer_sprinter_metrics(params: dict) -> dict:
     """
 ```
 
-### Modified: `services/rowing_utils.py`
+### `services/rowing_utils.py`
 
-- Add `compute_duration_s(workout) -> float | None` — converts any ranked workout
+- `compute_duration_s(workout) -> float | None` — converts any ranked workout
   to its duration in seconds; handles both distance and time event types.
 
-### Modified: `components/ranked_chart_builder.py`
+### `components/power_curve_chart_builder.py`
 
-- Import from `critical_power_model`
-- Add `critical_power_params=None` keyword argument to `build_chart_config()`
-- Add `"critical_power"` branch in the predictor block:
+- Imports from `critical_power_model`
+- `build_chart_config()` accepts a `critical_power_params` keyword argument
+- `"critical_power"` predictor branch:
   - Calls `critical_power_curve_points()` → passes to `_pred_dataset()`
   - Calls `crossover_point()` → adds as a separate single-point dataset with a
     distinctive color and `pointRadius` ≈ 8
 
-### Modified: `components/ranked_tab.py`
+### `components/power_curve_page.py`
 
-- Add "Critical Power" to the predictor dropdown options
-- After collecting filtered workouts, gather the best-per-category `(duration_s,
-  watts)` pairs and call `fit_critical_power()`. Cache the result in `hd.state`
-  keyed on a fingerprint of the selected seasons + selected events (so the fit is
-  not re-run every render).
-- Pass `critical_power_params=...` to `build_chart_config()`
+- "Critical Power" is available in the predictor dropdown (default selection)
+- After collecting filtered workouts, gathers the best-per-category `(duration_s,
+  watts)` pairs and calls `fit_critical_power()`. Result cached in `state.cp_fit_result`
+  keyed on `state.cp_fit_key` (hash of input data).
+- Passes `critical_power_params=state.cp_fit_result` to `build_chart_config()`
 
 ### Dependency: `scipy`
 
-Add to the Poetry environment:
-```
-poetry add scipy
-```
+Used by `fit_critical_power()` for bounded nonlinear least squares.
 
 ---
 

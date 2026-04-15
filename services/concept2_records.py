@@ -39,9 +39,8 @@ from services.rowing_utils import (
     RANKED_TIMES,
     compute_watts,
     age_from_dob,
+    profile_complete,
 )
-
-from components.profile_page import get_profile, profile_complete
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -156,18 +155,13 @@ def _ranked_event_for(event: int, event_type: str) -> tuple | None:
     return None
 
 
-def wr_category_label():
-    profile = get_profile()
+def wr_category_label(profile: dict) -> str | None:
+    """Return the WR category label string for the given profile, or None if incomplete."""
     if not profile:
         return ""
 
-    _wc_profile_ok = profile_complete(profile)
-
-    if not _wc_profile_ok:
+    if not profile_complete(profile):
         return None
-
-    # Derive current age-category label for display when loaded.
-    _wc_label = ""
 
     gender_raw = profile.get("gender", "")
     gender_api = "M" if gender_raw == "Male" else "F"
@@ -179,11 +173,8 @@ def wr_category_label():
     _age_cat = age_category(_age)
     _wt_cls = weight_class_str(_wt_kg, gender_api, _age)
     if _age < 17:
-        _wc_label = f"{gender_api} {_age_cat}"
-    else:
-        _wc_label = f"{gender_api} {_age_cat} {_wt_cls}"
-
-    return _wc_label
+        return f"{gender_api} {_age_cat}"
+    return f"{gender_api} {_age_cat} {_wt_cls}"
 
 
 # ---------------------------------------------------------------------------
