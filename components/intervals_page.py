@@ -36,10 +36,10 @@ Grid placement rules:
 
 Table
 -----
-Custom row renderer (hd.data_table lacks SVG cells). All sortable column
-headers show ▲/▼. Default sort: date descending.
+WorkoutTable (CSS Grid) with interval-specific ColumnDef objects.
+Sortable headers (▲/▼), default sort: date descending.
 Columns: Date · Reps · Structure (rep-stripped) · Stimulus · Zones bar
-         · Work dist · Avg Split · Time · SPM · HR
+         · Work dist · Avg Split · Time · SPM · HR · ↗
 
 Pace-zone filter (legend below grid): conjunctive AND across selected bins.
 A workout appears only when it has > 0 metres in every selected pace zone.
@@ -74,6 +74,7 @@ from services.volume_bins import (
 )
 from services.formatters import fmt_date, fmt_distance, fmt_hr, fmt_split, format_time
 from components.hyperdiv_extensions import aligned_button
+from components.workout_table import WorkoutTable, ColumnDef, COL_LINK
 
 
 # ---------------------------------------------------------------------------
@@ -441,24 +442,6 @@ def _filter_by_cells(workouts: list[dict], cells: frozenset[str]) -> list[dict]:
     return [r for r in workouts if f"{r['_grid_col']},{r['_grid_row']}" in cells]
 
 
-def _sort_workouts(workouts: list[dict], col: str, asc: bool) -> list[dict]:
-    key_fns = {
-        "date": lambda r: r.get("date", ""),
-        "reps": lambda r: r.get("_reps") or 0,
-        "work": lambda r: r.get("distance") or 0,
-        "split": lambda r: r.get("_work_pace") or float("inf"),
-        "zones": lambda r: r.get("_z3", 0.0),
-        "time": lambda r: r.get("time") or 0,
-        "spm": lambda r: r.get("_work_spm") or 0.0,
-        "hr": lambda r: (r.get("heart_rate") or {}).get("average") or 0,
-    }
-    return sorted(
-        workouts,
-        key=key_fns.get(col, key_fns["date"]),
-        reverse=not asc,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Grid browser
 # ---------------------------------------------------------------------------
@@ -558,7 +541,6 @@ def _zone_filter_legend(state) -> None:
                     else:
                         sel.add(i)
                     state.active_bins = tuple(sorted(sel))
-                    state.page = 0
 
 
 def _grid_browser(zone_workouts: list[dict], state) -> None:
@@ -723,7 +705,6 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                                         else:
                                             sel.add(k)
                                         state.active_cells = tuple(sorted(sel))
-                                        state.page = 0
                                 else:
                                     # Empty cell — muted coverage map, same
                                     # size as data cells via explicit height.
@@ -754,197 +735,6 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Sortable table
-# ---------------------------------------------------------------------------
-
-
-def _sort_header(label: str, col_id: str, width, state) -> None:
-    """Render a sortable column header button."""
-    is_active = state.sort_col == col_id
-    indicator = (" ▲" if state.sort_asc else " ▼") if is_active else ""
-    btn = hd.button(
-        f"{label}{indicator}",
-        variant="text",
-        size="small",
-        font_weight="bold" if is_active else "normal",
-        font_color="neutral-600" if is_active else "neutral-500",
-        width=width,
-    )
-    if btn.clicked:
-        if state.sort_col == col_id:
-            state.sort_asc = not state.sort_asc
-        else:
-            state.sort_col = col_id
-            # Sensible default directions
-            state.sort_asc = col_id == "split"  # fastest split = ascending
-        state.page = 0
-
-
-def _interval_table(workouts: list[dict], state) -> tuple[int, int]:
-    """
-    Render a custom row-based table with sortable column headers.
-    Returns (total_rows, total_pages).
-    """
-    sorted_wk = _sort_workouts(workouts, state.sort_col, state.sort_asc)
-    total = len(sorted_wk)
-    total_pages = max(1, (total + _ROWS_PER_PAGE - 1) // _ROWS_PER_PAGE)
-    page_rows = sorted_wk[
-        state.page * _ROWS_PER_PAGE : (state.page + 1) * _ROWS_PER_PAGE
-    ]
-
-    if not page_rows:
-        with hd.box(padding=3, align="center"):
-            hd.text("No workouts match the selected filters.", font_color="neutral-500")
-        return total, total_pages
-
-    with hd.box():
-        # Header row
-        with hd.hbox(
-            gap=1,
-            padding=(0.25, 1),
-            border_bottom="1px solid neutral-200",
-            align="center",
-        ):
-            _sort_header("Date", "date", 9, state)
-            _sort_header("Reps", "reps", 4, state)
-            hd.text(
-                "Structure",
-                grow=True,
-                font_size="small",
-                font_weight="bold",
-                font_color="neutral-500",
-            )
-            hd.text(
-                "Stimulus",
-                width=10,
-                font_size="small",
-                font_weight="bold",
-                font_color="neutral-500",
-            )
-            _sort_header("Intensity zones", "zones", 10, state)
-            _sort_header("Work", "work", 6, state)
-            _sort_header("Avg Split", "split", 7, state)
-            _sort_header("Time", "time", 7, state)
-            _sort_header("SPM", "spm", 4, state)
-            _sort_header("HR", "hr", 6, state)
-            hd.box(width=2.5)  # view link column
-
-        # Data rows
-        for i, r in enumerate(page_rows):
-            with hd.scope(i):
-                with hd.hbox(
-                    gap=1,
-                    padding=(0.5, 1),
-                    align="center",
-                    background_color="neutral-50" if i % 2 else "neutral-0",
-                ):
-                    hd.text(
-                        fmt_date(r.get("date", "")),
-                        width=9,
-                        font_size="small",
-                        font_color="neutral-700",
-                    )
-                    hd.text(
-                        str(r["_reps"]) if r["_reps"] else "—",
-                        width=4,
-                        font_size="small",
-                        font_color="neutral-500",
-                    )
-                    with hd.box(grow=True):
-                        # _structure_key strips the leading "N × " rep count.
-                        # Clicking it sets a structure filter; click again to clear.
-                        is_struct_active = state.structure_filter == r["_structure_key"]
-                        struct_btn = hd.button(
-                            r["_structure_key"],
-                            variant="text",
-                            size="small",
-                            padding=(0, 0),
-                            font_weight="semibold" if is_struct_active else "normal",
-                            font_color="primary-500"
-                            if is_struct_active
-                            else "neutral-700",
-                        )
-                        if struct_btn.clicked:
-                            if is_struct_active:
-                                state.structure_filter = None
-                            else:
-                                state.structure_filter = r["_structure_key"]
-                            state.page = 0
-                    # Stimulus label (from grid classification)
-                    stimulus = r.get("_stimulus", "")
-                    with hd.box(width=10):
-                        if stimulus and stimulus != "—":
-                            hd.text(
-                                stimulus,
-                                font_size="x-small",
-                                font_color="neutral-500",
-                                font_style="italic",
-                            )
-                    with hd.box(width=10, align="start"):
-                        with hd.tooltip(_zones_tooltip(r["_bin_meters"])):
-                            hd.image(src=r["_bar_uri"], width=10, height=0.75)
-                    hd.text(
-                        fmt_distance(r.get("distance")),
-                        width=6,
-                        font_size="small",
-                        font_color="neutral-700",
-                    )
-                    hd.text(
-                        fmt_split(r["_work_pace"]) if r["_work_pace"] else "—",
-                        width=7,
-                        font_size="small",
-                    )
-                    hd.text(
-                        r.get("time_formatted")
-                        or (format_time(r["time"]) if r.get("time") else "—"),
-                        width=7,
-                        font_size="small",
-                        font_color="neutral-500",
-                    )
-                    spm = r.get("_work_spm")
-                    hd.text(
-                        f"{spm:.0f}" if spm else "—",
-                        width=4,
-                        font_size="small",
-                        font_color="neutral-500",
-                    )
-                    hd.text(
-                        fmt_hr(r.get("heart_rate")),
-                        width=6,
-                        font_size="small",
-                        font_color="neutral-500",
-                    )
-                    hd.link(
-                        "↗",
-                        href=f"/session/{r.get('id')}",
-                        font_size="small",
-                        font_color="neutral-400",
-                        underline=False,
-                        width=2.5,
-                        text_align="center",
-                    )
-
-    return total, total_pages
-
-
-def _pagination(state, total: int, total_pages: int) -> None:
-    if total_pages <= 1:
-        return
-    with hd.hbox(gap=1, align="center", padding=(1, 0)):
-        if state.page > 0:
-            if hd.button("← Prev", variant="neutral", size="small").clicked:
-                state.page -= 1
-        hd.text(
-            f"Page {state.page + 1} of {total_pages}  ({total} workouts)",
-            font_size="small",
-            font_color="neutral-500",
-        )
-        if state.page < total_pages - 1:
-            if hd.button("Next →", variant="neutral", size="small").clicked:
-                state.page += 1
-
-
-# ---------------------------------------------------------------------------
 # Tab entry point
 # ---------------------------------------------------------------------------
 
@@ -960,7 +750,8 @@ def intervals_page(client, user_id: str, excluded_seasons=(), machine="All") -> 
     # Apply global filters
     if excluded_seasons:
         all_workouts = [
-            w for w in all_workouts
+            w
+            for w in all_workouts
             if get_season(w.get("date", "")) not in set(excluded_seasons)
         ]
     if machine != "All":
@@ -978,11 +769,114 @@ def intervals_page(client, user_id: str, excluded_seasons=(), machine="All") -> 
     state = hd.state(
         active_cells=tuple(),  # tuple[str] — "col,row" keys of selected cells
         active_bins=tuple(),  # tuple[int] — pace bin indices (1–6) for AND filter
-        sort_col="date",
-        sort_asc=False,
-        page=0,
         structure_filter=None,  # str | None — filter table to this structure key
     )
+
+    # ── Interval-specific column definitions (capture state for filter button) ──
+    def _render_structure_cell(w):
+        is_active = state.structure_filter == w["_structure_key"]
+        btn = hd.button(
+            w["_structure_key"],
+            variant="text",
+            size="medium",
+            padding=(0, 0),
+            font_weight="semibold" if is_active else "normal",
+            font_color="primary-500" if is_active else "neutral-700",
+        )
+        if btn.clicked:
+            state.structure_filter = None if is_active else w["_structure_key"]
+
+    def _render_stimulus_cell(w):
+        s = w.get("_stimulus", "")
+        if s and s != "—":
+            hd.text(
+                s, font_size="x-small", font_color="neutral-500", font_style="italic"
+            )
+
+    def _render_zones_cell(w):
+        with hd.box(align="start"):
+            with hd.tooltip(_zones_tooltip(w["_bin_meters"])):
+                hd.image(src=w["_bar_uri"], width=10, height=0.75)
+
+    interval_columns = [
+        ColumnDef(
+            "date",
+            "Date",
+            "10rem",
+            render_value=lambda w: fmt_date(w.get("date", "")),
+            sort_value=lambda w: w.get("date", ""),
+        ),
+        ColumnDef(
+            "reps",
+            "Reps",
+            "4rem",
+            render_value=lambda w: str(w["_reps"]) if w.get("_reps") else "—",
+            sort_value=lambda w: w.get("_reps") or 0,
+        ),
+        ColumnDef(
+            "structure",
+            "Structure",
+            "minmax(8rem,1fr)",
+            render_cell=_render_structure_cell,
+            sortable=False,
+        ),
+        ColumnDef(
+            "stimulus",
+            "Stimulus",
+            "10rem",
+            render_cell=_render_stimulus_cell,
+            sortable=False,
+        ),
+        ColumnDef(
+            "zones",
+            "Intensity zones",
+            "10rem",
+            render_cell=_render_zones_cell,
+            sort_value=lambda w: w.get("_z3", 0.0),
+        ),
+        ColumnDef(
+            "work",
+            "Work",
+            "6rem",
+            render_value=lambda w: fmt_distance(w.get("distance")),
+            sort_value=lambda w: w.get("distance") or 0,
+        ),
+        ColumnDef(
+            "split",
+            "Avg Split",
+            "7rem",
+            render_value=lambda w: fmt_split(w["_work_pace"])
+            if w.get("_work_pace")
+            else "—",
+            sort_value=lambda w: w.get("_work_pace") or float("inf"),
+            default_asc=True,
+        ),
+        ColumnDef(
+            "time",
+            "Time",
+            "7rem",
+            render_value=lambda w: w.get("time_formatted")
+            or (format_time(w["time"]) if w.get("time") else "—"),
+            sort_value=lambda w: w.get("time") or 0,
+        ),
+        ColumnDef(
+            "spm",
+            "SPM",
+            "4rem",
+            render_value=lambda w: f"{w['_work_spm']:.0f}"
+            if w.get("_work_spm")
+            else "—",
+            sort_value=lambda w: w.get("_work_spm") or 0,
+        ),
+        ColumnDef(
+            "hr",
+            "HR",
+            "6rem",
+            render_value=lambda w: fmt_hr(w.get("heart_rate")),
+            sort_value=lambda w: (w.get("heart_rate") or {}).get("average") or 0,
+        ),
+        COL_LINK,
+    ]
 
     with hd.box(align="center", gap=1, padding=(2, 2, 2, 2)):
         hd.h1("Review Your Fondest Interval Sessions")
@@ -1010,13 +904,7 @@ def intervals_page(client, user_id: str, excluded_seasons=(), machine="All") -> 
             active_cells = frozenset(state.active_cells)
             filtered = _filter_by_cells(pre_filtered, active_cells)
 
-            # Clamp page if filter changed total
             total_filtered = len(filtered)
-            total_pages = max(
-                1, (total_filtered + _ROWS_PER_PAGE - 1) // _ROWS_PER_PAGE
-            )
-            if state.page >= total_pages:
-                state.page = max(0, total_pages - 1)
 
             # Structure filter chip
             if state.structure_filter:
@@ -1030,7 +918,6 @@ def intervals_page(client, user_id: str, excluded_seasons=(), machine="All") -> 
                         size="small",
                     ).clicked:
                         state.structure_filter = None
-                        state.page = 0
 
             with hd.hbox(align="center", justify="space-between", padding=(0.5, 0)):
                 hd.text(
@@ -1039,5 +926,17 @@ def intervals_page(client, user_id: str, excluded_seasons=(), machine="All") -> 
                     font_color="neutral-500",
                 )
 
-            total, total_pages = _interval_table(filtered, state)
-            _pagination(state, total, total_pages)
+            # Scope-reset trick: changing filter_key forces WorkoutTable's
+            # internal hd.state to reinitialise, resetting page to 0.
+            filter_key = (
+                f"{state.structure_filter or 'all'}"
+                f"_{sorted(list(state.active_bins))}"
+                f"_{sorted(list(state.active_cells))}"
+            )
+            with hd.scope(filter_key):
+                WorkoutTable(
+                    filtered,
+                    interval_columns,
+                    rows_per_page=_ROWS_PER_PAGE,
+                    default_sort_col="date",
+                )

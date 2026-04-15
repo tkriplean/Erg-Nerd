@@ -8,7 +8,7 @@ Renders when app_state.selected_session_id is set.  Displays:
   3. Chart + splits  — pace/watts chart (left) beside splits/intervals table (right)
                        Chart has Pace/Watts toggle and Reset zoom button.
                        Clicking a split/interval row zooms the chart to that band.
-  4. Similar sessions — result_table() of workouts with matching structure
+  4. Similar sessions — WorkoutTable() of workouts with matching structure
 
 Entry point::
 
@@ -39,7 +39,19 @@ from services.formatters import (
     format_time,
 )
 
-from components.workout_table import result_table
+from components.workout_table import (
+    WorkoutTable,
+    ColumnDef,
+    COL_DATE,
+    COL_DISTANCE,
+    COL_TIME,
+    COL_PACE,
+    COL_WATTS,
+    COL_DRAG,
+    COL_SPM,
+    COL_HR,
+    COL_LINK,
+)
 
 from components.workout_chart_builder import (
     build_interval_rows_and_bands,
@@ -890,15 +902,21 @@ def workout_page(session_id: int, client, user_id: str) -> None:
                 font_size="x-large",
                 font_color="neutral-800",
             )
-            result_table(
-                similar,
-                extra_col=(
+            is_interval_workout = workout.get("workout_type", "") in INTERVAL_WORKOUT_TYPES
+            if is_interval_workout:
+                # Similar sessions are mostly intervals — show structure column
+                workout_col = ColumnDef(
+                    "workout_structure",
                     "Workout",
-                    12,
-                    lambda w: (
+                    "minmax(8rem,1fr)",
+                    render_value=lambda w: (
                         interval_structure_key(w, compact=True)
                         if w.get("workout_type", "") in INTERVAL_WORKOUT_TYPES
                         else ""
                     ),
-                ),
-            )
+                )
+                cols = [COL_DATE, workout_col, COL_DISTANCE, COL_TIME, COL_PACE, COL_WATTS, COL_SPM, COL_HR, COL_LINK]
+            else:
+                # Non-interval: show standard performance columns
+                cols = [COL_DATE, COL_DISTANCE, COL_TIME, COL_PACE, COL_WATTS, COL_DRAG, COL_SPM, COL_HR, COL_LINK]
+            WorkoutTable(similar, cols)

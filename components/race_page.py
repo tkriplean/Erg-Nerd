@@ -67,6 +67,18 @@ from services.local_storage_compression import (
 from components.concept2_sync import concept2_sync
 from components.race_chart_plugin import RaceChart
 from components.hyperdiv_extensions import radio_group
+from components.workout_table import (
+    WorkoutTable,
+    COL_DATE,
+    COL_DISTANCE,
+    COL_TIME,
+    COL_PACE,
+    COL_WATTS,
+    COL_DRAG,
+    COL_SPM,
+    COL_HR,
+    COL_LINK,
+)
 
 _STROKES_LS_KEY = "strokes_cache"
 _DEFAULT_EVENT_TYPE = "dist"
@@ -138,79 +150,31 @@ def _include_filtered(workouts: list, include_filter: str) -> list:
 
 
 def _results_table(workouts: list, etype: str, pb_id: int | None) -> None:
-    """Render a sortable-by-result summary table for all in-scope workouts."""
+    """Render a sortable summary table for all in-scope workouts."""
     if not workouts:
         hd.text("No results in the current scope.", font_color="neutral-500")
         return
 
-    is_time_event = etype == "time"
-    if etype == "dist":
-        rows = sorted(workouts, key=lambda w: w.get("time") or float("inf"))
-    else:
-        rows = sorted(workouts, key=lambda w: w.get("distance") or 0, reverse=True)
-
-    headers = [
-        "Date",
-        "Season",
-        "Distance" if is_time_event else "Time",
-        "Avg Pace",
-        "Avg Watts",
-        "Avg SPM",
-        "Avg HR",
+    types = {r.get("type") for r in workouts}
+    cols = [COL_DATE]
+    if len(types) > 1:
+        cols.append(COL_TYPE)
+    cols += [
+        COL_DISTANCE,
+        COL_TIME,
+        COL_PACE,
+        COL_WATTS,
+        COL_DRAG,
+        COL_SPM,
+        COL_HR,
+        COL_LINK,
     ]
-
-    with hd.table(border_bottom="1px solid neutral-200"):
-        with hd.thead():
-            with hd.tr():
-                for col in headers:
-                    with hd.scope(col):
-                        with hd.td(padding=(0.5, 1)):
-                            hd.text(
-                                col,
-                                font_size="small",
-                                font_weight="semibold",
-                                font_color="neutral-600",
-                            )
-
-        with hd.tbody():
-            for w in rows:
-                with hd.scope(w.get("id")):
-                    is_pb = w.get("id") == pb_id
-                    date_str = (w.get("date") or "")[:10]
-                    season = get_season(w.get("date", ""))
-                    pace = compute_pace(w)
-                    pace_str = fmt_split(round(pace * 10)) if pace else "—"
-                    watts_str = str(round(compute_watts(pace))) if pace else "—"
-                    hr = (w.get("heart_rate") or {}).get("average") or 0
-                    hr_str = str(hr) if hr else "—"
-                    spm = w.get("stroke_rate") or 0
-                    spm_str = str(spm) if spm else "—"
-                    metric = (
-                        f"{w.get('distance', 0):,}m"
-                        if is_time_event
-                        else format_time(w.get("time") or 0)
-                    )
-                    vals = [
-                        date_str,
-                        season,
-                        metric,
-                        pace_str,
-                        watts_str,
-                        spm_str,
-                        hr_str,
-                    ]
-                    with hd.tr(background_color="primary-50" if is_pb else "neutral-0"):
-                        for idx, v in enumerate(vals):
-                            with hd.scope(idx):
-                                with hd.td(padding=(0.4, 1)):
-                                    hd.text(
-                                        v,
-                                        font_size="small",
-                                        font_weight="semibold" if is_pb else "normal",
-                                        font_color="primary-700"
-                                        if is_pb
-                                        else "neutral-800",
-                                    )
+    WorkoutTable(
+        workouts,
+        cols,
+        paginate=False,
+        highlight=lambda w: w.get("id") == pb_id,
+    )
 
 
 # ── Main page entry point ─────────────────────────────────────────────────────
@@ -243,7 +207,7 @@ def race_page(
         include_filter="All",
         sort_mode="date",  # "date" | "result"
         show_wr_boat=False,
-        wr_records={},      # {(etype, evalue): result} — cached from concept2_records
+        wr_records={},  # {(etype, evalue): result} — cached from concept2_records
         wr_records_key="",  # "gender|age|weight_kg" — invalidation key
         strokes_cache_loaded=False,
         strokes_by_id={},
@@ -477,181 +441,189 @@ def race_page(
     _cur_event_lbl = _fmt_event_long(state.event_type, state.event_value)
     _cur_include_lbl = _include_long.get(state.include_filter, state.include_filter)
 
-    with hd.box(align="center", gap=1, padding=2):
-        with hd.h1():
-            with hd.hbox(gap=0.6, align="center", wrap="wrap"):
-                hd.text("A Race Between Your")
+    with hd.box(align="center", gap=3, padding=2):
+        with hd.box(align="center", gap=1):
+            with hd.h1():
+                with hd.hbox(gap=0.6, align="center", wrap="wrap"):
+                    hd.text("A Race Between Your")
 
-                # ── Include filter dropdown ─────────────────────────────────────
-                with hd.scope("include_dd"):
-                    with hd.dropdown() as _inc_dd:
-                        _inc_btn = hd.button(
-                            _cur_include_lbl,
-                            caret=True,
-                            size="large",
-                            font_color="neutral-800",
-                            font_size=2,
-                            font_weight="bold",
-                            slot=_inc_dd.trigger,
-                        )
-                        if _inc_btn.clicked:
-                            _inc_dd.opened = not _inc_dd.opened
-                        with hd.box(
-                            gap=0.1,
-                            background_color="neutral-0",
-                            min_width=20,
-                        ):
-                            for val, lbl in _include_long.items():
-                                with hd.scope(f"inc_{val}"):
-                                    _inc_item = hd.button(
-                                        lbl,
-                                        size="small",
-                                        variant="primary"
-                                        if state.include_filter == val
-                                        else "text",
-                                        width="100%",
-                                        border_radius="small",
-                                        font_size="medium",
-                                        font_color="neutral-0"
-                                        if state.include_filter == val
-                                        else "neutral-800",
-                                        label_style=hd.style(
-                                            padding_top=0.5, padding_bottom=0.5
-                                        ),
-                                        hover_background_color="neutral-100",
-                                    )
-                                    if _inc_item.clicked:
-                                        state.include_filter = val
-                                        _inc_dd.opened = False
-
-                hd.text("at")
-
-                # ── Event selector dropdown ─────────────────────────────────────
-                with hd.scope("event_dd"):
-                    with hd.dropdown() as _ev_dd:
-                        _ev_btn = hd.button(
-                            _cur_event_lbl,
-                            caret=True,
-                            size="large",
-                            font_color="neutral-800",
-                            font_size=2,
-                            font_weight="bold",
-                            slot=_ev_dd.trigger,
-                        )
-                        if _ev_btn.clicked:
-                            _ev_dd.opened = not _ev_dd.opened
-                        with hd.box(
-                            gap=0.1,
-                            min_width=17,
-                            background_color="neutral-0",
-                        ):
-                            for etype, evalue in available_events:
-                                count = event_counts.get((etype, evalue), 0)
-                                row_lbl = f"{_fmt_event_long(etype, evalue)}  ({count})"
-                                is_sel = (
-                                    state.event_type == etype
-                                    and state.event_value == evalue
-                                )
-                                with hd.scope(f"ev_{etype}_{evalue}"):
-                                    _ev_item = hd.button(
-                                        row_lbl,
-                                        size="small",
-                                        variant="primary" if is_sel else "text",
-                                        width="100%",
-                                        border_radius="small",
-                                        font_size="medium",
-                                        font_color="neutral-0"
-                                        if is_sel
-                                        else "neutral-800",
-                                        label_style=hd.style(
-                                            padding_top=0.5, padding_bottom=0.5
-                                        ),
-                                        hover_background_color="neutral-100",
-                                    )
-                                    if _ev_item.clicked:
-                                        state.event_type = etype
-                                        state.event_value = evalue
-                                        state.last_batch_key = ""
-                                        _ev_dd.opened = False
-
-                hd.text("!")
-
-        # ── Loading progress bar ──────────────────────────────────────────────────
-        if is_loading:
-            with hd.box(align="center", padding=2, gap=1, margin_bottom=0.5):
-                with hd.box(width=32):
-                    hd.progress_bar(value=fetch_pct)
-                hd.text(
-                    f"Fetching stroke data… {state.fetch_done} / {state.fetch_total}",
-                    font_color="neutral-500",
-                    font_size="small",
-                )
-
-        # ── Race canvas ───────────────────────────────────────────────────────────
-        RaceChart(
-            races=races_data,
-            event_type=state.event_type,
-            event_value=state.event_value,
-            is_dark=is_dark,
-        )
-
-        # ── Sort toggle (below the race) ──────────────────────────────────────────
-        with hd.hbox(
-            gap=3,
-            align="center",
-            justify="center",
-            wrap="wrap",
-            padding_top=0.75,
-            padding_bottom=0.5,
-        ):
-            # Sort toggle
-            with hd.box(gap=0.2, align="center"):
-                hd.text("Sort lanes by", font_size="medium", font_color="neutral-500")
-                with hd.scope("sort_mode"):
-                    with radio_group(value=state.sort_mode, size="medium") as sort_rg:
-                        hd.radio_button("Date", value="date")
-                        hd.radio_button("Result", value="result")
-                    if sort_rg.changed:
-                        state.sort_mode = sort_rg.value
-
-            # World Record ghost boat toggle (RowErg + complete profile only)
-            if _wr_available:
-                with hd.scope("wr_toggle"):
-                    with hd.box(gap=0.2, align="center"):
-                        _wr_cb = hd.checkbox(
-                            "Include World Record boat",
-                            checked=state.show_wr_boat,
-                        )
-                        if _wr_cb.changed:
-                            state.show_wr_boat = _wr_cb.checked
-                        if state.show_wr_boat and state.wr_records_key != _wr_key:
-                            # Records still loading — show a subtle note
-                            hd.text(
-                                "Loading records…",
-                                font_size="2x-small",
-                                font_color="neutral-400",
+                    # ── Include filter dropdown ─────────────────────────────────────
+                    with hd.scope("include_dd"):
+                        with hd.dropdown() as _inc_dd:
+                            _inc_btn = hd.button(
+                                _cur_include_lbl,
+                                caret=True,
+                                size="large",
+                                font_color="neutral-800",
+                                font_size=2,
+                                font_weight="bold",
+                                slot=_inc_dd.trigger,
                             )
-                        elif state.show_wr_boat and _wr_boat is None:
-                            hd.text(
-                                "No world record available for this event / category.",
-                                font_size="2x-small",
-                                font_color="neutral-400",
-                            )
+                            if _inc_btn.clicked:
+                                _inc_dd.opened = not _inc_dd.opened
+                            with hd.box(
+                                gap=0.1,
+                                background_color="neutral-0",
+                                min_width=20,
+                            ):
+                                for val, lbl in _include_long.items():
+                                    with hd.scope(f"inc_{val}"):
+                                        _inc_item = hd.button(
+                                            lbl,
+                                            size="small",
+                                            variant="primary"
+                                            if state.include_filter == val
+                                            else "text",
+                                            width="100%",
+                                            border_radius="small",
+                                            font_size="medium",
+                                            font_color="neutral-0"
+                                            if state.include_filter == val
+                                            else "neutral-800",
+                                            label_style=hd.style(
+                                                padding_top=0.5, padding_bottom=0.5
+                                            ),
+                                            hover_background_color="neutral-100",
+                                        )
+                                        if _inc_item.clicked:
+                                            state.include_filter = val
+                                            _inc_dd.opened = False
 
-        # ── Results table ─────────────────────────────────────────────────────────
-        if table_wkts:
-            hd.text(
-                f"{len(table_wkts)} result(s) — {_fmt_event_long(state.event_type, state.event_value)}",
-                font_weight="semibold",
-                font_size="small",
-                font_color="neutral-600",
-                padding_top=0.5,
-                padding_bottom=0.5,
+                    hd.text("at")
+
+                    # ── Event selector dropdown ─────────────────────────────────────
+                    with hd.scope("event_dd"):
+                        with hd.dropdown() as _ev_dd:
+                            _ev_btn = hd.button(
+                                _cur_event_lbl,
+                                caret=True,
+                                size="large",
+                                font_color="neutral-800",
+                                font_size=2,
+                                font_weight="bold",
+                                slot=_ev_dd.trigger,
+                            )
+                            if _ev_btn.clicked:
+                                _ev_dd.opened = not _ev_dd.opened
+                            with hd.box(
+                                gap=0.1,
+                                min_width=17,
+                                background_color="neutral-0",
+                            ):
+                                for etype, evalue in available_events:
+                                    count = event_counts.get((etype, evalue), 0)
+                                    row_lbl = (
+                                        f"{_fmt_event_long(etype, evalue)}  ({count})"
+                                    )
+                                    is_sel = (
+                                        state.event_type == etype
+                                        and state.event_value == evalue
+                                    )
+                                    with hd.scope(f"ev_{etype}_{evalue}"):
+                                        _ev_item = hd.button(
+                                            row_lbl,
+                                            size="small",
+                                            variant="primary" if is_sel else "text",
+                                            width="100%",
+                                            border_radius="small",
+                                            font_size="medium",
+                                            font_color="neutral-0"
+                                            if is_sel
+                                            else "neutral-800",
+                                            label_style=hd.style(
+                                                padding_top=0.5, padding_bottom=0.5
+                                            ),
+                                            hover_background_color="neutral-100",
+                                        )
+                                        if _ev_item.clicked:
+                                            state.event_type = etype
+                                            state.event_value = evalue
+                                            state.last_batch_key = ""
+                                            _ev_dd.opened = False
+
+                    hd.text("!")
+
+            # ── Loading progress bar ──────────────────────────────────────────────────
+            if is_loading:
+                with hd.box(align="center", padding=2, gap=1, margin_bottom=0.5):
+                    with hd.box(width=32):
+                        hd.progress_bar(value=fetch_pct)
+                    hd.text(
+                        f"Fetching stroke data… {state.fetch_done} / {state.fetch_total}",
+                        font_color="neutral-500",
+                        font_size="small",
+                    )
+
+            # ── Race canvas ───────────────────────────────────────────────────────────
+            RaceChart(
+                races=races_data,
+                event_type=state.event_type,
+                event_value=state.event_value,
+                is_dark=is_dark,
             )
-            _results_table(table_wkts, state.event_type, pb_id)
-        elif not is_loading:
-            with hd.box(padding=3, align="center"):
-                hd.text(
-                    f"No {_fmt_event_long(state.event_type, state.event_value)} results in the selected scope.",
-                    font_color="neutral-500",
-                )
+
+            # ── Sort toggle (below the race) ──────────────────────────────────────────
+            with hd.hbox(
+                gap=3,
+                align="center",
+                justify="center",
+                wrap="wrap",
+                padding_top=0.75,
+                padding_bottom=0.5,
+            ):
+                # Sort toggle
+                with hd.box(gap=0.2, align="center"):
+                    hd.text(
+                        "Sort lanes by", font_size="medium", font_color="neutral-500"
+                    )
+                    with hd.scope("sort_mode"):
+                        with radio_group(
+                            value=state.sort_mode, size="medium"
+                        ) as sort_rg:
+                            hd.radio_button("Date", value="date")
+                            hd.radio_button("Result", value="result")
+                        if sort_rg.changed:
+                            state.sort_mode = sort_rg.value
+
+                # World Record ghost boat toggle (RowErg + complete profile only)
+                if _wr_available:
+                    with hd.scope("wr_toggle"):
+                        with hd.box(gap=0.2, align="center"):
+                            _wr_cb = hd.checkbox(
+                                "Include World Record boat",
+                                checked=state.show_wr_boat,
+                            )
+                            if _wr_cb.changed:
+                                state.show_wr_boat = _wr_cb.checked
+                            if state.show_wr_boat and state.wr_records_key != _wr_key:
+                                # Records still loading — show a subtle note
+                                hd.text(
+                                    "Loading records…",
+                                    font_size="2x-small",
+                                    font_color="neutral-400",
+                                )
+                            elif state.show_wr_boat and _wr_boat is None:
+                                hd.text(
+                                    "No world record available for this event / category.",
+                                    font_size="2x-small",
+                                    font_color="neutral-400",
+                                )
+
+        with hd.box(gap=1, align="center"):
+            with hd.h2():
+                if state.include_filter == "All":
+                    hd.text(f"Your Quality {_cur_event_lbl} Efforts")
+                elif state.include_filter == "SBs":
+                    hd.text(f"Your {_cur_event_lbl} Season Bests")
+                elif state.include_filter == "PBs":
+                    hd.text(f"Your {_cur_event_lbl} Personal Bests")
+
+            # ── Results table ─────────────────────────────────────────────────────────
+            if table_wkts:
+                _results_table(table_wkts, state.event_type, pb_id)
+            elif not is_loading:
+                with hd.box(padding=3, align="center"):
+                    hd.text(
+                        f"No {_fmt_event_long(state.event_type, state.event_value)} results in the selected scope.",
+                        font_color="neutral-500",
+                    )

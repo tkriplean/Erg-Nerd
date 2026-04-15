@@ -36,7 +36,18 @@ from services.critical_power_model import (
     fit_critical_power,
 )
 from components.sessions_chart_plugin import SessionsChart
-from components.workout_table import result_table
+from components.workout_table import (
+    WorkoutTable,
+    COL_DATE,
+    COL_DISTANCE,
+    COL_TIME,
+    COL_PACE,
+    COL_WATTS,
+    COL_DRAG,
+    COL_SPM,
+    COL_HR,
+    COL_LINK,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -544,4 +555,7 @@ def sessions_chart(workouts: list) -> None:
         if in_window:
             with hd.box(padding=(2, 0, 0, 0)):
                 hd.h3(f"Workouts in View  ({len(in_window)})")
-                result_table(in_window)
+                WorkoutTable(
+                    in_window,
+                    [COL_DATE, COL_DISTANCE, COL_TIME, COL_PACE, COL_WATTS, COL_DRAG, COL_SPM, COL_HR, COL_LINK],
+                )
