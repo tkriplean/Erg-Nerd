@@ -53,7 +53,7 @@ STATE VARIABLES  (declared at the top of power_curve_page())
   chart_log_x        bool          log scale on x-axis
   chart_log_y        bool          log scale on y-axis
   chart_show_components bool       show component sub-curves for supported predictors
-  sim_week           int           day offset from sim_start; _SIM_TODAY (999999) = end
+  timeline_day       int           day offset from sim_start; _SIM_TODAY (999999) = end
   sim_speed          str           one of _SPEED_OPTIONS: "0.5x"|"1x"|"4x"|"16x"
   sim_playing        bool          whether the animation is running
   sim_bundle         dict|None     precomputed animation bundle; None until task completes
@@ -61,7 +61,7 @@ STATE VARIABLES  (declared at the top of power_curve_page())
   sim_pred_lookup    dict          {keyframe_day: pred_table_rows} from build_timeline_payload
   last_sim_day_out   int           tracks chart.sim_day_out changes (ticks + user seeks)
   last_sim_done      int           tracks chart.sim_done changes to detect animation end
-  _last_pauls_k_fit  float|None    pauls_k_fit from last slow-path render; used on fast path
+  _pauls_k_fit       float|None    pauls_k_fit from last slow-path render; used on fast path
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SIMULATION / TIMELINE
@@ -121,7 +121,6 @@ HYPERDIV QUIRKS APPLIED HERE
 
 import hashlib
 import json
-import time
 from datetime import date, timedelta
 import hyperdiv as hd
 
@@ -185,7 +184,7 @@ from components.hyperdiv_extensions import radio_group, shadowed_box, grid_box
 # Constants local to this module
 # ---------------------------------------------------------------------------
 
-_SIM_TODAY = 999999  # sentinel: sim_week value meaning "end of timeline / today"
+_SIM_TODAY = 999999  # sentinel: timeline_day value meaning "end of timeline / today"
 _SPEED_OPTIONS = ("0.5x", "1x", "4x", "16x")
 _SPEED_DAYS = {"0.5x": 1, "1x": 7, "4x": 30, "16x": 91}
 _SIM_LOOKAHEAD_STEPS = 4  # ghost/arrow lookahead = this many sim steps ahead
@@ -336,12 +335,12 @@ def _chart_section(
                 state.sim_playing = chart.sim_playing_out
 
             # JS writes sim_day_out on every tick and after user seeks.
-            # Always update sim_week so Python knows the current position
+            # Always update timeline_day so Python knows the current position
             # (used to rebuild the static config when paused).
             if chart.sim_day_out != state.last_sim_day_out:
                 state.last_sim_day_out = chart.sim_day_out
                 if chart.sim_day_out >= 0:
-                    state.sim_week = chart.sim_day_out
+                    state.timeline_day = chart.sim_day_out
 
             # JS increments sim_done when the animation completes.
             if chart.sim_done != state.last_sim_done:
@@ -1033,7 +1032,7 @@ def _apply_display_filter(
     return filtered
 
 
-def _compute_sim_timeline(excluded_seasons, all_seasons: list, sim_week: int) -> tuple:
+def _compute_sim_timeline(excluded_seasons, all_seasons: list, timeline_day: int) -> tuple:
     """
     Derive the simulation timeline from the included seasons.
     Returns (sim_start, total_days, sim_date, at_today, included_seasons).
@@ -1048,7 +1047,7 @@ def _compute_sim_timeline(excluded_seasons, all_seasons: list, sim_week: int) ->
         sim_start = date.today() - timedelta(days=365)
         sim_end = date.today()
     total_days = max(1, (sim_end - sim_start).days + 1)
-    sim_day_idx = max(0, min(sim_week, total_days - 1))
+    sim_day_idx = max(0, min(timeline_day, total_days - 1))
     sim_date = sim_start + timedelta(days=sim_day_idx)
     at_today = sim_day_idx >= total_days - 1
     return sim_start, total_days, sim_date, at_today, included_seasons
@@ -1246,6 +1245,431 @@ def _load_wc_cp(state, profile: dict) -> tuple:
 
 
 # ---------------------------------------------------------------------------
+# Sub-component: page header
+# ---------------------------------------------------------------------------
+
+
+def _page_header(
+    state,
+    *,
+    sim_date: date,
+    at_today: bool,
+    rl_task,
+    profile: dict,
+) -> None:
+    """
+    Renders the page title bar: best_filter dropdown, events dropdown, date label.
+    Also shows the RL profile-incomplete inline warning when relevant.
+    """
+    _date_label = sim_date.strftime("%b %d, %Y")
+    _best_long = {
+        "All": "All Great Efforts",
+        "PBs": "Personal Bests",
+        "SBs": "Season Bests",
+    }
+    _cur_best_lbl = _best_long.get(state.best_filter, state.best_filter)
+    with hd.h1():
+        with hd.hbox(
+            gap=0.6,
+            align="center",
+            padding_bottom=0,
+            justify="center",
+            wrap="wrap",
+        ):
+            with hd.scope("best_filter_dd"):
+                with hd.dropdown() as _bf_dd:
+                    _bf_btn = hd.button(
+                        _cur_best_lbl,
+                        caret=True,
+                        size="large",
+                        font_color="neutral-800",
+                        font_size=2,
+                        font_weight="bold",
+                        slot=_bf_dd.trigger,
+                    )
+                    if _bf_btn.clicked:
+                        _bf_dd.opened = not _bf_dd.opened
+                    with hd.box(
+                        padding=1,
+                        gap=1,
+                        background_color="neutral-0",
+                        min_width=24,
+                    ):
+                        # ── Plot in graph ─────────────────────────────
+                        hd.text(
+                            "Plot in graph",
+                            font_size="small",
+                            font_weight="semibold",
+                            font_color="neutral-500",
+                        )
+                        with hd.scope("best_filter_rg"):
+                            with radio_group(
+                                value=state.best_filter, size="small"
+                            ) as _bf_rg:
+                                hd.radio_button(
+                                    "All Great Efforts", value="All"
+                                )
+                                hd.radio_button("PBs only", value="PBs")
+                                hd.radio_button("SBs only", value="SBs")
+                            if _bf_rg.changed:
+                                state.best_filter = _bf_rg.value
+
+                        hd.divider()
+
+                        # ── Draw a Power Curve for ────────────────────
+                        hd.text(
+                            "Draw a Power Curve for",
+                            font_size="small",
+                            font_weight="semibold",
+                            font_color="neutral-500",
+                        )
+                        with hd.scope("draw_curves_rg"):
+                            with radio_group(
+                                value=state.draw_power_curves, size="small"
+                            ) as _dpc_rg:
+                                hd.radio_button("SBs", value="SBs")
+                                hd.radio_button("PBs", value="PBs")
+                                hd.radio_button("None", value="None")
+                            if _dpc_rg.changed:
+                                state.draw_power_curves = _dpc_rg.value
+
+            # ---- Events dropdown ----
+            _n_ev_sel = sum(state.dist_enabled) + sum(state.time_enabled)
+            _n_ev_tot = len(RANKED_DISTANCES) + len(RANKED_TIMES)
+            _ev_lbl = "All Events" if _n_ev_sel == _n_ev_tot else "Some Events"
+
+            hd.text("for", font_size="medium")
+
+            with hd.dropdown() as _ev_dd:
+                _ev_btn = hd.button(
+                    _ev_lbl,
+                    font_color="neutral-800",
+                    font_size=2,
+                    font_weight="bold",
+                    caret=True,
+                    size="large",
+                    slot=_ev_dd.trigger,
+                )
+                if _ev_btn.clicked:
+                    _ev_dd.opened = not _ev_dd.opened
+                with hd.box(padding=1, gap=0.5, background_color="neutral-50"):
+                    with hd.hbox(gap=0.5, padding_bottom=0.5):
+                        if hd.button(
+                            "Select all", size="small", variant="text"
+                        ).clicked:
+                            state.dist_enabled = tuple(
+                                True for _ in RANKED_DISTANCES
+                            )
+                            state.time_enabled = tuple(
+                                True for _ in RANKED_TIMES
+                            )
+                        if hd.button(
+                            "Clear all", size="small", variant="text"
+                        ).clicked:
+                            state.dist_enabled = tuple(
+                                False for _ in RANKED_DISTANCES
+                            )
+                            state.time_enabled = tuple(
+                                False for _ in RANKED_TIMES
+                            )
+                    with hd.scope(str(state.dist_enabled)):
+                        with hd.hbox(gap=0.5, wrap="wrap"):
+                            for i, (dist, label) in enumerate(RANKED_DISTANCES):
+                                with hd.scope(f"dist_{dist}"):
+                                    cb = hd.checkbox(
+                                        label, checked=state.dist_enabled[i]
+                                    )
+                                    if cb.changed:
+                                        flags = list(state.dist_enabled)
+                                        flags[i] = cb.checked
+                                        state.dist_enabled = tuple(flags)
+                                    if cb.checked != state.dist_enabled[i]:
+                                        cb.checked = state.dist_enabled[i]
+                    hd.text(
+                        "— timed —",
+                        font_color="neutral-300",
+                        font_size="x-small",
+                        padding_top=0.25,
+                    )
+                    with hd.scope(str(state.time_enabled)):
+                        with hd.hbox(gap=0.5, wrap="wrap"):
+                            for i, (tenths, label) in enumerate(RANKED_TIMES):
+                                with hd.scope(f"time_{tenths}"):
+                                    cb = hd.checkbox(
+                                        label, checked=state.time_enabled[i]
+                                    )
+                                    if cb.changed:
+                                        flags = list(state.time_enabled)
+                                        flags[i] = cb.checked
+                                        state.time_enabled = tuple(flags)
+                                    if cb.checked != state.time_enabled[i]:
+                                        cb.checked = state.time_enabled[i]
+
+            hd.text("through", font_size="medium")
+            hd.text(_date_label, font_size="2x-large", font_weight="normal")
+
+        if (
+            at_today
+            and rl_task is not None
+            and state.chart_predictor == "rowinglevel"
+        ):
+            if not profile_complete(profile):
+                hd.alert(
+                    "Please complete your profile (Gender, Age, and Bodyweight) "
+                    "in the Profile tab before using RowingLevel predictions.",
+                    variant="warning",
+                    opened=True,
+                )
+
+
+# ---------------------------------------------------------------------------
+# Pure computation: chart config + prediction data for a single render cycle
+# ---------------------------------------------------------------------------
+
+
+def _compute_chart_data(
+    state,
+    *,
+    ranked_prefilt: list,
+    prefilt_excl: list,
+    featured_data: list,
+    sim_date: date,
+    at_today: bool,
+    rl_predictions: dict,
+    show_watts: bool,
+    is_dark: bool,
+    x_bounds,
+    y_bounds,
+    all_seasons: list,
+    wc_data,
+) -> tuple:
+    """
+    Fast/slow path guard — returns (chart_cfg, pred_rows, pauls_k_fit, pauls_k).
+
+    Fast path (animating): chart_cfg=None; pred_rows from precomputed lookup.
+    Slow path (paused/static): full compute_timeline_snapshot + build_chart_config.
+    Writes state._pauls_k_fit on the slow path so the fast path can use it.
+    """
+    is_animating = state.sim_playing and state.sim_bundle is not None
+
+    if not is_animating:
+        # ── Slow path ─────────────────────────────────────────────────────────
+        date_str = sim_date.isoformat()
+        if state.best_filter == "All":
+            _in_time = ranked_prefilt[_bisect_date_desc(ranked_prefilt, date_str) :]
+            sim_wkts = _in_time
+        else:
+            _in_time = featured_data[_bisect_date_desc(featured_data, date_str) :]
+            sim_wkts = (
+                apply_best_only(_in_time)
+                if state.best_filter == "PBs"
+                else apply_season_best_only(_in_time)
+            )
+        all_events_to_date = prefilt_excl[_bisect_date_desc(prefilt_excl, date_str) :]
+
+        # Disabled-event workouts (faint background dots in chart).
+        excluded_cats = set()
+        for i, (dist, _) in enumerate(RANKED_DISTANCES):
+            if not state.dist_enabled[i]:
+                excluded_cats.add(("dist", dist))
+        for i, (tenths, _) in enumerate(RANKED_TIMES):
+            if not state.time_enabled[i]:
+                excluded_cats.add(("time", tenths))
+        excluded_wkts: list = []
+        if excluded_cats:
+            if state.best_filter == "PBs":
+                excluded_wkts = apply_best_only(
+                    [w for w in all_events_to_date if workout_cat_key(w) in excluded_cats]
+                )
+            elif state.best_filter == "SBs":
+                excluded_wkts = apply_season_best_only(
+                    [w for w in all_events_to_date if workout_cat_key(w) in excluded_cats]
+                )
+            else:
+                excluded_wkts = all_events_to_date
+
+        predictor = (
+            state.chart_predictor
+            if at_today or state.chart_predictor != "rowinglevel"
+            else "none"
+        )
+        _snap = compute_timeline_snapshot(
+            sim_wkts=sim_wkts,
+            excl_in_time=all_events_to_date,
+            predictor=predictor,
+            rl_predictions=rl_predictions,
+            show_watts=show_watts,
+            is_dark=is_dark,
+            x_mode=state.chart_x_metric,
+            x_bounds=x_bounds,
+            y_bounds=y_bounds,
+            show_components=state.chart_show_components,
+        )
+        lb, lb_anchor = _snap["lb"], _snap["lb_anchor"]
+        pauls_k_fit = _snap["pauls_k_fit"]
+        pauls_k = _snap["pauls_k"]
+        cp_params = _snap["cp_params"]
+        pred_rows = _snap["pred_table_rows"]
+        state._pauls_k_fit = pauls_k_fit
+
+        # CP → loglog fallback when insufficient data.
+        effective_predictor = predictor
+        if effective_predictor == "critical_power" and cp_params is None:
+            effective_predictor = "loglog"
+
+        chart_cfg = build_chart_config(
+            sim_wkts,
+            log_x=state.chart_log_x,
+            log_y=state.chart_log_y,
+            show_lifetime_line=state.draw_power_curves == "PBs",
+            show_watts=show_watts,
+            is_dark=is_dark,
+            predictor=effective_predictor,
+            rl_predictions=rl_predictions,
+            critical_power_params=cp_params,
+            season_lines=set(all_seasons) if state.draw_power_curves == "SBs" else set(),
+            all_seasons=all_seasons,
+            x_bounds=x_bounds,
+            y_bounds=y_bounds,
+            sim_overlays=None,
+            overlay_labels=[],
+            show_components=state.chart_show_components,
+            lifetime_best=lb,
+            lifetime_best_anchor=lb_anchor,
+            pauls_k=pauls_k,
+            excluded_workouts=excluded_wkts,
+            x_mode=state.chart_x_metric,
+            wc_data=wc_data,
+        )
+    else:
+        # ── Fast path ─────────────────────────────────────────────────────────
+        # JS uses sim_bundle to render the chart; no model work needed.
+        # Use the precomputed lookup for the prediction table.
+        pauls_k_fit = state._pauls_k_fit
+        pauls_k = pauls_k_fit if pauls_k_fit is not None else 5.0
+        pred_rows = _lookup_pred_rows(state.sim_pred_lookup, state.timeline_day)
+        chart_cfg = None  # JS ignores config while bundle is active
+
+    return chart_cfg, pred_rows, pauls_k_fit, pauls_k
+
+
+# ---------------------------------------------------------------------------
+# HyperDiv helper: animation bundle lifecycle
+# ---------------------------------------------------------------------------
+
+
+def _manage_animation_bundle(
+    state,
+    *,
+    ranked_prefilt: list,
+    prefilt_excl: list,
+    featured_data: list,
+    sim_start: date,
+    total_days: int,
+    selected_dists: set,
+    selected_times: set,
+    excluded_seasons: tuple,
+    show_watts: bool,
+    is_dark: bool,
+    x_bounds,
+    y_bounds,
+    rl_predictions: dict,
+    all_seasons: list,
+    wc_data,
+    at_today: bool,
+) -> str:
+    """
+    Manages the animation bundle lifecycle: computes the bundle key, invalidates
+    state.sim_bundle/sim_pred_lookup when stale, launches the background
+    build_timeline_payload task, unpacks results on completion, and derives
+    sim_command.
+
+    Returns sim_command: "play" | "pause" | "stop".
+    """
+    _bundle_key = hashlib.md5(
+        json.dumps(
+            [
+                state.chart_predictor,
+                state.best_filter,
+                sorted(list(selected_dists)),
+                sorted(list(selected_times)),
+                sorted(list(excluded_seasons)),
+                show_watts,
+                state.chart_x_metric,
+                state.chart_log_x,
+                state.draw_power_curves,
+                state.chart_show_components,
+                state.chart_compare_wc,
+                state._prefilt_key,  # includes machine + workout count + dist/time/season filters
+            ],
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()[:16]
+
+    if state.sim_bundle_key != _bundle_key:
+        # Settings changed — invalidate the cached bundle and lookup.
+        state.sim_bundle = None
+        state.sim_pred_lookup = {}
+        state.sim_bundle_key = _bundle_key
+
+    if state.sim_bundle is None:
+        # Bundle needed but not ready — launch the build task.
+        with hd.scope(f"sim_bundle_{_bundle_key}"):
+            _bt = hd.task()
+            if not _bt.running and not _bt.done:
+                _bt.run(
+                    build_timeline_payload,
+                    ranked_prefilt,
+                    prefilt_excl,
+                    featured_data,
+                    sim_start=sim_start,
+                    total_days=total_days,
+                    best_filter=state.best_filter,
+                    dist_enabled=state.dist_enabled,
+                    time_enabled=state.time_enabled,
+                    show_watts=show_watts,
+                    is_dark=is_dark,
+                    x_mode=state.chart_x_metric,
+                    x_bounds=x_bounds,
+                    y_bounds=y_bounds,
+                    predictor=state.chart_predictor,
+                    draw_power_curves=state.draw_power_curves,
+                    show_components=state.chart_show_components,
+                    log_x=state.chart_log_x,
+                    rl_predictions=rl_predictions,
+                    all_seasons=all_seasons,
+                    wc_data=wc_data,
+                    bundle_key=_bundle_key,
+                )
+            if _bt.done:
+                if _bt.result:
+                    js_payload, pred_lookup = _bt.result
+                    state.sim_bundle = js_payload
+                    state.sim_pred_lookup = pred_lookup
+                elif _bt.error:
+                    # Task failed — stop playing and surface the error.
+                    state.sim_playing = False
+                    hd.alert(
+                        f"Animation bundle failed: {_bt.error}",
+                        variant="danger",
+                        closable=True,
+                    )
+
+    # Derive sim_command.  Seeking is handled entirely in JS via the integrated
+    # scrubber; Python only signals play / pause / stop.
+    if state.sim_playing and not at_today and state.sim_bundle is not None:
+        return "play"
+    elif state.sim_playing and state.sim_bundle is None:
+        return "pause"  # bundle not ready yet — hold JS
+    elif at_today:
+        return "stop"
+    elif state.sim_bundle is not None:
+        return "pause"
+    else:
+        return "stop"
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
@@ -1267,14 +1691,14 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         chart_show_components=False,
         draw_power_curves="PBs",
         sim_playing=False,
-        sim_week=_SIM_TODAY,
+        timeline_day=_SIM_TODAY,
         sim_speed="1x",
         sim_bundle=None,  # precomputed animation bundle dict
         sim_bundle_key="",  # hash of bundle inputs; stale when settings change
         sim_pred_lookup={},  # {keyframe_day: pred_table_rows} from build_timeline_payload
         last_sim_day_out=-1,  # tracks chart.sim_day_out changes
         last_sim_done=0,  # tracks chart.sim_done changes
-        _last_pauls_k_fit=None,  # pauls_k_fit from last slow-path render
+        _pauls_k_fit=None,  # pauls_k_fit from last slow-path render; used on fast path
         chart_compare_wc=False,
         wc_fetch_key="",
         wc_fetch_done=False,
@@ -1371,7 +1795,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         sim_date,
         at_today,
         included_seasons,
-    ) = _compute_sim_timeline(excluded_seasons, all_seasons, state.sim_week)
+    ) = _compute_sim_timeline(excluded_seasons, all_seasons, state.timeline_day)
     show_watts = state.chart_y_metric == "watts"
 
     # Slider annotations — stable across animation ticks; only recompute when
@@ -1412,375 +1836,53 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
     if state.chart_compare_wc:
         y_bounds = _expand_y_bounds_for_wc(y_bounds, wc_data, show_watts)
 
-    # ── Sim bundle management ─────────────────────────────────────────────────
-    # Bundle key: hash of all inputs that affect the bundle content.
-    # When any of these change, the existing bundle is stale and must be rebuilt.
-    _bundle_key = hashlib.md5(
-        json.dumps(
-            [
-                state.chart_predictor,
-                state.best_filter,
-                sorted(list(selected_dists)),
-                sorted(list(selected_times)),
-                sorted(list(excluded_seasons)),
-                show_watts,
-                state.chart_x_metric,
-                state.chart_log_x,
-                state.draw_power_curves,
-                state.chart_show_components,
-                state.chart_compare_wc,
-                state._prefilt_key,  # includes machine + workout count + dist/time/season filters
-            ],
-            sort_keys=True,
-        ).encode()
-    ).hexdigest()[:16]
-
-    if state.sim_bundle_key != _bundle_key:
-        # Settings changed — invalidate the cached bundle and lookup.
-        state.sim_bundle = None
-        state.sim_pred_lookup = {}
-        state.sim_bundle_key = _bundle_key
-
-    if state.sim_bundle is None:
-        # Bundle needed but not ready — launch the build task.
-        with hd.scope(f"sim_bundle_{_bundle_key}"):
-            _bt = hd.task()
-            if not _bt.running and not _bt.done:
-                _bt.run(
-                    build_timeline_payload,
-                    _ranked_prefilt,
-                    _prefilt_excl,
-                    _featured_data,
-                    sim_start=sim_start,
-                    total_days=total_days,
-                    best_filter=state.best_filter,
-                    dist_enabled=state.dist_enabled,
-                    time_enabled=state.time_enabled,
-                    show_watts=show_watts,
-                    is_dark=is_dark,
-                    x_mode=state.chart_x_metric,
-                    x_bounds=x_bounds,
-                    y_bounds=y_bounds,
-                    predictor=state.chart_predictor,
-                    draw_power_curves=state.draw_power_curves,
-                    show_components=state.chart_show_components,
-                    log_x=state.chart_log_x,
-                    rl_predictions=rl_predictions,
-                    all_seasons=all_seasons,
-                    wc_data=wc_data,
-                    bundle_key=_bundle_key,
-                )
-            if _bt.done:
-                if _bt.result:
-                    js_payload, pred_lookup = _bt.result
-                    state.sim_bundle = js_payload
-                    state.sim_pred_lookup = pred_lookup
-                elif _bt.error:
-                    # Task failed — stop playing and surface the error.
-                    state.sim_playing = False
-                    hd.alert(
-                        f"Animation bundle failed: {_bt.error}",
-                        variant="danger",
-                        closable=True,
-                    )
-
-    # ── Compute sim_command ───────────────────────────────────────────────────
-    # Seeking is handled entirely in JS via the integrated scrubber; Python only
-    # signals play / pause / stop.
-    if state.sim_playing and not at_today and state.sim_bundle is not None:
-        _sim_command = "play"
-    elif state.sim_playing and state.sim_bundle is None:
-        _sim_command = "pause"  # bundle not ready yet — hold JS
-    elif at_today:
-        _sim_command = "stop"
-    elif state.sim_bundle is not None:
-        _sim_command = "pause"
-    else:
-        _sim_command = "stop"
+    # ── Animation bundle + sim_command ───────────────────────────────────────
+    _sim_command = _manage_animation_bundle(
+        state,
+        ranked_prefilt=_ranked_prefilt,
+        prefilt_excl=_prefilt_excl,
+        featured_data=_featured_data,
+        sim_start=sim_start,
+        total_days=total_days,
+        selected_dists=selected_dists,
+        selected_times=selected_times,
+        excluded_seasons=excluded_seasons,
+        show_watts=show_watts,
+        is_dark=is_dark,
+        x_bounds=x_bounds,
+        y_bounds=y_bounds,
+        rl_predictions=rl_predictions,
+        all_seasons=all_seasons,
+        wc_data=wc_data,
+        at_today=at_today,
+    )
 
     # ── Render ────────────────────────────────────────────────────────────────
     with hd.box(gap=5, align="center", padding=(2, 2, 2, 2)):
         with hd.box(width="100%", align="center"):
-            with hd.h1():
-                _date_label = sim_date.strftime("%b %d, %Y")
-                _best_long = {
-                    "All": "All Great Efforts",
-                    "PBs": "Personal Bests",
-                    "SBs": "Season Bests",
-                }
-                _cur_best_lbl = _best_long.get(state.best_filter, state.best_filter)
-                with hd.hbox(
-                    gap=0.6,
-                    align="center",
-                    padding_bottom=0,
-                    justify="center",
-                    wrap="wrap",
-                ):
-                    with hd.scope("best_filter_dd"):
-                        with hd.dropdown() as _bf_dd:
-                            _bf_btn = hd.button(
-                                _cur_best_lbl,
-                                caret=True,
-                                size="large",
-                                font_color="neutral-800",
-                                font_size=2,
-                                font_weight="bold",
-                                slot=_bf_dd.trigger,
-                            )
-                            if _bf_btn.clicked:
-                                _bf_dd.opened = not _bf_dd.opened
-                            with hd.box(
-                                padding=1,
-                                gap=1,
-                                background_color="neutral-0",
-                                min_width=24,
-                            ):
-                                # ── Plot in graph ─────────────────────────────
-                                hd.text(
-                                    "Plot in graph",
-                                    font_size="small",
-                                    font_weight="semibold",
-                                    font_color="neutral-500",
-                                )
-                                with hd.scope("best_filter_rg"):
-                                    with radio_group(
-                                        value=state.best_filter, size="small"
-                                    ) as _bf_rg:
-                                        hd.radio_button(
-                                            "All Great Efforts", value="All"
-                                        )
-                                        hd.radio_button("PBs only", value="PBs")
-                                        hd.radio_button("SBs only", value="SBs")
-                                    if _bf_rg.changed:
-                                        state.best_filter = _bf_rg.value
+            _page_header(
+                state,
+                sim_date=sim_date,
+                at_today=at_today,
+                rl_task=rl_task,
+                profile=profile,
+            )
 
-                                hd.divider()
-
-                                # ── Draw a Power Curve for ────────────────────
-                                hd.text(
-                                    "Draw a Power Curve for",
-                                    font_size="small",
-                                    font_weight="semibold",
-                                    font_color="neutral-500",
-                                )
-                                with hd.scope("draw_curves_rg"):
-                                    with radio_group(
-                                        value=state.draw_power_curves, size="small"
-                                    ) as _dpc_rg:
-                                        hd.radio_button("SBs", value="SBs")
-                                        hd.radio_button("PBs", value="PBs")
-                                        hd.radio_button("None", value="None")
-                                    if _dpc_rg.changed:
-                                        state.draw_power_curves = _dpc_rg.value
-
-                    # ---- Events dropdown ----
-                    _n_ev_sel = sum(state.dist_enabled) + sum(state.time_enabled)
-                    _n_ev_tot = len(RANKED_DISTANCES) + len(RANKED_TIMES)
-                    _ev_lbl = "All Events" if _n_ev_sel == _n_ev_tot else "Some Events"
-
-                    hd.text("for", font_size="medium")
-
-                    with hd.dropdown() as _ev_dd:
-                        _ev_btn = hd.button(
-                            _ev_lbl,
-                            font_color="neutral-800",
-                            font_size=2,
-                            font_weight="bold",
-                            caret=True,
-                            size="large",
-                            slot=_ev_dd.trigger,
-                        )
-                        if _ev_btn.clicked:
-                            _ev_dd.opened = not _ev_dd.opened
-                        with hd.box(padding=1, gap=0.5, background_color="neutral-50"):
-                            with hd.hbox(gap=0.5, padding_bottom=0.5):
-                                if hd.button(
-                                    "Select all", size="small", variant="text"
-                                ).clicked:
-                                    state.dist_enabled = tuple(
-                                        True for _ in RANKED_DISTANCES
-                                    )
-                                    state.time_enabled = tuple(
-                                        True for _ in RANKED_TIMES
-                                    )
-                                if hd.button(
-                                    "Clear all", size="small", variant="text"
-                                ).clicked:
-                                    state.dist_enabled = tuple(
-                                        False for _ in RANKED_DISTANCES
-                                    )
-                                    state.time_enabled = tuple(
-                                        False for _ in RANKED_TIMES
-                                    )
-                            with hd.scope(str(state.dist_enabled)):
-                                with hd.hbox(gap=0.5, wrap="wrap"):
-                                    for i, (dist, label) in enumerate(RANKED_DISTANCES):
-                                        with hd.scope(f"dist_{dist}"):
-                                            cb = hd.checkbox(
-                                                label, checked=state.dist_enabled[i]
-                                            )
-                                            if cb.changed:
-                                                flags = list(state.dist_enabled)
-                                                flags[i] = cb.checked
-                                                state.dist_enabled = tuple(flags)
-                                            if cb.checked != state.dist_enabled[i]:
-                                                cb.checked = state.dist_enabled[i]
-                            hd.text(
-                                "— timed —",
-                                font_color="neutral-300",
-                                font_size="x-small",
-                                padding_top=0.25,
-                            )
-                            with hd.scope(str(state.time_enabled)):
-                                with hd.hbox(gap=0.5, wrap="wrap"):
-                                    for i, (tenths, label) in enumerate(RANKED_TIMES):
-                                        with hd.scope(f"time_{tenths}"):
-                                            cb = hd.checkbox(
-                                                label, checked=state.time_enabled[i]
-                                            )
-                                            if cb.changed:
-                                                flags = list(state.time_enabled)
-                                                flags[i] = cb.checked
-                                                state.time_enabled = tuple(flags)
-                                            if cb.checked != state.time_enabled[i]:
-                                                cb.checked = state.time_enabled[i]
-
-                    hd.text("through", font_size="medium")
-                    hd.text(_date_label, font_size="2x-large", font_weight="normal")
-
-                if (
-                    at_today
-                    and rl_task is not None
-                    and state.chart_predictor == "rowinglevel"
-                ):
-                    if not profile_complete(profile):
-                        hd.alert(
-                            "Please complete your profile (Gender, Age, and Bodyweight) "
-                            "in the Profile tab before using RowingLevel predictions.",
-                            variant="warning",
-                            opened=True,
-                        )
-
-            # ── Fast / slow path ──────────────────────────────────────────────
-            # While the bundle is active, JS drives the chart entirely; Python
-            # skips all expensive model work and uses the precomputed pred_table
-            # lookup for the prediction table.  On the slow path (paused, seeking,
-            # or no bundle yet), Python computes everything fresh.
-            is_animating = state.sim_playing and state.sim_bundle is not None
-
-            if not is_animating:
-                # ── Slow path ─────────────────────────────────────────────────
-                date_str = sim_date.isoformat()
-                if state.best_filter == "All":
-                    _in_time = _ranked_prefilt[
-                        _bisect_date_desc(_ranked_prefilt, date_str) :
-                    ]
-                    sim_wkts = _in_time
-                else:
-                    _in_time = _featured_data[
-                        _bisect_date_desc(_featured_data, date_str) :
-                    ]
-                    sim_wkts = (
-                        apply_best_only(_in_time)
-                        if state.best_filter == "PBs"
-                        else apply_season_best_only(_in_time)
-                    )
-                excl_in_time = _prefilt_excl[
-                    _bisect_date_desc(_prefilt_excl, date_str) :
-                ]
-
-                # Disabled-event workouts (faint background dots in chart).
-                excluded_cats = set()
-                for i, (dist, _) in enumerate(RANKED_DISTANCES):
-                    if not state.dist_enabled[i]:
-                        excluded_cats.add(("dist", dist))
-                for i, (tenths, _) in enumerate(RANKED_TIMES):
-                    if not state.time_enabled[i]:
-                        excluded_cats.add(("time", tenths))
-                excluded_wkts: list = []
-                if excluded_cats:
-                    if state.best_filter == "PBs":
-                        excluded_wkts = apply_best_only(
-                            [
-                                w
-                                for w in excl_in_time
-                                if workout_cat_key(w) in excluded_cats
-                            ]
-                        )
-                    elif state.best_filter == "SBs":
-                        excluded_wkts = apply_season_best_only(
-                            [
-                                w
-                                for w in excl_in_time
-                                if workout_cat_key(w) in excluded_cats
-                            ]
-                        )
-                    else:
-                        excluded_wkts = excl_in_time
-
-                predictor = (
-                    state.chart_predictor
-                    if at_today or state.chart_predictor != "rowinglevel"
-                    else "none"
-                )
-                _snap = compute_timeline_snapshot(
-                    sim_wkts=sim_wkts,
-                    excl_in_time=excl_in_time,
-                    predictor=predictor,
-                    rl_predictions=rl_predictions,
-                    show_watts=show_watts,
-                    is_dark=is_dark,
-                    x_mode=state.chart_x_metric,
-                    x_bounds=x_bounds,
-                    y_bounds=y_bounds,
-                    show_components=state.chart_show_components,
-                )
-                lb, lb_anchor = _snap["lb"], _snap["lb_anchor"]
-                pauls_k_fit = _snap["pauls_k_fit"]
-                pauls_k = _snap["pauls_k"]
-                cp_params = _snap["cp_params"]
-                pred_rows = _snap["pred_table_rows"]
-                state._last_pauls_k_fit = pauls_k_fit
-
-                # CP → loglog fallback when insufficient data.
-                effective_predictor = predictor
-                if effective_predictor == "critical_power" and cp_params is None:
-                    effective_predictor = "loglog"
-
-                chart_cfg = build_chart_config(
-                    sim_wkts,
-                    log_x=state.chart_log_x,
-                    log_y=state.chart_log_y,
-                    show_lifetime_line=state.draw_power_curves == "PBs",
-                    show_watts=show_watts,
-                    is_dark=is_dark,
-                    predictor=effective_predictor,
-                    rl_predictions=rl_predictions,
-                    critical_power_params=cp_params,
-                    season_lines=set(all_seasons)
-                    if state.draw_power_curves == "SBs"
-                    else set(),
-                    all_seasons=all_seasons,
-                    x_bounds=x_bounds,
-                    y_bounds=y_bounds,
-                    sim_overlays=None,
-                    overlay_labels=[],
-                    show_components=state.chart_show_components,
-                    lifetime_best=lb,
-                    lifetime_best_anchor=lb_anchor,
-                    pauls_k=pauls_k,
-                    excluded_workouts=excluded_wkts,
-                    x_mode=state.chart_x_metric,
-                    wc_data=wc_data,
-                )
-            else:
-                # ── Fast path ─────────────────────────────────────────────────
-                # JS uses sim_bundle to render the chart; no model work needed.
-                # Use the precomputed lookup for the prediction table.
-                pauls_k_fit = state._last_pauls_k_fit
-                pauls_k = pauls_k_fit if pauls_k_fit is not None else 5.0
-                pred_rows = _lookup_pred_rows(state.sim_pred_lookup, state.sim_week)
-                chart_cfg = None  # JS ignores config while bundle is active
+            chart_cfg, pred_rows, pauls_k_fit, pauls_k = _compute_chart_data(
+                state,
+                ranked_prefilt=_ranked_prefilt,
+                prefilt_excl=_prefilt_excl,
+                featured_data=_featured_data,
+                sim_date=sim_date,
+                at_today=at_today,
+                rl_predictions=rl_predictions,
+                show_watts=show_watts,
+                is_dark=is_dark,
+                x_bounds=x_bounds,
+                y_bounds=y_bounds,
+                all_seasons=all_seasons,
+                wc_data=wc_data,
+            )
 
             _chart_section(
                 state,
