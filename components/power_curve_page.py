@@ -276,23 +276,6 @@ def _profile_hash(profile: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Sub-component helpers
-# ---------------------------------------------------------------------------
-
-
-def _compute_rewind_day(ranked_prefilt: list, sim_start: date) -> int:
-    """Start day for the Play button: 30 days before the earliest qualifying event.
-
-    ranked_prefilt is already filtered by selected dists/times and excluded seasons,
-    so no further filtering is needed here.
-    """
-    dates = [parse_date(w.get("date", "")) for w in ranked_prefilt if w.get("date")]
-    if not dates:
-        return 0
-    return max(0, (min(dates) - sim_start).days - 30)
-
-
-# ---------------------------------------------------------------------------
 # Sub-component: chart section
 # ---------------------------------------------------------------------------
 
@@ -308,7 +291,6 @@ def _chart_section(
     total_days: int,
     sim_start,
     sb_annotations: list,
-    rewind_day: int,
     pauls_k_fit: float | None = None,
     wc_task=None,
     sim_command: str = "stop",
@@ -367,7 +349,6 @@ def _chart_section(
                 sim_bundle=state.sim_bundle,
                 sim_command=sim_command,
                 sim_speed=state.sim_speed,
-                rewind_day=rewind_day,
                 timeline_min=0,
                 timeline_max=max(1, total_days - 1),
                 timeline_start_date=sim_start.isoformat(),
@@ -1621,10 +1602,6 @@ def _build_sim_bundle_fn(
 
         prev_lb_str = lb_str
 
-    # ── Start day: 30 days before the first non-excluded workout ────────────────
-    included_days = [m["day"] for m in manifest if not m.get("excluded")]
-    start_day = max(0, min(included_days) - 30) if included_days else 0
-
     # ── Static datasets: WC records (time-invariant) ─────────────────────────
     # Compute pauls_k for the full lifetime best (all workouts in timeline).
     full_lb, full_lb_anchor = compute_lifetime_bests(ranked_prefilt)
@@ -1651,7 +1628,6 @@ def _build_sim_bundle_fn(
         "static_datasets": static_datasets,
         "season_meta": season_meta,
         "total_days": total_days,
-        "start_day": start_day,
         "pb_badge_lifetime_steps": 40,
         "bundle_key": bundle_key,
         "draw_lifetime_line": draw_power_curves == "PBs",
@@ -2196,7 +2172,6 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
                 total_days=total_days,
                 sim_start=sim_start,
                 sb_annotations=state._annot_data,
-                rewind_day=_compute_rewind_day(_ranked_prefilt, sim_start),
                 pauls_k_fit=pauls_k_fit,
                 wc_task=wc_task,
                 sim_command=_sim_command,

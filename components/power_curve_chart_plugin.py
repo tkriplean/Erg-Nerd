@@ -15,7 +15,6 @@ Usage:
         timeline_max=total_days,
         timeline_start_date=sim_start.isoformat(),
         timeline_annotations=sb_annotations,
-        rewind_day=rewind_day,
     )
 
 The `config` prop is the same Chart.js dict produced by build_chart_config.
@@ -32,7 +31,6 @@ Props (Python → JS):
                            (triggers play when bundle loads, stop when at_today)
     sim_speed            — "0.5x" | "1x" | "4x" | "16x" — initial playback speed;
                            JS owns speed state after init (no round-trip on change)
-    rewind_day           — day to seek to when Play is pressed at end of timeline
     timeline_min         — minimum day value for the scrubber (default 0)
     timeline_max         — maximum day value for the scrubber
     timeline_start_date  — ISO date string for day 0 (used for tooltip labels)
@@ -91,10 +89,6 @@ class PowerCurveChart(hd.Plugin):
     # Initial playback speed string.  JS initializes its speed button from this
     # and owns speed state after that — no round-trip on user speed changes.
     sim_speed = hd.Prop(hd.String, "1x")
-
-    # Day to seek to when the Play button is pressed while at the end of the
-    # timeline (typically 30 days before the first qualifying event).
-    rewind_day = hd.Prop(hd.Int, 0)
 
     # ── Back-communication props (JS → Python) ────────────────────────────────
 

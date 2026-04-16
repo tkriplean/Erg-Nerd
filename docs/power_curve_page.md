@@ -211,7 +211,6 @@ Speed changes update only `currentStepDays` in JS via the `sim_speed` prop.  No 
 | `static_datasets` | Time-invariant datasets (WC scatter + prediction) baked once |
 | `season_meta` | Label, colour, and border colour per season |
 | `total_days` | Timeline length |
-| `start_day` | Day to begin animation from (30 days before first qualifying event) |
 | `pb_badge_lifetime_steps` | How many ticks a "New PB!" badge stays visible (40) |
 | `bundle_key` | Hash that JS uses to detect stale bundles |
 | `draw_lifetime_line` | Whether to draw the lifetime-best connecting line |
@@ -322,7 +321,7 @@ When JS `currentDay` reaches `total_days`:
 5. Play button reverts to "▶ Play".
 6. DateSlider lands at the end of the timeline.
 
-Pressing Play again at this point rewinds to `start_day` (30 days before first event).
+Pressing Play again at this point rewinds to date of first event. 
 
 ---
 

@@ -210,6 +210,21 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     : [];
   let tlAnnHoverActive = false;
 
+
+  // day to seek to when Play is pressed at end of timeline
+  let rewindDay = 0;
+
+  if (tlAnnotations.length > 0){
+      minn      = Number(tlInput.min);
+      maxx      = Number(tlInput.max);
+      for (let index = tlAnnotations.length - 1; index >= 0; index--) {
+        ann = tlAnnotations[index]
+        if (ann.day < minn || ann.day > maxx) return;
+        rewindDay = ann.day
+        break
+      }
+  }
+
   function tlUpdateFill() {
     const min = Number(tlInput.min);
     const max = Number(tlInput.max);
@@ -305,7 +320,6 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
   // -----------------------------------------------------------------------
 
   let isPlaying = false;
-  let rewindDay = ctx.initialProps.rewind_day ?? 0;
 
   function updatePlayButton() {
     if (isPlaying) {
@@ -1026,7 +1040,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
 
   function applyBundle(bundle) {
     cachedBundle     = bundle;
-    currentDay       = bundle.start_day || 0;
+    currentDay       = props.timeline_max + 1;
     lastKfDay        = -1;
     pbBadgeCountdown = 0;
     pbBadgeLabels    = [];
@@ -1148,7 +1162,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
 
   function stopAnimation() {
     pauseAnimation();
-    currentDay = 0;
+    currentDay = props.timeline_max + 1;
     lastKfDay  = -1;
   }
 
@@ -1253,12 +1267,12 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
           // Preserve the current animation position so that:
           //  a) settings changes (predictor, theme, etc.) resume from where we left off
           //  b) a user seek before the first Play press is honoured on bundle arrival
-          // Only fall back to bundle.start_day when currentDay is still at the
+          // Only fall back to start_day when currentDay is still at the
           // default initial value (0) and no prior bundle has been loaded.
           const resumeDay = (cachedBundle || currentDay > 0) ? currentDay : null;
           pauseAnimation();
           applyBundle(propValue);
-          // applyBundle() resets currentDay to bundle.start_day — restore it.
+          // applyBundle() resets currentDay to start_day — restore it.
           if (resumeDay !== null && resumeDay <= propValue.total_days) {
             currentDay = resumeDay;
           }
@@ -1297,9 +1311,6 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
       }
       return;
     }
-
-    // ── Transport button prop updates ─────────────────────────────────────────
-    if (propName === "rewind_day") { rewindDay = propValue; return; }
 
     // ── Timeline scrubber prop updates ────────────────────────────────────────
     if (propName === "timeline_min") {
