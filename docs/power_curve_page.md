@@ -103,9 +103,9 @@ concept2_sync(client)
               │
               ├─ seasons_from()  →  all_seasons
               │
-              ├─ sim_workouts_at(sim_date, selected_dists, selected_times,
+              ├─ workouts_before_date(timeline_date, selected_dists, selected_times,
               │                  excluded_seasons, best_filter)
-              │       └─ sim_wkts  (workouts visible at sim_date)
+              │       └─ sim_wkts  (workouts visible at timeline_date)
               │
               ├─ compute_lifetime_bests(sim_wkts)   →  _lb, _lb_anchor
               ├─ compute_lifetime_bests(all_pre_sim) →  _lb_all, _lb_all_anchor
@@ -125,8 +125,8 @@ concept2_sync(client)
 
 | Set | Used for | Filtered by |
 |---|---|---|
-| `_lb` / `_lb_anchor` | Prediction model fits (drives chart curve + table prediction columns) | sim_date + excluded seasons + event toggle |
-| `_lb_all` / `_lb_all_anchor` | "Your PB" column only | sim_date + excluded seasons only (event toggle ignored) |
+| `_lb` / `_lb_anchor` | Prediction model fits (drives chart curve + table prediction columns) | timeline_date + excluded seasons + event toggle |
+| `_lb_all` / `_lb_all_anchor` | "Your PB" column only | timeline_date + excluded seasons only (event toggle ignored) |
 
 This means toggling an event off hides it from predictions but always preserves its PB in the table.
 
@@ -157,7 +157,7 @@ sim_start   = May 1 of the earliest included season's start year
 sim_end     = min(today, April 30 of the year after the latest included season)
 total_days  = (sim_end - sim_start).days + 1
 sim_day_idx = clamp(state.sim_week, 0, total_days − 1)
-sim_date    = sim_start + timedelta(days=sim_day_idx)
+timeline_date    = sim_start + timedelta(days=sim_day_idx)
 _at_today   = sim_day_idx >= total_days − 1
 _SIM_TODAY  = 999999   (sentinel: "end of timeline / show all data")
 ```

@@ -5,7 +5,7 @@ Exported:
   is_ranked_noninterval()  — True if workout matches a ranked event and is not an interval
   seasons_from()           — sorted list of seasons (newest-first) present in results
   apply_quality_filters()  — apply the three quality-filter passes to a workout list
-  sim_workouts_at()        — return workouts visible at a given simulation date
+  workouts_before_date()        — return workouts visible at a given simulation date
 """
 
 from __future__ import annotations
@@ -66,7 +66,9 @@ def _window_best(event_timeline: list, w_date: date, cat) -> float:
     return best
 
 
-def _dominated_by_longer(dist_timeline: list, w_date: date, eff_dist, workout_pace: float) -> bool:
+def _dominated_by_longer(
+    dist_timeline: list, w_date: date, eff_dist, workout_pace: float
+) -> bool:
     """Return True if any longer-event performance within the window is > ADJ_THRESH faster."""
     _adj_thresh = 1.0 + ADJACENT_FILTER_PCT / 100.0
     for _dt, _d, _p in dist_timeline:
@@ -167,29 +169,29 @@ def apply_quality_filters(
 # ---------------------------------------------------------------------------
 
 
-def sim_workouts_at(
+def workouts_before_date(
     all_ranked_raw: list,
-    sim_date: date,
+    timeline_date: date,
     selected_dists: set,
     selected_times: set,
     excluded_seasons: set,
     best_filter: str,
 ) -> list:
     """
-    Return the workouts visible at *sim_date*.
+    Return the workouts visible at *timeline_date*.
 
     Quality filters (PB quality, rolling-window SB quality, cross-event
     domination) are applied once upfront in power_curve_page.py before the
     simulation receives the data — whether a performance was max/near-max
-    effort does not change as sim_date advances.
+    effort does not change as timeline_date advances.
 
     This function only applies:
-      1. Date gate (workouts on or before sim_date)
+      1. Date gate (workouts on or before timeline_date)
       2. Event filter (selected_dists / selected_times)
       3. Season filter (excluded_seasons)
       4. best_filter ("All" | "PBs" | "SBs")
     """
-    date_str = sim_date.isoformat()
+    date_str = timeline_date.isoformat()
 
     # 1. Date gate
     in_time = [w for w in all_ranked_raw if (w.get("date") or "")[:10] <= date_str]

@@ -37,7 +37,7 @@ from services.rowing_utils import (
     loglog_fit,
     loglog_predict_pace,
 )
-from services.ranked_filters import sim_workouts_at
+from services.ranked_filters import workouts_before_date
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +129,7 @@ def generate_mp4(
             on_progress(frame_idx, len(sim_dates))
 
         sim_date = sim_dates[frame_idx]
-        wkts = sim_workouts_at(
+        wkts = workouts_before_date(
             all_ranked_raw,
             sim_date,
             selected_dists,
@@ -382,8 +382,12 @@ def render_mp4_export_button(state, mp4_task, sim_config: dict) -> None:
                 sim_dates = sim_config["sim_dates"]
                 output_path = sim_config["output_path"]
                 rower_name = sim_config.get("rower_name", "")
-                config = {k: v for k, v in sim_config.items()
-                          if k not in ("all_ranked_raw", "sim_dates", "output_path", "rower_name")}
+                config = {
+                    k: v
+                    for k, v in sim_config.items()
+                    if k
+                    not in ("all_ranked_raw", "sim_dates", "output_path", "rower_name")
+                }
                 mp4_task.run(
                     generate_mp4,
                     all_ranked_raw,

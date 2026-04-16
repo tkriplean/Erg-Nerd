@@ -257,7 +257,6 @@ def _chart_section(
     state,
     *,
     chart_cfg,
-    rl_task,
     rl_predictions: dict,
     profile: dict,
     show_watts: bool,
@@ -1032,10 +1031,12 @@ def _apply_display_filter(
     return filtered
 
 
-def _compute_sim_timeline(excluded_seasons, all_seasons: list, timeline_day: int) -> tuple:
+def _compute_sim_timeline(
+    excluded_seasons, all_seasons: list, timeline_day: int
+) -> tuple:
     """
     Derive the simulation timeline from the included seasons.
-    Returns (sim_start, total_days, sim_date, at_today, included_seasons).
+    Returns (sim_start, total_days, timeline_date, at_today, included_seasons).
     """
     included_seasons = [s for s in all_seasons if s not in set(excluded_seasons)]
     if included_seasons:
@@ -1048,9 +1049,9 @@ def _compute_sim_timeline(excluded_seasons, all_seasons: list, timeline_day: int
         sim_end = date.today()
     total_days = max(1, (sim_end - sim_start).days + 1)
     sim_day_idx = max(0, min(timeline_day, total_days - 1))
-    sim_date = sim_start + timedelta(days=sim_day_idx)
+    timeline_date = sim_start + timedelta(days=sim_day_idx)
     at_today = sim_day_idx >= total_days - 1
-    return sim_start, total_days, sim_date, at_today, included_seasons
+    return sim_start, total_days, timeline_date, at_today, included_seasons
 
 
 def _expand_y_bounds_for_wc(
@@ -1145,7 +1146,7 @@ def _fetch_rowinglevel(state, profile: dict, chart_workouts: list) -> tuple:
     Only fires when at_today and profile_complete; otherwise returns (None, {}).
     Uses a scope key derived from profile + PB hash so the task re-fires only
     when its inputs change.
-    Returns (rl_task, rl_predictions).
+    Returns rl_predictions.
     """
     if not profile_complete(profile):
         return None, {}
@@ -1195,7 +1196,7 @@ def _fetch_rowinglevel(state, profile: dict, chart_workouts: list) -> tuple:
         if rl_task.done and rl_task.result:
             rl_predictions = rl_task.result
 
-    return rl_task, rl_predictions
+    return rl_predictions
 
 
 # ---------------------------------------------------------------------------
@@ -1252,16 +1253,12 @@ def _load_wc_cp(state, profile: dict) -> tuple:
 def _page_header(
     state,
     *,
-    sim_date: date,
-    at_today: bool,
-    rl_task,
-    profile: dict,
+    timeline_date: date,
 ) -> None:
     """
     Renders the page title bar: best_filter dropdown, events dropdown, date label.
-    Also shows the RL profile-incomplete inline warning when relevant.
     """
-    _date_label = sim_date.strftime("%b %d, %Y")
+    _date_label = timeline_date.strftime("%b %d, %Y")
     _best_long = {
         "All": "All Great Efforts",
         "PBs": "Personal Bests",
@@ -1306,9 +1303,7 @@ def _page_header(
                             with radio_group(
                                 value=state.best_filter, size="small"
                             ) as _bf_rg:
-                                hd.radio_button(
-                                    "All Great Efforts", value="All"
-                                )
+                                hd.radio_button("All Great Efforts", value="All")
                                 hd.radio_button("PBs only", value="PBs")
                                 hd.radio_button("SBs only", value="SBs")
                             if _bf_rg.changed:
@@ -1357,21 +1352,11 @@ def _page_header(
                         if hd.button(
                             "Select all", size="small", variant="text"
                         ).clicked:
-                            state.dist_enabled = tuple(
-                                True for _ in RANKED_DISTANCES
-                            )
-                            state.time_enabled = tuple(
-                                True for _ in RANKED_TIMES
-                            )
-                        if hd.button(
-                            "Clear all", size="small", variant="text"
-                        ).clicked:
-                            state.dist_enabled = tuple(
-                                False for _ in RANKED_DISTANCES
-                            )
-                            state.time_enabled = tuple(
-                                False for _ in RANKED_TIMES
-                            )
+                            state.dist_enabled = tuple(True for _ in RANKED_DISTANCES)
+                            state.time_enabled = tuple(True for _ in RANKED_TIMES)
+                        if hd.button("Clear all", size="small", variant="text").clicked:
+                            state.dist_enabled = tuple(False for _ in RANKED_DISTANCES)
+                            state.time_enabled = tuple(False for _ in RANKED_TIMES)
                     with hd.scope(str(state.dist_enabled)):
                         with hd.hbox(gap=0.5, wrap="wrap"):
                             for i, (dist, label) in enumerate(RANKED_DISTANCES):
@@ -1408,19 +1393,6 @@ def _page_header(
             hd.text("through", font_size="medium")
             hd.text(_date_label, font_size="2x-large", font_weight="normal")
 
-        if (
-            at_today
-            and rl_task is not None
-            and state.chart_predictor == "rowinglevel"
-        ):
-            if not profile_complete(profile):
-                hd.alert(
-                    "Please complete your profile (Gender, Age, and Bodyweight) "
-                    "in the Profile tab before using RowingLevel predictions.",
-                    variant="warning",
-                    opened=True,
-                )
-
 
 # ---------------------------------------------------------------------------
 # Pure computation: chart config + prediction data for a single render cycle
@@ -1433,7 +1405,7 @@ def _compute_chart_data(
     ranked_prefilt: list,
     prefilt_excl: list,
     featured_data: list,
-    sim_date: date,
+    timeline_date: date,
     at_today: bool,
     rl_predictions: dict,
     show_watts: bool,
@@ -1454,7 +1426,7 @@ def _compute_chart_data(
 
     if not is_animating:
         # ── Slow path ─────────────────────────────────────────────────────────
-        date_str = sim_date.isoformat()
+        date_str = timeline_date.isoformat()
         if state.best_filter == "All":
             _in_time = ranked_prefilt[_bisect_date_desc(ranked_prefilt, date_str) :]
             sim_wkts = _in_time
@@ -1479,11 +1451,19 @@ def _compute_chart_data(
         if excluded_cats:
             if state.best_filter == "PBs":
                 excluded_wkts = apply_best_only(
-                    [w for w in all_events_to_date if workout_cat_key(w) in excluded_cats]
+                    [
+                        w
+                        for w in all_events_to_date
+                        if workout_cat_key(w) in excluded_cats
+                    ]
                 )
             elif state.best_filter == "SBs":
                 excluded_wkts = apply_season_best_only(
-                    [w for w in all_events_to_date if workout_cat_key(w) in excluded_cats]
+                    [
+                        w
+                        for w in all_events_to_date
+                        if workout_cat_key(w) in excluded_cats
+                    ]
                 )
             else:
                 excluded_wkts = all_events_to_date
@@ -1527,7 +1507,9 @@ def _compute_chart_data(
             predictor=effective_predictor,
             rl_predictions=rl_predictions,
             critical_power_params=cp_params,
-            season_lines=set(all_seasons) if state.draw_power_curves == "SBs" else set(),
+            season_lines=set(all_seasons)
+            if state.draw_power_curves == "SBs"
+            else set(),
             all_seasons=all_seasons,
             x_bounds=x_bounds,
             y_bounds=y_bounds,
@@ -1792,7 +1774,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
     (
         sim_start,
         total_days,
-        sim_date,
+        timeline_date,
         at_today,
         included_seasons,
     ) = _compute_sim_timeline(excluded_seasons, all_seasons, state.timeline_day)
@@ -1811,9 +1793,9 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         state._annot_key = _annot_key
 
     if not at_today:
-        rl_task, rl_predictions = _fetch_rowinglevel(state, profile, display)
+        rl_predictions = _fetch_rowinglevel(state, profile, display)
     else:
-        rl_task, rl_predictions = (None, {})
+        rl_predictions = {}
 
     wc_task, wc_data = (
         _load_wc_cp(state, profile) if state.chart_compare_wc else (None, None)
@@ -1862,10 +1844,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         with hd.box(width="100%", align="center"):
             _page_header(
                 state,
-                sim_date=sim_date,
-                at_today=at_today,
-                rl_task=rl_task,
-                profile=profile,
+                timeline_date=timeline_date,
             )
 
             chart_cfg, pred_rows, pauls_k_fit, pauls_k = _compute_chart_data(
@@ -1873,7 +1852,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
                 ranked_prefilt=_ranked_prefilt,
                 prefilt_excl=_prefilt_excl,
                 featured_data=_featured_data,
-                sim_date=sim_date,
+                timeline_date=timeline_date,
                 at_today=at_today,
                 rl_predictions=rl_predictions,
                 show_watts=show_watts,
@@ -1887,7 +1866,6 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
             _chart_section(
                 state,
                 chart_cfg=chart_cfg,
-                rl_task=rl_task,
                 rl_predictions=rl_predictions,
                 profile=profile,
                 show_watts=show_watts,

@@ -289,7 +289,7 @@ def build_prediction_table_data(
     ``lifetime_best`` / ``lifetime_best_anchor`` are the *filtered* bests (the
     same set used by the chart) and drive the prediction columns.
     ``all_lifetime_best`` / ``all_lifetime_best_anchor`` are unfiltered (only
-    gated on sim_date and excluded seasons) and are used for the "Your PB"
+    gated on timeline_date and excluded seasons) and are used for the "Your PB"
     column so that PBs in events the user has hidden still appear.
 
     Row dict keys:
