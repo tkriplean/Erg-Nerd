@@ -86,6 +86,11 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
       height: 100% !important;     
       flex: 1; 
     }
+
+    sl-range {
+      --track-color-active: var(--sl-color-primary-500);
+      --thumb-size: 30px;
+    }
   `;
 
   ctx.domElement.appendChild(style);
@@ -134,6 +139,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
   tlInput.step  = 1;
   tlInput.value = 0;
   tlInput.tooltipFormatter = tlFormatDate;
+
   tlWrap.appendChild(tlInput);
 
   const tlTip = document.createElement("div");

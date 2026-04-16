@@ -86,6 +86,10 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     .race-seek {
       flex: 1;
       cursor: pointer;
+      --track-color-active: var(--sl-color-primary-500);
+      --thumb-size: 30px;
+      --tooltip-offset: 99999px;
+
     }
     .race-time-total {
       font-variant-numeric: tabular-nums;
