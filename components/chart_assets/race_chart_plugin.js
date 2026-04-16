@@ -168,10 +168,9 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   // Speed presets: each delivers a fixed real-time playback duration regardless
   // of how long the race is, so a marathon and a sprint both feel engaging.
   const SPEED_PRESETS = [
-    { label: "Slow",      targetMs: 120000 },
-    { label: "Normal",    targetMs: 45000  },
-    { label: "Fast",      targetMs: 25000  },
-    { label: "Very fast", targetMs: 10000  },
+    { label: "Slow",    targetMs: 45000  },
+    { label: "Normal",      targetMs: 25000  },
+    { label: "Fast", targetMs: 10000  },
   ];
   const speedSelect = document.createElement("select");
   speedSelect.className = "race-speed";
