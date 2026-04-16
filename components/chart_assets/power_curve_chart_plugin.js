@@ -13,7 +13,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
       --tip-bg: var(--sl-tooltip-background-color, #1e293b);
       --tip-fg: var(--sl-tooltip-color, #fff);
     }
-    canvas { display: block; width: 100% !important; flex: 1; min-height: 0; }
+
 
     /* ── Transport row: play/speed buttons + scrubber in one flex row ──────── */
     .transport {
@@ -27,10 +27,15 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
       box-sizing: border-box;
     }
 
+    .play_button {
+      min-width: 85px;
+    }
+
     /* ── Timeline scrubber (grows to fill the transport row) ─────────────── */
     .timeline {
       flex: 1;
-      min-width: 0;
+      min-width: 300px;
+      max-width: 900px;
       position: relative;
       /* Symmetric top/bottom padding so the row centre aligns with the track,
          giving align-items:center the right anchor point for the buttons. */
@@ -71,7 +76,18 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
       transition: transform 0.1s;
     }
     .dot:hover { transform: translateX(-50%) scale(1.45); }
+
+    .canvas_wrapper {
+      height: 75vh;
+    }
+    .power_curve_graph {
+      display: block; 
+      width: 100% !important; 
+      height: 100% !important;     
+      flex: 1; 
+    }
   `;
+
   ctx.domElement.appendChild(style);
 
   // --- Transport row (play/speed buttons + scrubber, all above the canvas) ---
@@ -84,6 +100,8 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
   btnPlay.setAttribute("size", "medium");
   btnPlay.setAttribute("variant", "primary");
   btnPlay.textContent = "▶  Play";
+  btnPlay.className = "play_button";
+
   transportRow.appendChild(btnPlay);
 
   // Speed cycle button — JS owns speed state after init
@@ -126,9 +144,15 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
   tlAnnRow.className = "ann-row";
   tlWrap.appendChild(tlAnnRow);
 
+
+  const canvas_wrapper = document.createElement("div");
+  canvas_wrapper.className = "canvas_wrapper";
+  ctx.domElement.appendChild(canvas_wrapper);
+
   // --- Canvas (below the scrubber) ---
   const canvas = document.createElement("canvas");
-  ctx.domElement.appendChild(canvas);
+  canvas.className = "power_curve_graph"
+  canvas_wrapper.appendChild(canvas);
 
   let chartInstance = null;
 
@@ -294,7 +318,6 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
   }
 
   btnPlay.addEventListener("click", () => {
-    console.log("PLAY PRESSED", isPlaying)
     if (isPlaying) {
       isPlaying = false;
       pauseAnimation();
@@ -311,7 +334,6 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
       if (cachedBundle) startAnimation();
       updatePlayButton();
       ctx.updateProp("sim_playing_out", true);
-      console.log(cachedBundle)
     }
   });
 
@@ -610,7 +632,6 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
    */
   function buildScatterDatasets(manifest, cutoffDay, bundle, showWatts) {
 
-    console.log("BUILDING DATASETS", cutoffDay)
     const seasonMeta = bundle.season_meta;
     const pbColor = bundle.pb_color;
     const drawLifetimeLine = bundle.draw_lifetime_line;
@@ -1114,7 +1135,6 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
   }
 
   function startAnimation() {
-    console.log("starting animation", intervalId)
     if (intervalId !== null) return;
     intervalId = setInterval(tick, TICK_MS);
   }
@@ -1213,12 +1233,10 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
 
   currentStepDays = SPEED_DAYS[props.sim_speed] || 7;
 
-  console.log("LOADING!")
   // Apply initial state.
   if (props.sim_bundle) {
     if (!cachedBundle || cachedBundle.bundle_key !== props.sim_bundle.bundle_key) {
       applyBundle(props.sim_bundle);
-      console.log("APPLIED BUNDLE")
     }
     handleSimCommand(props.sim_command);
   } else if (props.config) {

@@ -16,7 +16,6 @@ Usage:
         timeline_start_date=sim_start.isoformat(),
         timeline_annotations=sb_annotations,
         rewind_day=rewind_day,
-        height="75vh",
     )
 
 The `config` prop is the same Chart.js dict produced by build_chart_config.
