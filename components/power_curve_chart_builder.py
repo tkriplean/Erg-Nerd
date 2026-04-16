@@ -7,10 +7,13 @@ Exported:
   pcts()                 — compute (pct_pace, pct_watts) improvement between two paces
   compute_lifetime_bests() — derive lifetime-best dicts from a raw workout list
   build_pred_datasets()  — build only the prediction-curve datasets for the active predictor
+  build_wc_static_datasets() — world-class record overlay datasets (time-invariant)
   build_chart_config()   — build the full Chart.js config dict
 
 All satellite helpers (_season_hsla, _pred_dataset, etc.) are private to this module.
-Prediction table data is built in components/ranked_predictions.py.
+Prediction table data is built in services/ranked_predictions.py.
+Time-varying data (keyframe snapshots, animation payload) is in
+components/power_curve_timeline.py.
 """
 
 from __future__ import annotations
