@@ -71,7 +71,6 @@ SIMULATION / TIMELINE
   sim_start  = May 1 of the earliest included season
   sim_end    = min(date.today(), Apr 30 of the year after the latest included season)
   total_days = (sim_end - sim_start).days + 1
-  _at_today  = sim_day_idx >= total_days - 1
 
   _SIM_TODAY     = 999999  (sentinel meaning "end of timeline / show all data")
   _SPEED_OPTIONS = ("0.5x", "1x", "4x", "16x")
@@ -277,241 +276,6 @@ def _profile_hash(profile: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Lookahead overlay computation
-# ---------------------------------------------------------------------------
-
-
-def _compute_lookahead_overlays(
-    sim_wkts: list,
-    ranked_prefilt: list,
-    sim_date: date,
-    sim_day_idx: int,
-    total_days: int,
-    show_watts: bool,
-    *,
-    sim_speed: str,
-    draw_power_curves: str,
-    sim_pb_set_at_day: int,
-    sim_pb_stored_labels_json: str,
-) -> tuple:
-    """
-    Compute ghost/arrow/threatened/new-arrival overlay data for the lookahead
-    window during simulation.
-
-    Returns (sim_overlays dict, overlay_labels list, pb_update dict | None).
-    pb_update is non-None when a new PB was detected this step; the caller
-    should apply its three fields to state:
-      {"label": str, "day": int, "stored_json": str}
-
-    Should only be called when not at today (not _at_today).
-    """
-    _step = _SPEED_DAYS.get(sim_speed, 7)
-    _lookahead_end = sim_date + timedelta(days=_step * _SIM_LOOKAHEAD_STEPS)
-    _new_step_start = sim_date - timedelta(days=_step)
-
-    is_dark = hd.theme().is_dark
-
-    _has_any_lines = draw_power_curves != "None"
-
-    # Current per-event best (pace + effective dist) from visible sim workouts.
-    # Only computed when lines are shown (overlays gate on this).
-    _cur_best_pace: dict = {}  # cat_key -> best pace
-    _cur_best_dist: dict = {}  # cat_key -> effective dist of best
-    if _has_any_lines:
-        for _w in sim_wkts:
-            _ck = workout_cat_key(_w)
-            _p = compute_pace(_w)
-            _d = _w.get("distance")
-            if _ck and _p and _d:
-                if _ck not in _cur_best_pace or _p < _cur_best_pace[_ck]:
-                    _cur_best_pace[_ck] = _p
-                    _cur_best_dist[_ck] = _d
-
-    # Arrows + ghost dots: one per event where a better upcoming performance
-    # beats the current best. Ghost dots = the "to" end of each arrow.
-    # Only produced when at least one line type is active.
-    _arrows: list = []
-    _threatened_cats: set = set()  # cat_keys of currently-threatened events
-    _ghost_pts: list = []  # derived from arrow targets
-
-    if _has_any_lines and _cur_best_pace:
-        _upcoming_raw = [
-            w
-            for w in ranked_prefilt
-            if sim_date < parse_date(w.get("date", "")) <= _lookahead_end
-        ]
-        _seen_threat_cats: set = set()
-        for _w in sorted(_upcoming_raw, key=lambda w: compute_pace(w) or 999):
-            _ck = workout_cat_key(_w)
-            _p = compute_pace(_w)
-            _d = _w.get("distance")
-            if not _ck or not _p or not _d:
-                continue
-            if (
-                _ck in _cur_best_pace
-                and _p < _cur_best_pace[_ck]
-                and _ck not in _seen_threat_cats
-            ):
-                _etype, _evalue = _ck
-                _elabel = f"{_evalue}m" if _etype == "dist" else f"{_evalue // 60}min"
-                _arrows.append(
-                    {
-                        "from_dist": _cur_best_dist[_ck],
-                        "from_pace": _cur_best_pace[_ck],
-                        "to_dist": _d,
-                        "to_pace": _p,
-                        "to_season": get_season(_w.get("date", "")),
-                        "cat_label": _elabel,
-                    }
-                )
-                _ghost_pts.append(
-                    {
-                        "dist": _d,
-                        "pace": _p,
-                        "season": get_season(_w.get("date", "")),
-                    }
-                )
-                _threatened_cats.add(_ck)
-                _seen_threat_cats.add(_ck)
-
-    # Newly arrived: cat_keys of events whose best appeared in the last step
-    _new_arrival_cats: set = set()
-    for _w in sim_wkts:
-        _ck = workout_cat_key(_w)
-        if _ck and _new_step_start < parse_date(_w.get("date", "")) <= sim_date:
-            _new_arrival_cats.add(_ck)
-
-    # Newly set PBs: events where the *current best* was set in the last step
-    _new_pb_cats: set = set()
-    _new_pb_events: list = []
-    _ev_best: dict = {}  # cat_key -> (pace, date, effective_dist)
-    for _w in sim_wkts:
-        _ck = workout_cat_key(_w)
-        _p = compute_pace(_w)
-        _d = _w.get("distance")
-        if _ck and _p and _d:
-            if _ck not in _ev_best or _p < _ev_best[_ck][0]:
-                _ev_best[_ck] = (_p, parse_date(_w.get("date", "")), _d)
-
-    # Best pace per event strictly before this step — used both to gate tie
-    # detection and to compute % improvement labels.
-    _det_prev_pace: dict = {}
-    for _w in sim_wkts:
-        _ck2 = workout_cat_key(_w)
-        _p2 = compute_pace(_w)
-        if _ck2 and _p2 and parse_date(_w.get("date", "")) <= _new_step_start:
-            if _ck2 not in _det_prev_pace or _p2 < _det_prev_pace[_ck2]:
-                _det_prev_pace[_ck2] = _p2
-
-    for _ck, (_p, _d_date, _d) in _ev_best.items():
-        # Require the best to have arrived in this step AND be strictly faster
-        # than the prior step's best — ties must not trigger a new PB callout.
-        if _new_step_start < _d_date <= sim_date:
-            _prev = _det_prev_pace.get(_ck)
-            if _prev is None or _p < _prev:
-                _new_pb_cats.add(_ck)
-                _etype, _evalue = _ck
-                _elabel = f"{_evalue}m" if _etype == "dist" else f"{_evalue // 60}min"
-                _pm = int(_p // 60)
-                _ps = _p % 60
-                _new_pb_events.append(f"{_elabel} — {_pm}:{_ps:04.1f}")
-
-    # Build pb_update when a new PB lands this step.
-    # Captures the full overlay label dicts now (while _ev_best and the pre-PB
-    # bests are in scope) so they survive the rolling step window moving on.
-    # The caller is responsible for writing these three fields back to state.
-    pb_update: dict | None = None
-    if _new_pb_events:
-        _stored: list = []
-        for _ck in _new_pb_cats:
-            if _ck in _ev_best:
-                _pb_pace, _, _pb_dist = _ev_best[_ck]
-                _etype, _evalue = _ck
-                _pp, _pw = pcts(_det_prev_pace.get(_ck), _pb_pace)
-                _stored.append(
-                    {
-                        "x": _pb_dist,
-                        "y_raw": _pb_pace,
-                        "line_event": ol_event_line(
-                            _etype, _evalue, _pb_pace, _pb_dist
-                        ),
-                        "pct_pace": _pp,
-                        "pct_watts": _pw,
-                        "line_label": "✦ New PB!",
-                        "color": "black" if not is_dark else "white",
-                        "bold": True,
-                    }
-                )
-        pb_update = {
-            "label": "New PB!  " + "  ·  ".join(_new_pb_events),
-            "day": sim_day_idx,
-            "stored_json": json.dumps(_stored),
-        }
-
-    sim_overlays = {
-        "ghost_pts": _ghost_pts,
-        "arrows": _arrows,
-        "threatened_cats": _threatened_cats,
-        "new_arrival_cats": _new_arrival_cats,
-        "new_pb_cats": _new_pb_cats,
-    }
-
-    # ---- canvas label overlays (drawn by JS plugin, not HyperDiv) ----
-    overlay_labels = []
-
-    # Show "New PB!" for ~40 sim-steps after it was set.  Labels are
-    # captured in full (with % improvement) at detection time and stored
-    # as JSON so they survive the rolling step window moving on.
-    _pb_celebrating = sim_pb_set_at_day >= 0 and (
-        0 <= sim_day_idx - sim_pb_set_at_day <= _step * 40
-    )
-
-    # New PB badges — loaded from caller-supplied state, not recomputed
-    if _pb_celebrating:
-        for _lbl in json.loads(sim_pb_stored_labels_json):
-            # Stored color was computed at detection time; re-apply current
-            # theme so dark/light mode switches work instantly.
-            _lbl["color"] = "black" if not is_dark else "white"
-            overlay_labels.append(_lbl)
-
-    # Upcoming PB badges: event+time / % improvement / upcoming PB
-    for _arr in sim_overlays["arrows"]:
-        _to_d, _to_p, _fr_p = (
-            _arr["to_dist"],
-            _arr["to_pace"],
-            _arr["from_pace"],
-        )
-        _etype2 = "dist" if _to_d in RANKED_DIST_SET else "time"
-        _evalue2 = (
-            _to_d
-            if _etype2 == "dist"
-            else next(
-                (
-                    t
-                    for t in RANKED_TIME_SET
-                    if abs(round(_to_p * 10 * _to_d / 500) - t) < 5
-                ),
-                _to_d,
-            )
-        )
-        _pp, _pw = pcts(_fr_p, _to_p)
-        overlay_labels.append(
-            {
-                "x": _to_d,
-                "y_raw": _to_p,
-                "line_event": ol_event_line(_etype2, _evalue2, _to_p, _to_d),
-                "pct_pace": _pp,
-                "pct_watts": _pw,
-                "line_label": "upcoming PB",
-                "color": "black" if not is_dark else "white",
-                "bold": False,
-            }
-        )
-
-    return sim_overlays, overlay_labels, pb_update
-
-
-# ---------------------------------------------------------------------------
 # Sub-component helpers
 # ---------------------------------------------------------------------------
 
@@ -541,9 +305,6 @@ def _chart_section(
     rl_predictions: dict,
     profile: dict,
     show_watts: bool,
-    sim_date,
-    _at_today: bool,
-    sim_day_idx: int,
     total_days: int,
     sim_start,
     sb_annotations: list,
@@ -611,7 +372,6 @@ def _chart_section(
                 timeline_max=max(1, total_days - 1),
                 timeline_start_date=sim_start.isoformat(),
                 timeline_annotations=sb_annotations,
-                height="75vh",
             )
 
             # ── Back-communication from JS transport + animation ──────────────
@@ -1321,7 +1081,7 @@ def _apply_display_filter(
 def _compute_sim_timeline(excluded_seasons, all_seasons: list, sim_week: int) -> tuple:
     """
     Derive the simulation timeline from the included seasons.
-    Returns (sim_start, total_days, sim_day_idx, sim_date, at_today, included_seasons).
+    Returns (sim_start, total_days, sim_date, at_today, included_seasons).
     """
     included_seasons = [s for s in all_seasons if s not in set(excluded_seasons)]
     if included_seasons:
@@ -1336,7 +1096,7 @@ def _compute_sim_timeline(excluded_seasons, all_seasons: list, sim_week: int) ->
     sim_day_idx = max(0, min(sim_week, total_days - 1))
     sim_date = sim_start + timedelta(days=sim_day_idx)
     at_today = sim_day_idx >= total_days - 1
-    return sim_start, total_days, sim_day_idx, sim_date, at_today, included_seasons
+    return sim_start, total_days, sim_date, at_today, included_seasons
 
 
 def _expand_y_bounds_for_wc(
@@ -1436,6 +1196,7 @@ def _build_sim_data(
     prefilt_excl:   all_ranked_raw filtered by excluded seasons only, newest-first.
     All three lists are binary-searched by date — no O(n) scan per tick.
     """
+
     date_str = sim_date.isoformat()
 
     if state.best_filter == "All":
@@ -2002,15 +1763,11 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
     )
     is_dark = hd.theme().is_dark
 
-    # ── Profile ───────────────────────────────────────────────────────────────
+    # ── Profile & Data ───────────────────────────────────────────────────────────────
     profile = get_profile()
-    if profile is None:
-        return
-
-    # ── Data ──────────────────────────────────────────────────────────────────
     sync_result = concept2_sync(client)
 
-    if sync_result is None:
+    if sync_result is None or profile is None:
         return
 
     # Cache _build_ranked_workouts — it's expensive (quality-filters all workouts)
@@ -2039,7 +1796,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
 
     # Pre-filter all_ranked_raw by selected dists/times and excluded seasons once.
     # Removes get_season() (strptime) from the hot animation path in _update_cp_fit
-    # and _compute_lookahead_overlays — only fast parse_date() runs per tick.
+    # — only fast parse_date() runs per tick.
     _prefilt_key = f"{state._ranked_key}:{sorted(selected_dists)}:{sorted(selected_times)}:{excluded_seasons}"
     if state._prefilt_key != _prefilt_key or state._prefilt_data is None:
         _excl_set = set(excluded_seasons)
@@ -2079,7 +1836,6 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
     (
         sim_start,
         total_days,
-        sim_day_idx,
         sim_date,
         at_today,
         included_seasons,
@@ -2169,7 +1925,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         state.sim_bundle = None
         state.sim_bundle_key = _bundle_key
 
-    if state.sim_playing and not at_today and state.sim_bundle is None:
+    if state.sim_bundle is None:
         # Bundle needed but not ready — launch the build task.
         with hd.scope(f"sim_bundle_{_bundle_key}"):
             _bt = hd.task()
@@ -2429,9 +2185,6 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
                     x_mode=state.chart_x_metric,
                     wc_data=wc_data,
                 )
-                # Embed the current slider position so JS can sync currentDay
-                # when the config prop is the delivery channel (paused with bundle).
-                chart_cfg["_sim_day"] = sim_day_idx
 
             _chart_section(
                 state,
@@ -2440,9 +2193,6 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
                 rl_predictions=rl_predictions,
                 profile=profile,
                 show_watts=show_watts,
-                sim_date=sim_date,
-                _at_today=at_today,
-                sim_day_idx=sim_day_idx,
                 total_days=total_days,
                 sim_start=sim_start,
                 sb_annotations=state._annot_data,
