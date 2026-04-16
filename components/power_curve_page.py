@@ -25,8 +25,8 @@ UI LAYOUT (inside power_curve_page)
   Chart box:
     Header: "Qualifying Performances through <date>"
     RowingLevel warning (only when predictor == "rowinglevel" and profile incomplete)
-    Transport bar: ▶/⏸  speed-cycle-button  ──── DateSlider ────
-    PowerCurveChart (75vh)
+    Transport bar: ▶/⏸  speed-cycle-button
+    PowerCurveChart (75vh, with integrated timeline scrubber)
 
     Settings Row 1:
       [ [log] Intensity: [Pace|Watts] ]  |  [ [log] Length: [Distance|Duration] ]
@@ -56,12 +56,11 @@ STATE VARIABLES  (declared at the top of power_curve_page())
   chart_show_components bool       show component sub-curves for supported predictors
   sim_week           int           day offset from sim_start; _SIM_TODAY (999999) = end
   sim_speed          str           one of _SPEED_OPTIONS: "0.5x"|"1x"|"4x"|"16x"
-  sim_playing        bool          whether the animation ticker is running
-  sim_tick_id        int           monotonically increasing; increment to advance animation
-  sim_last_pb_label  str           display text for the "New PB!" badge
-  sim_pb_set_at_day  int           day index when most recent PB was set
-  sim_pb_stored_labels_json str    JSON list of PB overlay labels captured at detection time
-  last_ds_change_id  int           tracks DateSlider changes to avoid stale scrubs
+  sim_playing        bool          whether the animation is running
+  sim_bundle         dict|None     precomputed animation bundle; None until task completes
+  sim_bundle_key     str           hash of bundle inputs; invalidated on settings change
+  last_sim_day_out   int           tracks chart.sim_day_out changes (ticks + user seeks)
+  last_sim_done      int           tracks chart.sim_done changes to detect animation end
   cp_fit_key         str           hash of CP input data; used to cache the CP fit
   cp_fit_result      dict|None     cached CP fit params from fit_critical_power()
 
@@ -160,7 +159,6 @@ from services.concept2_records import (
     fetch_wc_data,
 )
 from components.power_curve_chart_plugin import PowerCurveChart
-from components.date_slider_plugin import DateSlider
 from components.workout_table import (
     WorkoutTable,
     COL_DATE,
@@ -184,6 +182,8 @@ from components.power_curve_chart_builder import (
     ol_event_line,
     pcts,
     build_chart_config,
+    build_pred_datasets,
+    build_wc_static_datasets,
     compute_lifetime_bests,
 )
 from services.ranked_predictions import build_prediction_table_data
@@ -194,8 +194,6 @@ from components.hyperdiv_extensions import radio_group, shadowed_box, grid_box
 # Constants local to this module
 # ---------------------------------------------------------------------------
 
-# Animation: tick interval and step sizes per speed option.
-_BASE_TICK_SECS = 0.35  # seconds per animation tick — tune if too fast/slow
 _SIM_TODAY = 999999  # sentinel: sim_week value meaning "end of timeline / today"
 _SPEED_OPTIONS = ("0.5x", "1x", "4x", "16x")
 _SPEED_DAYS = {"0.5x": 1, "1x": 7, "4x": 30, "16x": 91}
@@ -252,14 +250,14 @@ _COMP_LABELS = {
 class SimData(NamedTuple):
     """Return value of _build_sim_data — all data derived from the current sim position."""
 
-    sim_wkts: list          # workouts visible at sim_date (filtered by best_filter)
-    excluded_wkts: list     # PBs of user-disabled events (plotted faintly, not in fits)
-    lb: dict                # selected-event lifetime bests (pace)
-    lb_anchor: dict         # selected-event lifetime bests (anchor format)
-    lb_all: dict            # all-event lifetime bests (pace)
-    lb_all_anchor: dict     # all-event lifetime bests (anchor format)
+    sim_wkts: list  # workouts visible at sim_date (filtered by best_filter)
+    excluded_wkts: list  # PBs of user-disabled events (plotted faintly, not in fits)
+    lb: dict  # selected-event lifetime bests (pace)
+    lb_anchor: dict  # selected-event lifetime bests (anchor format)
+    lb_all: dict  # all-event lifetime bests (pace)
+    lb_all_anchor: dict  # all-event lifetime bests (anchor format)
     pauls_k_fit: "float | None"  # personalised Paul's constant; None if < 2 PBs
-    pauls_k: float          # pauls_k_fit or population default 5.0
+    pauls_k: float  # pauls_k_fit or population default 5.0
 
 
 # ---------------------------------------------------------------------------
@@ -552,70 +550,23 @@ def _chart_section(
     rewind_day: int,
     pauls_k_fit: float | None = None,
     wc_task=None,
+    sim_command: str = "stop",
 ) -> None:
     """
-    Renders the performance chart box: header, RL status, transport bar,
-    PowerCurveChart, settings row, and components toggle.
+    Renders the performance chart box: header, RL status,
+    PowerCurveChart (with integrated transport bar + timeline scrubber),
+    settings row, and components toggle.
+
+    All transport interaction (Play/Pause, Speed, seeking) is handled entirely
+    inside the PowerCurveChart plugin — no Python UI is rendered for it.
     """
     is_dark = hd.theme().is_dark
 
-    # ---- transport bar ----
-    # Three-column layout: [controls (fixed)] | [slider (grows)] | [spacer (= controls width)]
-    with hd.box(align="center", width="100%"):
-        with hd.hbox(
-            gap=0,
-            align="center",
-            padding_top=1,
-            padding_bottom=0,
-            width="100%",
-            max_width="1280px",
-        ):
-            with hd.hbox(gap=0.5, align="center"):
-                _play_label = "⏸  Pause" if state.sim_playing else "▶  Play"
-                _play_variant = "default" if state.sim_playing else "primary"
-                if hd.button(_play_label, size="medium", variant=_play_variant).clicked:
-                    if state.sim_playing:
-                        state.sim_playing = False
-                    else:
-                        if _at_today:
-                            state.sim_week = rewind_day
-                        state.sim_tick_id += 1
-                        state.sim_playing = True
-
-                _sp_idx = (
-                    list(_SPEED_OPTIONS).index(state.sim_speed)
-                    if state.sim_speed in _SPEED_OPTIONS
-                    else 1
-                )
-                with hd.tooltip("Playback speed — click to change"):
-                    if hd.button(
-                        state.sim_speed, size="medium", variant="neutral"
-                    ).clicked:
-                        state.sim_speed = _SPEED_OPTIONS[
-                            (_sp_idx + 1) % len(_SPEED_OPTIONS)
-                        ]
-                        if state.sim_playing:
-                            state.sim_tick_id += 1
-
-            with hd.box(grow=1):
-                ds = DateSlider(
-                    min_value=0,
-                    max_value=max(1, total_days - 1),
-                    target_value=sim_day_idx,
-                    step=1,
-                    start_date=sim_start.isoformat(),
-                    annotations=sb_annotations,
-                )
-                if ds.change_id != state.last_ds_change_id:
-                    state.last_ds_change_id = ds.change_id
-                    state.sim_week = int(ds.value)
-                    state.sim_playing = False
-
-    if not chart_cfg:
+    if not chart_cfg and state.sim_bundle is None:
         hd.text("No chart data available.", font_color="neutral-500")
         return
 
-    with hd.hbox(align="center"):
+    with hd.hbox(align="center", width="100%"):
         with hd.box(align="center", gap=0.5):
             with hd.button(
                 size="small",
@@ -646,14 +597,41 @@ def _chart_section(
             if rg.changed:
                 state.chart_y_metric = rg.value
 
-        with hd.box():
-            # ---- chart ----
-            PowerCurveChart(
+        with hd.box(width="100%"):
+            # ---- chart (includes integrated transport bar + timeline scrubber) ----
+            chart = PowerCurveChart(
                 config=chart_cfg,
                 show_watts=show_watts,
                 x_mode=state.chart_x_metric,
+                sim_bundle=state.sim_bundle,
+                sim_command=sim_command,
+                sim_speed=state.sim_speed,
+                rewind_day=rewind_day,
+                timeline_min=0,
+                timeline_max=max(1, total_days - 1),
+                timeline_start_date=sim_start.isoformat(),
+                timeline_annotations=sb_annotations,
                 height="75vh",
             )
+
+            # ── Back-communication from JS transport + animation ──────────────
+            # JS sends sim_playing_out when the user clicks Play or Pause.
+            # Python uses this to gate bundle loading (sim_playing state).
+            if chart.sim_playing_out != state.sim_playing:
+                state.sim_playing = chart.sim_playing_out
+
+            # JS writes sim_day_out on every tick and after user seeks.
+            # Always update sim_week so Python knows the current position
+            # (used to rebuild the static config when paused).
+            if chart.sim_day_out != state.last_sim_day_out:
+                state.last_sim_day_out = chart.sim_day_out
+                if chart.sim_day_out >= 0:
+                    state.sim_week = chart.sim_day_out
+
+            # JS increments sim_done when the animation completes.
+            if chart.sim_done != state.last_sim_done:
+                state.last_sim_done = chart.sim_done
+                state.sim_playing = False
 
     _chart_settings(state, wc_task, profile, pauls_k_fit)
 
@@ -1608,23 +1586,323 @@ def _fetch_rowinglevel(
     return rl_task, rl_predictions
 
 
-def _run_animation_tick(state, total_days: int) -> None:
-    """Advance sim_week by one step when the animation is playing."""
-    if not state.sim_playing:
-        return
-    with hd.scope(f"sim_tick_{state.sim_tick_id}"):
-        tick = hd.task()
-        if not tick.running and not tick.done:
-            tick.run(time.sleep, _BASE_TICK_SECS)
-        if tick.done:
-            step = _SPEED_DAYS.get(state.sim_speed, 7)
-            nd = state.sim_week + step
-            if nd >= total_days:
-                state.sim_week = _SIM_TODAY
-                state.sim_playing = False
-            else:
-                state.sim_week = nd
-                state.sim_tick_id += 1
+# ---------------------------------------------------------------------------
+# Simulation bundle builder — pure Python, runs in hd.task() thread
+# ---------------------------------------------------------------------------
+
+
+def _build_sim_bundle_fn(
+    ranked_prefilt: list,
+    prefilt_excl: list,
+    featured_data: list,
+    *,
+    sim_start: "date",
+    total_days: int,
+    best_filter: str,
+    dist_enabled: tuple,
+    time_enabled: tuple,
+    show_watts: bool,
+    is_dark: bool,
+    x_mode: str,
+    x_bounds: "tuple | None",
+    y_bounds: "tuple | None",
+    log_x: bool,
+    predictor: str,
+    draw_power_curves: str,
+    show_components: bool,
+    rl_predictions: dict,
+    all_seasons: list,
+    wc_data: "dict | None",
+    bundle_key: str,
+) -> dict:
+    """Precompute the full client-side animation bundle.  No HyperDiv calls.
+
+    ranked_prefilt — selected events, quality-filtered, newest-first.
+    prefilt_excl   — all events (for excluded-event faint dots), newest-first.
+    featured_data  — historical PB/SB workouts (used in PBs/SBs mode), newest-first.
+
+    Returns the bundle dict consumed by power_curve_chart_plugin.js.
+    """
+    from services.rowing_utils import (
+        RANKED_DISTANCES,
+        RANKED_TIMES,
+        SEASON_PALETTE,
+        apply_best_only,
+        apply_season_best_only,
+        compute_duration_s,
+        compute_pace,
+        compute_watts as _compute_watts,
+        get_season,
+        parse_date,
+        workout_cat_key,
+        compute_pauls_constant,
+    )
+    from services.critical_power_model import fit_critical_power
+
+    # ── Excluded categories ──────────────────────────────────────────────────
+    excluded_cats = set()
+    for i, (dist, _) in enumerate(RANKED_DISTANCES):
+        if not dist_enabled[i]:
+            excluded_cats.add(("dist", dist))
+    for i, (tenths, _) in enumerate(RANKED_TIMES):
+        if not time_enabled[i]:
+            excluded_cats.add(("time", tenths))
+
+    # ── Season metadata ──────────────────────────────────────────────────────
+    sorted_seasons = sorted(all_seasons)
+    season_idx_map = {s: i for i, s in enumerate(sorted_seasons)}
+
+    def _hsla(idx, lightness_offset, alpha):
+        h, s, l = SEASON_PALETTE[idx % len(SEASON_PALETTE)]
+        return f"hsla({h},{s}%,{max(l + lightness_offset, 0)}%,{alpha:.2f})"
+
+    season_meta = [
+        {
+            "label": s,
+            "color": _hsla(i, 0, 0.90),
+            "dim_color": _hsla(i, 0, 0.40),
+            "border_color": _hsla(i, -12, 1.0),
+        }
+        for i, s in enumerate(sorted_seasons)
+    ]
+
+    # ── X/Y helpers ──────────────────────────────────────────────────────────
+    _use_duration = x_mode == "duration"
+    pb_color = "rgba(240,240,240,0.92)" if is_dark else "rgba(40,40,40,0.88)"
+
+    def _x_val(w):
+        """Return x value in current x_mode, or None."""
+        if _use_duration:
+            t = w.get("time")
+            if t:
+                return t / 10.0
+            p = compute_pace(w)
+            d = w.get("distance")
+            if p and d:
+                return round(d * p / 500.0, 2)
+            return None
+        return w.get("distance")
+
+    # ── Workout manifest (all workouts, oldest-first) ─────────────────────────
+    manifest = []
+
+    def _add_to_manifest(w, excluded: bool):
+        p = compute_pace(w)
+        d = w.get("distance")
+        xv = _x_val(w)
+        ck = workout_cat_key(w)
+        if p is None or d is None or xv is None or ck is None:
+            return
+        dt = parse_date(w.get("date", ""))
+        if dt < sim_start:
+            return
+        day = (dt - sim_start).days
+        if day < 0 or day > total_days:
+            return
+        season = get_season(w.get("date", ""))
+        s_idx = season_idx_map.get(season, 0)
+        etype, evalue = ck
+        manifest.append(
+            {
+                "day": day,
+                "season_idx": s_idx,
+                "cat_key_str": f"{etype}:{evalue}",
+                "x": xv,
+                "y_pace": round(p, 4),
+                "y_watts": round(_compute_watts(p), 1),
+                "dist_m": d,
+                "event_line": ol_event_line(etype, evalue, p, d),
+                "date_label": dt.strftime("%b %d, %Y"),
+                "wtype": w.get("workout_type", ""),
+                "excluded": excluded,
+            }
+        )
+
+    for w in ranked_prefilt:
+        _add_to_manifest(w, excluded=False)
+    for w in prefilt_excl:
+        if workout_cat_key(w) in excluded_cats:
+            _add_to_manifest(w, excluded=True)
+
+    manifest.sort(key=lambda e: e["day"])
+
+    # ── Keyframe builder ─────────────────────────────────────────────────────
+    # Walk unique workout dates oldest→newest; emit a keyframe whenever the
+    # lifetime-best dict changes (i.e. a new PB is set for any category).
+    sorted_prefilt = sorted(ranked_prefilt, key=lambda w: w.get("date", ""))
+    sorted_featured = sorted(featured_data, key=lambda w: w.get("date", ""))
+
+    keyframes = [
+        {
+            "day": 0,
+            "lifetime_best_pace": {},
+            "lifetime_best_watts": {},
+            "new_pbs": [],
+            "new_pb_labels": [],
+            "pred_datasets": [],
+        }
+    ]
+    prev_lb_str = {}  # cat_key_str -> pace
+    cp_fit_cache = {}  # fit_key -> result
+
+    seen_dates = sorted(
+        {w.get("date", "")[:10] for w in sorted_prefilt if w.get("date")}
+    )
+
+    for date_str in seen_dates:
+        dt = parse_date(date_str)
+        if dt < sim_start:
+            continue
+        day = (dt - sim_start).days
+        if day < 0 or day > total_days:
+            continue
+
+        # Sim workouts up to this date (replicates _build_sim_data logic)
+        if best_filter == "All":
+            sim_wkts = [w for w in sorted_prefilt if w.get("date", "")[:10] <= date_str]
+        else:
+            in_time = [w for w in sorted_featured if w.get("date", "")[:10] <= date_str]
+            sim_wkts = (
+                apply_best_only(in_time)
+                if best_filter == "PBs"
+                else apply_season_best_only(in_time)
+            )
+
+        lb, lb_anchor = compute_lifetime_bests(sim_wkts)
+
+        lb_str = {f"{k[0]}:{k[1]}": v for k, v in lb.items()}
+        lb_anchor_str = {f"{k[0]}:{k[1]}": v for k, v in lb_anchor.items()}
+        lb_watts_str = {ck: round(_compute_watts(p), 1) for ck, p in lb_str.items()}
+
+        if lb_str == prev_lb_str:
+            continue  # nothing improved — no keyframe needed
+
+        # Which categories got a new PB?
+        new_pb_strs = [
+            ck
+            for ck, p in lb_str.items()
+            if p < prev_lb_str.get(ck, float("inf")) - 1e-9
+        ]
+
+        # Build PB labels (canvas label dicts)
+        new_pb_labels = []
+        for ck_str in new_pb_strs:
+            pace = lb_str[ck_str]
+            dist = lb_anchor_str.get(ck_str, 0)
+            etype, evalue_str = ck_str.split(":", 1)
+            evalue = int(evalue_str)
+            prev_pace = prev_lb_str.get(ck_str)
+            pp, pw = pcts(prev_pace, pace) if prev_pace else (0.0, 0.0)
+            new_pb_labels.append(
+                {
+                    "x": dist,
+                    "y_pace": round(pace, 4),
+                    "y_watts": round(_compute_watts(pace), 1),
+                    "line_event": ol_event_line(etype, evalue, pace, dist),
+                    "pct_pace": round(pp, 1),
+                    "pct_watts": round(pw, 1),
+                    "line_label": "\u2746 New PB!",
+                    "color": pb_color,
+                    "bold": True,
+                }
+            )
+
+        # CP fit (with local cache to avoid redundant scipy calls)
+        cp_params = None
+        if predictor in ("critical_power", "average"):
+            cp_pb_list = []
+            for w in apply_best_only(sim_wkts):
+                dur = compute_duration_s(w)
+                pac = compute_pace(w)
+                if dur and pac:
+                    cp_pb_list.append({"duration_s": dur, "watts": _compute_watts(pac)})
+            fit_key = str(
+                sorted(
+                    (round(p["duration_s"], 1), round(p["watts"], 1))
+                    for p in cp_pb_list
+                )
+            )
+            if fit_key not in cp_fit_cache:
+                cp_fit_cache[fit_key] = fit_critical_power(cp_pb_list)
+            cp_params = cp_fit_cache[fit_key]
+
+        pauls_k_fit = compute_pauls_constant(lb, lb_anchor)
+        pauls_k = pauls_k_fit if pauls_k_fit is not None else 5.0
+
+        pred_dsets, pred_canvas_labels = build_pred_datasets(
+            predictor=predictor,
+            lifetime_best=lb,
+            lifetime_best_anchor=lb_anchor,
+            critical_power_params=cp_params,
+            rl_predictions=rl_predictions
+            if predictor in ("rowinglevel", "average")
+            else None,
+            pauls_k=pauls_k,
+            show_watts=show_watts,
+            is_dark=is_dark,
+            x_mode=x_mode,
+            x_bounds=x_bounds,
+            y_bounds=y_bounds,
+            show_components=show_components,
+        )
+
+        keyframes.append(
+            {
+                "day": day,
+                "lifetime_best_pace": lb_str,
+                "lifetime_best_watts": lb_watts_str,
+                "new_pbs": new_pb_strs,
+                "new_pb_labels": new_pb_labels,
+                "pred_datasets": pred_dsets,
+                "pred_canvas_labels": pred_canvas_labels,
+            }
+        )
+
+        prev_lb_str = lb_str
+
+    # ── Start day: 30 days before the first non-excluded workout ────────────────
+    included_days = [m["day"] for m in manifest if not m.get("excluded")]
+    start_day = max(0, min(included_days) - 30) if included_days else 0
+
+    # ── Static datasets: WC records (time-invariant) ─────────────────────────
+    # Compute pauls_k for the full lifetime best (all workouts in timeline).
+    full_lb, full_lb_anchor = compute_lifetime_bests(ranked_prefilt)
+    full_pauls_k = compute_pauls_constant(full_lb, full_lb_anchor) or 5.0
+
+    static_datasets = (
+        build_wc_static_datasets(
+            wc_data,
+            predictor=predictor,
+            x_bounds=x_bounds,
+            y_bounds=y_bounds,
+            show_watts=show_watts,
+            is_dark=is_dark,
+            x_mode=x_mode,
+            pauls_k=full_pauls_k,
+        )
+        if wc_data
+        else []
+    )
+
+    return {
+        "workout_manifest": manifest,
+        "keyframes": keyframes,
+        "static_datasets": static_datasets,
+        "season_meta": season_meta,
+        "total_days": total_days,
+        "start_day": start_day,
+        "pb_badge_lifetime_steps": 40,
+        "bundle_key": bundle_key,
+        "draw_lifetime_line": draw_power_curves == "PBs",
+        "draw_season_lines": draw_power_curves == "SBs",
+        "pb_color": pb_color,
+        "is_dark": is_dark,
+        "show_watts": show_watts,
+        "x_mode": x_mode,
+        "x_bounds": list(x_bounds) if x_bounds else None,
+        "y_bounds": list(y_bounds) if y_bounds else None,
+        "log_x": log_x,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1697,11 +1975,10 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         sim_playing=False,
         sim_week=_SIM_TODAY,
         sim_speed="1x",
-        sim_tick_id=0,
-        sim_last_pb_label="",
-        sim_pb_set_at_day=-9999,
-        sim_pb_stored_labels_json="[]",
-        last_ds_change_id=0,
+        sim_bundle=None,  # precomputed animation bundle dict
+        sim_bundle_key="",  # hash of bundle inputs; stale when settings change
+        last_sim_day_out=-1,  # tracks chart.sim_day_out changes
+        last_sim_done=0,  # tracks chart.sim_done changes
         cp_fit_key="",
         cp_fit_result=None,
         chart_compare_wc=False,
@@ -1846,28 +2123,8 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
     wc_task, wc_data = (
         _load_wc_cp(state, profile) if state.chart_compare_wc else (None, None)
     )
-    _run_animation_tick(state, total_days)
 
-    # ── Overlays + bounds ─────────────────────────────────────────────────────
-    sim_overlays, overlay_labels = None, []
-    if not at_today:
-        sim_overlays, overlay_labels, _pb_update = _compute_lookahead_overlays(
-            sim_wkts,
-            _ranked_prefilt,
-            sim_date,
-            sim_day_idx,
-            total_days,
-            show_watts,
-            sim_speed=state.sim_speed,
-            draw_power_curves=state.draw_power_curves,
-            sim_pb_set_at_day=state.sim_pb_set_at_day,
-            sim_pb_stored_labels_json=state.sim_pb_stored_labels_json,
-        )
-        if _pb_update:
-            state.sim_last_pb_label = _pb_update["label"]
-            state.sim_pb_set_at_day = _pb_update["day"]
-            state.sim_pb_stored_labels_json = _pb_update["stored_json"]
-
+    # ── Axis bounds ───────────────────────────────────────────────────────────
     _bounds_key = f"{state._ranked_key}:{excluded_seasons}:{show_watts}:{state.chart_x_metric}:{state.chart_log_x}"
     if state._bounds_key != _bounds_key or state._bounds_data is None:
         state._bounds_data = _compute_axis_bounds(
@@ -1881,14 +2138,95 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
     x_bounds, y_bounds = state._bounds_data
 
     # Expand y_bounds to include WC records when comparing.
-    # _compute_axis_bounds is derived from user PBs only; world-class rowers are
-    # faster (lower pace / higher watts), so without expansion they'd be clipped.
     if state.chart_compare_wc:
         y_bounds = _expand_y_bounds_for_wc(y_bounds, wc_data, show_watts)
 
+    # ── Sim bundle management ─────────────────────────────────────────────────
+    # Bundle key: hash of all inputs that affect the bundle content.
+    # When any of these change, the existing bundle is stale and must be rebuilt.
+    _bundle_key = hashlib.md5(
+        json.dumps(
+            [
+                state.chart_predictor,
+                state.best_filter,
+                sorted(list(selected_dists)),
+                sorted(list(selected_times)),
+                sorted(list(excluded_seasons)),
+                show_watts,
+                state.chart_x_metric,
+                state.chart_log_x,
+                state.draw_power_curves,
+                state.chart_show_components,
+                state.chart_compare_wc,
+                state._prefilt_key,  # includes machine + workout count + dist/time/season filters
+            ],
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()[:16]
+
+    if state.sim_bundle_key != _bundle_key:
+        # Settings changed — invalidate the cached bundle.
+        state.sim_bundle = None
+        state.sim_bundle_key = _bundle_key
+
+    if state.sim_playing and not at_today and state.sim_bundle is None:
+        # Bundle needed but not ready — launch the build task.
+        with hd.scope(f"sim_bundle_{_bundle_key}"):
+            _bt = hd.task()
+            if not _bt.running and not _bt.done:
+                _bt.run(
+                    _build_sim_bundle_fn,
+                    _ranked_prefilt,
+                    _prefilt_excl,
+                    _featured_data,
+                    sim_start=sim_start,
+                    total_days=total_days,
+                    best_filter=state.best_filter,
+                    dist_enabled=state.dist_enabled,
+                    time_enabled=state.time_enabled,
+                    show_watts=show_watts,
+                    is_dark=is_dark,
+                    x_mode=state.chart_x_metric,
+                    x_bounds=x_bounds,
+                    y_bounds=y_bounds,
+                    predictor=state.chart_predictor,
+                    draw_power_curves=state.draw_power_curves,
+                    show_components=state.chart_show_components,
+                    log_x=state.chart_log_x,
+                    rl_predictions=rl_predictions,
+                    all_seasons=all_seasons,
+                    wc_data=wc_data,
+                    bundle_key=_bundle_key,
+                )
+            if _bt.done:
+                if _bt.result:
+                    state.sim_bundle = _bt.result
+                elif _bt.error:
+                    # Task failed — stop playing and surface the error.
+                    state.sim_playing = False
+                    hd.alert(
+                        f"Animation bundle failed: {_bt.error}",
+                        variant="danger",
+                        closable=True,
+                    )
+
+    # ── Compute sim_command ───────────────────────────────────────────────────
+    # Seeking is handled entirely in JS via the integrated scrubber; Python only
+    # signals play / pause / stop.
+    if state.sim_playing and not at_today and state.sim_bundle is not None:
+        _sim_command = "play"
+    elif state.sim_playing and state.sim_bundle is None:
+        _sim_command = "pause"  # bundle not ready yet — hold JS
+    elif at_today:
+        _sim_command = "stop"
+    elif state.sim_bundle is not None:
+        _sim_command = "pause"
+    else:
+        _sim_command = "stop"
+
     # ── Render ────────────────────────────────────────────────────────────────
     with hd.box(gap=5, align="center", padding=(2, 2, 2, 2)):
-        with hd.box():
+        with hd.box(width="100%", align="center"):
             with hd.h1():
                 _date_label = sim_date.strftime("%b %d, %Y")
                 _best_long = {
@@ -2058,32 +2396,42 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
             effective_predictor = predictor
             if effective_predictor == "critical_power" and cp_params is None:
                 effective_predictor = "loglog"
-            chart_cfg = build_chart_config(
-                sim_wkts,
-                log_x=state.chart_log_x,
-                log_y=state.chart_log_y,
-                show_lifetime_line=state.draw_power_curves == "PBs",
-                show_watts=show_watts,
-                is_dark=is_dark,
-                predictor=effective_predictor,
-                rl_predictions=rl_predictions,
-                critical_power_params=cp_params,
-                season_lines=set(all_seasons)
-                if state.draw_power_curves == "SBs"
-                else set(),
-                all_seasons=all_seasons,
-                x_bounds=x_bounds,
-                y_bounds=y_bounds,
-                sim_overlays=sim_overlays,
-                overlay_labels=overlay_labels,
-                show_components=state.chart_show_components,
-                lifetime_best=lb,
-                lifetime_best_anchor=lb_anchor,
-                pauls_k=pauls_k,
-                excluded_workouts=excluded_wkts,
-                x_mode=state.chart_x_metric,
-                wc_data=wc_data,
-            )
+
+            # Skip the expensive build_chart_config() while JS animation is running.
+            # JS uses sim_bundle to render the chart; config is only needed for
+            # the static (non-playing) view.
+            if state.sim_playing and state.sim_bundle is not None:
+                chart_cfg = None  # JS ignores config when bundle is active
+            else:
+                chart_cfg = build_chart_config(
+                    sim_wkts,
+                    log_x=state.chart_log_x,
+                    log_y=state.chart_log_y,
+                    show_lifetime_line=state.draw_power_curves == "PBs",
+                    show_watts=show_watts,
+                    is_dark=is_dark,
+                    predictor=effective_predictor,
+                    rl_predictions=rl_predictions,
+                    critical_power_params=cp_params,
+                    season_lines=set(all_seasons)
+                    if state.draw_power_curves == "SBs"
+                    else set(),
+                    all_seasons=all_seasons,
+                    x_bounds=x_bounds,
+                    y_bounds=y_bounds,
+                    sim_overlays=None,
+                    overlay_labels=[],
+                    show_components=state.chart_show_components,
+                    lifetime_best=lb,
+                    lifetime_best_anchor=lb_anchor,
+                    pauls_k=pauls_k,
+                    excluded_workouts=excluded_wkts,
+                    x_mode=state.chart_x_metric,
+                    wc_data=wc_data,
+                )
+                # Embed the current slider position so JS can sync currentDay
+                # when the config prop is the delivery channel (paused with bundle).
+                chart_cfg["_sim_day"] = sim_day_idx
 
             _chart_section(
                 state,
@@ -2101,6 +2449,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
                 rewind_day=_compute_rewind_day(_ranked_prefilt, sim_start),
                 pauls_k_fit=pauls_k_fit,
                 wc_task=wc_task,
+                sim_command=_sim_command,
             )
 
             rl_available = profile_complete(profile)

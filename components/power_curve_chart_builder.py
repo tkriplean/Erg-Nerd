@@ -6,6 +6,7 @@ Exported:
   ol_event_line()        — format the first overlay-label line ("Event  time-or-dist")
   pcts()                 — compute (pct_pace, pct_watts) improvement between two paces
   compute_lifetime_bests() — derive lifetime-best dicts from a raw workout list
+  build_pred_datasets()  — build only the prediction-curve datasets for the active predictor
   build_chart_config()   — build the full Chart.js config dict
 
 All satellite helpers (_season_hsla, _pred_dataset, etc.) are private to this module.
@@ -1162,6 +1163,184 @@ def _canvas_labels_list(overlay_labels, y_fn, crossover_labels=None) -> list:
         )
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Public prediction-only dataset builder (used by the sim bundle builder)
+# ---------------------------------------------------------------------------
+
+
+def build_pred_datasets(
+    *,
+    predictor: str,
+    lifetime_best: dict,
+    lifetime_best_anchor: dict,
+    critical_power_params=None,
+    rl_predictions=None,
+    pauls_k: float = 5.0,
+    show_watts: bool = False,
+    is_dark: bool = False,
+    x_mode: str = "distance",
+    x_bounds: tuple | None = None,
+    y_bounds: tuple | None = None,
+    show_components: bool = False,
+) -> tuple:
+    """Build only the prediction-curve datasets for the active predictor.
+
+    Used by the simulation bundle builder to pre-bake prediction curves per
+    keyframe without rebuilding the full chart config.
+
+    Returns (datasets, canvas_labels) where:
+      datasets      — list of Chart.js dataset dicts
+      canvas_labels — list of canvas label dicts (e.g. CP crossover annotation)
+    """
+    _use_duration = x_mode == "duration"
+
+    def _x_from_dp(dist: float, pace: float) -> float:
+        return round(dist * pace / 500.0, 2) if _use_duration else dist
+
+    _x_fn = _x_from_dp if _use_duration else None
+
+    def _y(pace: float) -> float:
+        return round(compute_watts(pace), 1) if show_watts else round(pace, 3)
+
+    pred_color = "rgba(220,160,55,0.80)" if is_dark else "rgba(185,120,20,0.80)"
+
+    if x_bounds is not None:
+        x_min, x_max = x_bounds
+    else:
+        x_min, x_max = 100.0, 42195.0
+
+    if y_bounds is not None:
+        y_min, y_max = y_bounds
+    else:
+        if lifetime_best:
+            _paces = list(lifetime_best.values())
+            _ys = [compute_watts(p) if show_watts else p for p in _paces]
+            _ypad = max((max(_ys) - min(_ys)) * 0.15, 5.0)
+            y_min, y_max = min(_ys) - _ypad, max(_ys) + _ypad
+        else:
+            y_min, y_max = (60.0, 450.0) if show_watts else (60.0, 250.0)
+
+    datasets: list = []
+
+    if predictor == "rowinglevel" and rl_predictions:
+        datasets.extend(
+            _rowinglevel_datasets(
+                rl_predictions,
+                pred_color,
+                _y,
+                show_components,
+                lifetime_best_anchor or {},
+                x_fn=_x_fn,
+            )
+        )
+    if predictor == "pauls_law":
+        datasets.extend(
+            _pauls_law_datasets(
+                lifetime_best,
+                lifetime_best_anchor,
+                pred_color,
+                _y,
+                show_components,
+                pauls_k=pauls_k,
+                x_fn=_x_fn,
+            )
+        )
+    if predictor == "loglog":
+        datasets.extend(
+            _loglog_dataset(lifetime_best, lifetime_best_anchor, pred_color, _y, x_fn=_x_fn)
+        )
+    crossover_labels: list = []
+
+    if predictor == "critical_power" and critical_power_params is not None:
+        _cp_with_sel = dict(critical_power_params)
+        _cp_with_sel["_sel_dists"] = {cat[1] for cat in lifetime_best if cat[0] == "dist"}
+        _cp_with_sel["_sel_times"] = {cat[1] for cat in lifetime_best if cat[0] == "time"}
+        _cp_ds, _cp_xover = _cp_datasets(
+            _cp_with_sel,
+            x_min,
+            x_max,
+            y_min,
+            y_max,
+            pred_color,
+            _y,
+            show_watts,
+            show_components,
+            is_dark,
+            x_fn=_x_fn,
+        )
+        datasets.extend(_cp_ds)
+        crossover_labels.extend(_cp_xover)
+    if predictor == "average":
+        datasets.extend(
+            _average_datasets(
+                lifetime_best,
+                lifetime_best_anchor,
+                critical_power_params,
+                rl_predictions,
+                pauls_k,
+                x_min,
+                x_max,
+                pred_color,
+                _y,
+                show_watts,
+                show_components=show_components,
+                x_fn=_x_fn,
+            )
+        )
+
+    # Convert raw crossover label dicts to the canvas-label wire format.
+    canvas_labels = _canvas_labels_list([], None, crossover_labels)
+    return datasets, canvas_labels
+
+
+def build_wc_static_datasets(
+    wc_data: dict,
+    *,
+    predictor: str,
+    x_bounds: tuple,
+    y_bounds: tuple,
+    show_watts: bool,
+    is_dark: bool,
+    x_mode: str,
+    pauls_k: float = 5.0,
+) -> list:
+    """Build the world-class scatter + prediction datasets for the sim bundle.
+
+    These are time-invariant (WC records don't change during animation), so
+    they are computed once and stored in bundle.static_datasets.
+
+    Returns an empty list if wc_data is None or empty.
+    """
+    if not wc_data:
+        return []
+    _use_duration = x_mode == "duration"
+    x_min, x_max = x_bounds if x_bounds else (100.0, 42195.0)
+    y_min, y_max = y_bounds if y_bounds else (60.0, 250.0)
+
+    def _y(pace: float) -> float:
+        return round(compute_watts(pace), 1) if show_watts else round(pace, 3)
+
+    x_fn = (lambda dist, pace: round(dist * pace / 500.0, 2)) if _use_duration else None
+
+    scatter = _wc_scatter_dataset(
+        wc_data["lb"], wc_data["lba"], _y, _use_duration, is_dark
+    )
+    preds = _wc_pred_datasets(
+        wc_data,
+        predictor,
+        x_min,
+        x_max,
+        y_min,
+        y_max,
+        _y,
+        show_watts,
+        is_dark,
+        x_fn,
+        pauls_k,
+    )
+    return preds + [scatter]
 
 
 # ---------------------------------------------------------------------------
