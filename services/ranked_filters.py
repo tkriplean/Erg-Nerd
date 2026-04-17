@@ -2,7 +2,7 @@
 Quality-filter logic, season/ranked helpers, and simulation date-gating.
 
 Exported:
-  is_ranked_noninterval()  — True if workout matches a ranked event and is not an interval
+  is_rankable_noninterval()  — True if workout matches a ranked event and is not an interval
   seasons_from()           — sorted list of seasons (newest-first) present in results
   apply_quality_filters()  — apply the three quality-filter passes to a workout list
   workouts_before_date()        — return workouts visible at a given simulation date
@@ -34,7 +34,7 @@ from services.rowing_utils import (
 # ---------------------------------------------------------------------------
 
 
-def is_ranked_noninterval(r: dict) -> bool:
+def is_rankable_noninterval(r: dict) -> bool:
     """True if the workout matches a ranked distance or time and is not an interval."""
     if r.get("workout_type") in INTERVAL_WORKOUT_TYPES:
         return False
@@ -88,9 +88,6 @@ def _dominated_by_longer(
 
 def apply_quality_filters(
     workouts: list,
-    selected_dists: set,
-    selected_times: set,
-    excluded_seasons: set,
 ) -> list:
     """
     Apply the three quality-filter passes to a list of ranked workouts:
@@ -103,9 +100,7 @@ def apply_quality_filters(
          workout if any longer-event performance within the window is more than
          ADJACENT_FILTER_PCT% faster (by pace).
 
-    Returns the filtered list.  selected_dists, selected_times, and
-    excluded_seasons are not applied here — they are applied in power_curve_page.py
-    after this call.
+    Returns the filtered list.
     """
     # 1) Lifetime-PB quality filter
     _cat_pb: dict = {}
@@ -170,7 +165,7 @@ def apply_quality_filters(
 
 
 def workouts_before_date(
-    all_ranked_raw: list,
+    rankable_efforts: list,
     timeline_date: date,
     selected_dists: set,
     selected_times: set,
@@ -194,7 +189,7 @@ def workouts_before_date(
     date_str = timeline_date.isoformat()
 
     # 1. Date gate
-    in_time = [w for w in all_ranked_raw if (w.get("date") or "")[:10] <= date_str]
+    in_time = [w for w in rankable_efforts if (w.get("date") or "")[:10] <= date_str]
 
     # 2. Event filter
     in_time = [

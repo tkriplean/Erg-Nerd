@@ -56,7 +56,7 @@ from services.rowing_utils import (
     compute_watts,
     age_from_dob,
 )
-from services.ranked_filters import is_ranked_noninterval, apply_quality_filters
+from services.ranked_filters import is_rankable_noninterval, apply_quality_filters
 from services.formatters import format_time, fmt_split
 from services.stroke_utils import build_races_data, fetch_one_stroke, build_wr_boat
 from services.concept2_records import get_age_group_records
@@ -121,8 +121,8 @@ def _event_workouts(workouts: list, etype: str, evalue: int, machine: str) -> li
     """
     Return all workouts matching the event + machine filter (any season).
 
-    Expects workouts to already be quality-filtered (is_ranked_noninterval()
-    pre-applied) — e.g. the `all_ranked` list from race_page().
+    Expects workouts to already be quality-filtered (is_rankable_noninterval()
+    pre-applied) — e.g. the `rankable_efforts` list from race_page().
 
     Time events: match `time == evalue` as long as `distance` is not itself a
     ranked distance (avoids treating a 2k that happened to take exactly 30 min
@@ -244,26 +244,23 @@ def race_page(
     all_workouts = list(sorted_workouts)
 
     # ── Apply quality filter (same strategy as Performance page) ─────────────
-    all_ranked_raw = [w for w in all_workouts if is_ranked_noninterval(w)]
-    all_ranked = apply_quality_filters(
-        all_ranked_raw,
-        selected_dists=set(),
-        selected_times=set(),
-        excluded_seasons=set(),
-    )
+    rankable_efforts = [w for w in all_workouts if is_rankable_noninterval(w)]
+    rankable_efforts = apply_quality_filters(rankable_efforts)
 
     # ── Apply global filters ──────────────────────────────────────────────────
     if excluded_seasons:
         _excl = set(excluded_seasons)
-        all_ranked = [
-            w for w in all_ranked if get_season(w.get("date", "")) not in _excl
+        rankable_efforts = [
+            w for w in rankable_efforts if get_season(w.get("date", "")) not in _excl
         ]
     if machine != "All":
-        all_ranked = [w for w in all_ranked if w.get("type", "rower") == machine]
+        rankable_efforts = [
+            w for w in rankable_efforts if w.get("type", "rower") == machine
+        ]
 
     # ── Compute available events ──────────────────────────────────────────────
     event_counts: dict = {}
-    for w in all_ranked:
+    for w in rankable_efforts:
         d = w.get("distance") or 0
         t = w.get("time")
         if d in RANKED_DIST_SET:
@@ -288,7 +285,9 @@ def race_page(
 
     # ── Derived workout sets ───────────────────────────────────────────────────
     # Table scope: event + global filters (include_filter ignored for table)
-    table_wkts = _event_workouts(all_ranked, state.event_type, state.event_value, "All")
+    table_wkts = _event_workouts(
+        rankable_efforts, state.event_type, state.event_value, "All"
+    )
 
     # Race scope: additionally apply include_filter
     race_wkts = _include_filtered(table_wkts, state.include_filter)

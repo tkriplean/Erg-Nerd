@@ -58,7 +58,7 @@ def _hsl_to_rgb(h_deg: float, s_pct: float, l_pct: float) -> tuple:
 
 
 def generate_mp4(
-    all_ranked_raw: list,
+    rankable_efforts: list,
     sim_dates: list,  # list of date objects, one per frame
     config: dict,  # see keys below
     output_path,  # str or Path
@@ -130,7 +130,7 @@ def generate_mp4(
 
         sim_date = sim_dates[frame_idx]
         wkts = workouts_before_date(
-            all_ranked_raw,
+            rankable_efforts,
             sim_date,
             selected_dists,
             selected_times,
@@ -358,7 +358,7 @@ def render_mp4_export_button(state, mp4_task, sim_config: dict) -> None:
     `mp4_task = hd.task()` to the state setup.
 
     sim_config must contain:
-      all_ranked_raw, sim_dates (list[date]), selected_dists, selected_times,
+      rankable_efforts, sim_dates (list[date]), selected_dists, selected_times,
       excluded_seasons, best_filter, show_watts, show_lifetime_line, predictor,
       season_lines (set), all_seasons (list), is_dark, log_x, log_y,
       x_bounds, y_bounds, output_path (str|Path), rower_name (str)
@@ -378,7 +378,7 @@ def render_mp4_export_button(state, mp4_task, sim_config: dict) -> None:
     else:
         with hd.tooltip("Export MP4"):
             if hd.icon_button("film", font_size="small").clicked:
-                all_ranked_raw = sim_config["all_ranked_raw"]
+                rankable_efforts = sim_config["rankable_efforts"]
                 sim_dates = sim_config["sim_dates"]
                 output_path = sim_config["output_path"]
                 rower_name = sim_config.get("rower_name", "")
@@ -386,11 +386,16 @@ def render_mp4_export_button(state, mp4_task, sim_config: dict) -> None:
                     k: v
                     for k, v in sim_config.items()
                     if k
-                    not in ("all_ranked_raw", "sim_dates", "output_path", "rower_name")
+                    not in (
+                        "rankable_efforts",
+                        "sim_dates",
+                        "output_path",
+                        "rower_name",
+                    )
                 }
                 mp4_task.run(
                     generate_mp4,
-                    all_ranked_raw,
+                    rankable_efforts,
                     sim_dates,
                     config,
                     output_path,

@@ -55,9 +55,9 @@ All state is declared as `hd.state(...)` at the top of `power_curve_page()`.
 | `chart_log_y` | `bool` | `False` | Log scale on y-axis |
 | `chart_show_components` | `bool` | `False` | Show per-anchor/component sub-curves |
 | `chart_compare_wc` | `bool` | `False` | Overlay WC records and WC prediction curve |
-| `wc_fetch_key` | `str` | `""` | `"gender\|age\|weight_kg"` — invalidation key for WC data |
-| `wc_fetch_done` | `bool` | `False` | True once the WC data fetch task has completed |
-| `wc_data` | `dict\|None` | `None` | Cached world-class records and lifetime-best data |
+| `wr_fetch_key` | `str` | `""` | `"gender\|age\|weight_kg"` — invalidation key for WC data |
+| `wr_fetch_done` | `bool` | `False` | True once the WC data fetch task has completed |
+| `wr_data` | `dict\|None` | `None` | Cached world-class records and lifetime-best data |
 | `cp_fit_key` | `str` | `""` | Hash of CP input data; used to cache the CP fit result |
 | `cp_fit_result` | `dict\|None` | `None` | Cached CP fit params from `fit_critical_power()` |
 
@@ -82,11 +82,11 @@ Each cache is a `(key, data)` pair; when the key changes the data is recomputed.
 
 | Prefix | What is cached |
 |---|---|
-| `_ranked_key` / `_ranked_data` | `_build_ranked_workouts()` — quality-filtered ranked list + seasons |
-| `_display_key` / `_display_data` | `_apply_display_filter()` — chart/table display list |
-| `_prefilt_key` / `_prefilt_data` | `_ranked_prefilt` — dist/time/excluded-season filtered list |
-| `_prefilt_excl_key` / `_prefilt_excl_data` | `_prefilt_excl` — excluded-seasons-only filtered list |
-| `_featured_key` / `_featured_data` | `compute_featured_workouts()` — historical PB/SB workouts |
+| `_key_for_quality_efforts` / `rankable_efforts` | `_build_quality_rankable_efforts()` — quality-filtered ranked list + seasons |
+| `_key_for_efforts_filtered_by_event_and_display` / `efforts_filtered_by_event_and_display` | `_apply_display_filter()` — chart/table display list |
+| `_key_for_efforts_filtered_by_event` / `efforts_filtered_by_event` | `efforts_filtered_by_event` — dist/time/excluded-season filtered list |
+| `_key_for_efforts_filtered_by_season` / `quality_efforts` | `_prefilt_excl` — excluded-seasons-only filtered list |
+| `_featured_key` / `featured_efforts` | `compute_featured_workouts()` — historical PB/SB workouts |
 | `_annot_key` / `_annot_data` | `build_sb_annotations()` — DateSlider tick marks |
 | `_bounds_key` / `_bounds_data` | `_compute_axis_bounds()` — fixed `(x_bounds, y_bounds)` |
 
@@ -98,8 +98,8 @@ Each cache is a `(key, data)` pair; when the key changes the data is recomputed.
 
 ```
 concept2_sync(client)
-    └─ all_ranked (quality-filtered)
-         └─ all_ranked_raw  ←─ basis for ALL subsequent filtering
+    └─ rankable_efforts (quality-filtered)
+         └─ rankable_efforts  ←─ basis for ALL subsequent filtering
               │
               ├─ seasons_from()  →  all_seasons
               │
@@ -455,21 +455,21 @@ the user's category.
 
 ### How it works
 
-1. `_load_wc_cp()` manages a lazy `hd.task()` that calls `_fetch_wc_data()`.
-2. `_fetch_wc_data(gender, age, weight_kg)` calls `get_age_group_records()` from
+1. `load_world_record_data()` manages a lazy `hd.task()` that calls `_fetch_wr_data()`.
+2. `_fetch_wr_data(gender, age, weight_kg)` calls `get_age_group_records()` from
    `services/concept2_records.py` to retrieve Concept2 official age-group world records.
 3. The records are converted to CP model inputs via `records_to_cp_input()` and fitted
    with `fit_critical_power()`, producing the same four-parameter WC curve.
-4. WC data is cached in `state.wc_data` and invalidated via `state.wc_fetch_key`
+4. WC data is cached in `state.wr_data` and invalidated via `state.wr_fetch_key`
    (`"gender|age|weight_kg"`).  Re-fetching only occurs when the profile changes.
 
 ### State variables
 | Variable | Description |
 |---|---|
 | `chart_compare_wc` | Toggle — show/hide the WC comparison curve |
-| `wc_fetch_key` | Profile fingerprint used to detect stale WC data |
-| `wc_fetch_done` | True once the WC fetch task has completed |
-| `wc_data` | Cached dict with fitted CP params and category label |
+| `wr_fetch_key` | Profile fingerprint used to detect stale WC data |
+| `wr_fetch_done` | True once the WC fetch task has completed |
+| `wr_data` | Cached dict with fitted CP params and category label |
 
 ### Requirement
 Profile must be complete.  If gender, DOB, or weight is missing, the toggle is hidden.
@@ -489,7 +489,7 @@ events/seasons) and held fixed. This includes excluded events (for x-bounds stab
 | File | Responsibility |
 |---|---|
 | `components/power_curve_page.py` | State, orchestration, transport controls, bundle key/task management, all UI sub-components |
-| `components/power_curve_chart_builder.py` | `build_chart_config()`, `build_pred_datasets()`, `build_wc_static_datasets()`, `compute_lifetime_bests()`, all dataset sub-builders |
+| `components/power_curve_chart_builder.py` | `build_chart_config()`, `build_pred_datasets()`, `build_wr_static_datasets()`, `compute_lifetime_bests()`, all dataset sub-builders |
 | `components/power_curve_chart_plugin.py` | `PowerCurveChart` HyperDiv plugin — declares Python↔JS props (`config`, `show_watts`, `x_mode`, `sim_bundle`, `sim_command`, `sim_speed`, `sim_day_out`, `sim_done`) |
 | `components/chart_assets/power_curve_chart_plugin.js` | Full JS animation engine: `tick()`, `tick_noadvance()`, `buildScatterDatasets()`, `buildOverlayDatasets()`, `buildSimOptions()`, `handleSimCommand()`, `applyBundle()`, `applyConfig()`, `canvasLabelsPlugin` |
 | `components/date_slider_plugin.py` | `DateSlider` plugin — the timeline scrubber with annotation markers |

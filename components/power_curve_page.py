@@ -145,10 +145,10 @@ from components.profile_page import get_profile
 from services.rowing_utils import profile_complete
 
 from services.concept2_records import (
-    age_category as wc_age_category,
-    weight_class_str as wc_weight_class_str,
+    age_category as wr_age_category,
+    weight_class_str as wr_weight_class_str,
     wr_category_label,
-    fetch_wc_data,
+    fetch_wr_data,
 )
 from components.power_curve_chart_plugin import PowerCurveChart
 from components.workout_table import (
@@ -165,7 +165,7 @@ from components.workout_table import (
     COL_LINK,
 )
 from services.ranked_filters import (
-    is_ranked_noninterval,
+    is_rankable_noninterval,
     seasons_from,
     apply_quality_filters,
 )
@@ -264,7 +264,6 @@ def _chart_section(
     sim_start,
     sb_annotations: list,
     pauls_k_fit: float | None = None,
-    wc_task=None,
     sim_command: str = "stop",
 ) -> None:
     """
@@ -346,10 +345,10 @@ def _chart_section(
                 state.last_sim_done = chart.sim_done
                 state.sim_playing = False
 
-    _chart_settings(state, wc_task, profile, pauls_k_fit)
+    _chart_settings(state, profile, pauls_k_fit)
 
 
-def _chart_settings(state, wc_task, profile, pauls_k_fit):
+def _chart_settings(state, profile, pauls_k_fit):
     # ---- Chart settings ----
     with hd.box(gap=2, align="center"):
         with hd.hbox(gap=0.2, align="center"):
@@ -577,7 +576,7 @@ def _chart_settings(state, wc_task, profile, pauls_k_fit):
 
             with hd.box():
                 # ---- World-class comparison toggles ----
-                _wc_compare_section(state, profile, wc_task)
+                _wr_compare_section(state, profile)
 
 
 # ---------------------------------------------------------------------------
@@ -585,28 +584,28 @@ def _chart_settings(state, wc_task, profile, pauls_k_fit):
 # ---------------------------------------------------------------------------
 
 
-def _wc_compare_section(state, profile: dict, wc_task) -> None:
+def _wr_compare_section(state, profile: dict) -> None:
     """
-    Renders the 'Compare vs World Class' toggle.
+    Renders the 'Compare vs world record' toggle.
     Placed below the Settings Row 2 prediction box.
     """
 
     _loading = (
-        state.chart_compare_wc and not state.wc_fetch_done and state.wc_fetch_key != ""
+        state.chart_compare_wc and not state.wr_fetch_done and state.wr_fetch_key != ""
     )
-    _failed = state.chart_compare_wc and state.wc_fetch_done and state.wc_data is None
+    _failed = state.chart_compare_wc and state.wr_fetch_done and state.wr_data is None
 
     # Compare toggle
-    wc_label = wr_category_label(profile)
-    if wc_label is None:
+    wr_label = wr_category_label(profile)
+    if wr_label is None:
         hd.text(
-            "Set age, gender and weight in Profile to compare vs world class.",
+            "Set age, gender and weight in Profile to compare vs world record.",
             font_color="neutral-500",
             font_size="small",
         )
         return
 
-    compare_to_wr_sel = hd.switch(f"Show {wc_label} world records", size="medium")
+    compare_to_wr_sel = hd.switch(f"Show {wr_label} world records", size="medium")
 
     if compare_to_wr_sel.changed:
         state.chart_compare_wc = compare_to_wr_sel.value
@@ -995,40 +994,29 @@ def _bisect_date_desc(workouts: list, date_str: str) -> int:
     return lo
 
 
-def _build_ranked_workouts(sync_result, machine: str) -> tuple:
+def _build_quality_rankable_efforts(
+    sync_result, machine: str, excluded_seasons: list
+) -> tuple:
     """
     Extract and quality-filter the ranked non-interval workouts from sync_result.
-    Returns (all_ranked, all_ranked_raw, all_seasons); empty lists while loading.
+    Returns rankable_efforts; empty list while loading.
     """
     if sync_result is None:
-        return [], [], []
+        return []
     _workouts_dict, sorted_workouts = sync_result
-    if machine != "All":
-        sorted_workouts = [w for w in sorted_workouts if w.get("type") == machine]
-    all_ranked = [r for r in sorted_workouts if is_ranked_noninterval(r)]
-    all_ranked = apply_quality_filters(
-        all_ranked, selected_dists=set(), selected_times=set(), excluded_seasons=set()
-    )
-    all_ranked_raw = list(all_ranked)
-    all_seasons = seasons_from(all_ranked)
-    return all_ranked, all_ranked_raw, all_seasons
 
-
-def _apply_display_filter(
-    state, all_ranked: list, selected_dists: set, selected_times: set, excluded_seasons
-) -> list:
-    """Apply event, season, and best-filter; return the chart/table display list."""
-    filtered = [
-        r
-        for r in all_ranked
-        if (r.get("distance") in selected_dists or r.get("time") in selected_times)
-        and get_season(r.get("date", "")) not in excluded_seasons
+    _excl_seasons = set(excluded_seasons)
+    rankable_efforts = [
+        w
+        for w in sorted_workouts
+        if (machine == "All" or w.get("type") == machine)
+        and is_rankable_noninterval(w)
+        and get_season(w.get("date", "")) not in _excl_seasons
     ]
-    if state.best_filter == "PBs":
-        return apply_best_only(filtered)
-    elif state.best_filter == "SBs":
-        return apply_season_best_only(filtered)
-    return filtered
+
+    rankable_efforts = apply_quality_filters(rankable_efforts)
+
+    return rankable_efforts
 
 
 def _compute_sim_timeline(
@@ -1056,34 +1044,33 @@ def _compute_sim_timeline(
 
 def _expand_y_bounds_for_wc(
     y_bounds: tuple | None,
-    wc_data: dict | None,
+    wr_data: dict | None,
     show_watts: bool,
 ) -> tuple | None:
     """Expand y_bounds to include world-class pace/watts values.
 
     _compute_axis_bounds uses user PBs only; WC rowers are faster, so without
     expansion the WC overlay points would be clipped.  Returns the original
-    y_bounds unchanged when wc_data is absent or empty.
+    y_bounds unchanged when wr_data is absent or empty.
     """
-    if y_bounds is None or not wc_data:
+    if y_bounds is None or not wr_data:
         return y_bounds
-    _wc_y_vals = [
+    _wr_y_vals = [
         compute_watts(pace) if show_watts else pace
-        for pace in wc_data["lb"].values()
+        for pace in wr_data["lb"].values()
         if pace > 0
     ]
-    if not _wc_y_vals:
+    if not _wr_y_vals:
         return y_bounds
     _ypad = max((y_bounds[1] - y_bounds[0]) * 0.1, 5.0 if not show_watts else 2.0)
     return (
-        min(y_bounds[0], min(_wc_y_vals) - _ypad),
-        max(y_bounds[1], max(_wc_y_vals) + _ypad),
+        min(y_bounds[0], min(_wr_y_vals) - _ypad),
+        max(y_bounds[1], max(_wr_y_vals) + _ypad),
     )
 
 
 def _compute_axis_bounds(
-    all_ranked_raw: list,
-    excluded_seasons,
+    quality_efforts: list,
     show_watts: bool,
     use_duration: bool,
     log_x: bool,
@@ -1093,13 +1080,7 @@ def _compute_axis_bounds(
     when the user toggles individual events.
     Returns (x_bounds, y_bounds); either may be None if data is insufficient.
     """
-    bounds_src = [
-        w
-        for w in all_ranked_raw
-        if get_season(w.get("date", "")) not in set(excluded_seasons)
-        and (w.get("distance") in RANKED_DIST_SET or w.get("time") in RANKED_TIME_SET)
-    ]
-    bests = apply_best_only(bounds_src)
+    bests = apply_best_only(quality_efforts)
     if not bests:
         return None, None
     bp = [p for w in bests if (p := compute_pace(w)) and 60 < p < 400]
@@ -1204,12 +1185,12 @@ def _fetch_rowinglevel(state, profile: dict, chart_workouts: list) -> tuple:
 # ---------------------------------------------------------------------------
 
 
-def _load_wc_cp(state, profile: dict) -> tuple:
+def load_world_record_data(state, profile: dict) -> tuple:
     """
     HyperDiv component: manage the background task that fetches world-class
-    data.  Caches result in state.wc_data.
+    data.  Caches result in state.wr_data.
 
-    Returns (task_or_None, wc_data_or_None).
+    Returns (task_or_None, wr_data_or_None).
     """
     # Derive API-format profile fields.
     gender_raw = profile.get("gender", "")  # "Male" or "Female"
@@ -1223,26 +1204,26 @@ def _load_wc_cp(state, profile: dict) -> tuple:
     if age is None or weight_kg <= 0:
         return None, None
 
-    age_cat = wc_age_category(age)
-    wt_class = wc_weight_class_str(weight_kg, gender_api, age)
+    age_cat = wr_age_category(age)
+    wt_class = wr_weight_class_str(weight_kg, gender_api, age)
     fetch_key = f"{gender_api}|{age_cat}|{wt_class}"
 
     # Reset when profile changes.
-    if fetch_key != state.wc_fetch_key:
-        state.wc_fetch_key = fetch_key
-        state.wc_fetch_done = False
-        state.wc_data = None
+    if fetch_key != state.wr_fetch_key:
+        state.wr_fetch_key = fetch_key
+        state.wr_fetch_done = False
+        state.wr_data = None
 
-    wc_task = None
-    with hd.scope(f"wc_task_{fetch_key}"):
-        wc_task = hd.task()
-        if not wc_task.running and not wc_task.done:
-            wc_task.run(fetch_wc_data, gender_api, age, weight_kg)
-        if wc_task.done and not state.wc_fetch_done:
-            state.wc_fetch_done = True
-            state.wc_data = wc_task.result  # None if API returned nothing
+    wr_task = None
+    with hd.scope(f"wr_task_{fetch_key}"):
+        wr_task = hd.task()
+        if not wr_task.running and not wr_task.done:
+            wr_task.run(fetch_wr_data, gender_api, age, weight_kg)
+        if wr_task.done and not state.wr_fetch_done:
+            state.wr_fetch_done = True
+            state.wr_data = wr_task.result  # None if API returned nothing
 
-    return wc_task, state.wc_data
+    return state.wr_data
 
 
 # ---------------------------------------------------------------------------
@@ -1402,9 +1383,6 @@ def _page_header(
 def _compute_chart_data(
     state,
     *,
-    ranked_prefilt: list,
-    prefilt_excl: list,
-    featured_data: list,
     timeline_date: date,
     at_today: bool,
     rl_predictions: dict,
@@ -1413,7 +1391,7 @@ def _compute_chart_data(
     x_bounds,
     y_bounds,
     all_seasons: list,
-    wc_data,
+    wr_data,
 ) -> tuple:
     """
     Fast/slow path guard — returns (chart_cfg, pred_rows, pauls_k_fit, pauls_k).
@@ -1425,19 +1403,22 @@ def _compute_chart_data(
     is_animating = state.sim_playing and state.sim_bundle is not None
 
     if not is_animating:
+        quality_efforts = state.quality_efforts
         # ── Slow path ─────────────────────────────────────────────────────────
         date_str = timeline_date.isoformat()
         if state.best_filter == "All":
-            _in_time = ranked_prefilt[_bisect_date_desc(ranked_prefilt, date_str) :]
+            efforts_filtered_by_event = state.efforts_filtered_by_event
+            _in_time = efforts_filtered_by_event[
+                _bisect_date_desc(efforts_filtered_by_event, date_str) :
+            ]
             sim_wkts = _in_time
         else:
-            _in_time = featured_data[_bisect_date_desc(featured_data, date_str) :]
-            sim_wkts = (
-                apply_best_only(_in_time)
-                if state.best_filter == "PBs"
-                else apply_season_best_only(_in_time)
-            )
-        all_events_to_date = prefilt_excl[_bisect_date_desc(prefilt_excl, date_str) :]
+            featured_efforts = state.featured_efforts
+            _in_time = featured_efforts[_bisect_date_desc(featured_efforts, date_str) :]
+            sim_wkts = apply_best_only(_in_time, by_season=state.best_filter != "PBs")
+        all_events_to_date = quality_efforts[
+            _bisect_date_desc(quality_efforts, date_str) :
+        ]
 
         # Disabled-event workouts (faint background dots in chart).
         excluded_cats = set()
@@ -1447,26 +1428,20 @@ def _compute_chart_data(
         for i, (tenths, _) in enumerate(RANKED_TIMES):
             if not state.time_enabled[i]:
                 excluded_cats.add(("time", tenths))
+
         excluded_wkts: list = []
         if excluded_cats:
-            if state.best_filter == "PBs":
+            if state.best_filter == "all":
+                excluded_wkts = all_events_to_date
+            else:
                 excluded_wkts = apply_best_only(
                     [
                         w
                         for w in all_events_to_date
                         if workout_cat_key(w) in excluded_cats
-                    ]
+                    ],
+                    by_season=state.best_filter == "SBs",
                 )
-            elif state.best_filter == "SBs":
-                excluded_wkts = apply_season_best_only(
-                    [
-                        w
-                        for w in all_events_to_date
-                        if workout_cat_key(w) in excluded_cats
-                    ]
-                )
-            else:
-                excluded_wkts = all_events_to_date
 
         predictor = (
             state.chart_predictor
@@ -1475,7 +1450,7 @@ def _compute_chart_data(
         )
         _snap = compute_timeline_snapshot(
             sim_wkts=sim_wkts,
-            excl_in_time=all_events_to_date,
+            all_events_to_date=all_events_to_date,
             predictor=predictor,
             rl_predictions=rl_predictions,
             show_watts=show_watts,
@@ -1521,7 +1496,7 @@ def _compute_chart_data(
             pauls_k=pauls_k,
             excluded_workouts=excluded_wkts,
             x_mode=state.chart_x_metric,
-            wc_data=wc_data,
+            wr_data=wr_data,
         )
     else:
         # ── Fast path ─────────────────────────────────────────────────────────
@@ -1543,9 +1518,6 @@ def _compute_chart_data(
 def _manage_animation_bundle(
     state,
     *,
-    ranked_prefilt: list,
-    prefilt_excl: list,
-    featured_data: list,
     sim_start: date,
     total_days: int,
     selected_dists: set,
@@ -1557,7 +1529,7 @@ def _manage_animation_bundle(
     y_bounds,
     rl_predictions: dict,
     all_seasons: list,
-    wc_data,
+    wr_data,
     at_today: bool,
 ) -> str:
     """
@@ -1582,7 +1554,7 @@ def _manage_animation_bundle(
                 state.draw_power_curves,
                 state.chart_show_components,
                 state.chart_compare_wc,
-                state._prefilt_key,  # includes machine + workout count + dist/time/season filters
+                state._key_for_efforts_filtered_by_event,  # includes machine + workout count + dist/time/season filters
             ],
             sort_keys=True,
         ).encode()
@@ -1601,9 +1573,9 @@ def _manage_animation_bundle(
             if not _bt.running and not _bt.done:
                 _bt.run(
                     build_timeline_payload,
-                    ranked_prefilt,
-                    prefilt_excl,
-                    featured_data,
+                    state.efforts_filtered_by_event,
+                    state.quality_efforts,
+                    state.featured_efforts,
                     sim_start=sim_start,
                     total_days=total_days,
                     best_filter=state.best_filter,
@@ -1620,7 +1592,7 @@ def _manage_animation_bundle(
                     log_x=state.chart_log_x,
                     rl_predictions=rl_predictions,
                     all_seasons=all_seasons,
-                    wc_data=wc_data,
+                    wr_data=wr_data,
                     bundle_key=_bundle_key,
                 )
             if _bt.done:
@@ -1682,19 +1654,18 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         last_sim_done=0,  # tracks chart.sim_done changes
         _pauls_k_fit=None,  # pauls_k_fit from last slow-path render; used on fast path
         chart_compare_wc=False,
-        wc_fetch_key="",
-        wc_fetch_done=False,
-        wc_data=None,
-        _ranked_key="",  # cache invalidation key: f"{machine}:{len(workouts)}"
-        _ranked_data=None,  # cached (all_ranked, all_ranked_raw, all_seasons)
-        _display_key="",  # cache invalidation key for _apply_display_filter
-        _display_data=None,  # cached display list
-        _prefilt_key="",  # cache key for pre-filtered ranked list (dist/time/excluded_seasons)
-        _prefilt_data=None,  # list of workouts already filtered by dist/time/excluded_seasons
-        _prefilt_excl_key="",  # cache key for all-event pre-filter (excluded_seasons only)
-        _prefilt_excl_data=None,  # all_ranked_raw filtered by excluded_seasons only
+        wr_fetch_key="",
+        wr_fetch_done=False,
+        wr_data=None,
+        quality_efforts=None,  # workouts filtered by machine, quality, rankability, and season
+        efforts_filtered_by_event=None,  # list of quality workouts already filtered by dist/time/excluded_seasons
+        efforts_filtered_by_event_and_display=None,  # List of quality workouts filtered by event and display
+        _key_for_quality_efforts="",  # cache invalidation key: f"{machine}:{len(workouts)}"
+        _key_for_efforts_filtered_by_event="",  # cache key for pre-filtered ranked list (dist/time/excluded_seasons)
+        _key_for_efforts_filtered_by_event_and_display="",  # cache invalidation key for _apply_display_filter
+        all_seasons=None,  # all_seasons in scope
         _featured_key="",  # cache key for compute_featured_workouts result
-        _featured_data=None,  # historical PB/SB workouts (newest-first)
+        featured_efforts=None,  # historical PB/SB workouts (newest-first)
         _annot_key="",  # cache key for slider annotations
         _annot_data=None,  # cached list of {day, label, color} dicts
         _bounds_key="",  # cache key for _compute_axis_bounds
@@ -1709,13 +1680,21 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
     if sync_result is None or profile is None:
         return
 
-    # Cache _build_ranked_workouts — it's expensive (quality-filters all workouts)
+    # Cache _build_quality_rankable_efforts — it's expensive (quality-filters all workouts)
     # and its inputs only change when new workouts arrive or the machine filter changes.
-    _ranked_key = f"{machine}:{len(sync_result[1])}"
-    if state._ranked_key != _ranked_key or state._ranked_data is None:
-        state._ranked_data = _build_ranked_workouts(sync_result, machine)
-        state._ranked_key = _ranked_key
-    all_ranked, all_ranked_raw, all_seasons = state._ranked_data
+    _key_for_quality_efforts = f"{machine}:{len(sync_result[1])}:{excluded_seasons}"
+    if (
+        state._key_for_quality_efforts != _key_for_quality_efforts
+        or state.quality_efforts is None
+    ):
+        state.quality_efforts = _build_quality_rankable_efforts(
+            sync_result, machine, excluded_seasons
+        )
+        state._key_for_quality_efforts = _key_for_quality_efforts
+        state.all_seasons = seasons_from(state.quality_efforts)
+
+    quality_efforts = state.quality_efforts
+    all_seasons = state.all_seasons
 
     # ── Filters ───────────────────────────────────────────────────────────────
     selected_dists = {
@@ -1725,50 +1704,55 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         tenths for i, (tenths, _) in enumerate(RANKED_TIMES) if state.time_enabled[i]
     }
 
-    _display_key = f"{state._ranked_key}:{sorted(selected_dists)}:{sorted(selected_times)}:{excluded_seasons}:{state.best_filter}"
-    if state._display_key != _display_key or state._display_data is None:
-        state._display_data = _apply_display_filter(
-            state, all_ranked, selected_dists, selected_times, excluded_seasons
-        )
-        state._display_key = _display_key
-    display = state._display_data
-
-    # Pre-filter all_ranked_raw by selected dists/times and excluded seasons once.
-    # Avoids calling get_season() (strptime) on every slow-path render.
-    _prefilt_key = f"{state._ranked_key}:{sorted(selected_dists)}:{sorted(selected_times)}:{excluded_seasons}"
-    if state._prefilt_key != _prefilt_key or state._prefilt_data is None:
-        _excl_set = set(excluded_seasons)
-        state._prefilt_data = [
+    # Workouts filter for selected dists/times on top of excluded seasons.
+    _key_for_efforts_filtered_by_event = f"{state._key_for_quality_efforts}:{sorted(selected_dists)}:{sorted(selected_times)}"
+    if (
+        state._key_for_efforts_filtered_by_event != _key_for_efforts_filtered_by_event
+        or state.efforts_filtered_by_event is None
+    ):
+        state.efforts_filtered_by_event = [
             w
-            for w in all_ranked_raw
+            for w in quality_efforts
             if (w.get("distance") in selected_dists or w.get("time") in selected_times)
-            and get_season(w.get("date", "")) not in _excl_set
         ]
-        state._prefilt_key = _prefilt_key
-    _ranked_prefilt = state._prefilt_data
+        state._key_for_efforts_filtered_by_event = _key_for_efforts_filtered_by_event
 
-    # All-event pre-filter: excluded seasons only (no dist/time gate).
-    # Used for lb_all (all-event lifetime bests) and excluded-event dots.
-    # Pre-filtered here so get_season() is only called once, not per tick.
-    _prefilt_excl_key = f"{state._ranked_key}:{excluded_seasons}"
-    if state._prefilt_excl_key != _prefilt_excl_key or state._prefilt_excl_data is None:
-        _excl_set2 = set(excluded_seasons)
-        state._prefilt_excl_data = [
-            w for w in all_ranked_raw if get_season(w.get("date", "")) not in _excl_set2
-        ]
-        state._prefilt_excl_key = _prefilt_excl_key
-    _prefilt_excl = state._prefilt_excl_data
+    """Apply event, season, and best-filter; return the chart/table display list."""
+    _key_for_efforts_filtered_by_event_and_display = (
+        f"{state._key_for_efforts_filtered_by_event}:{state.best_filter}"
+    )
+    if (
+        state._key_for_efforts_filtered_by_event_and_display
+        != _key_for_efforts_filtered_by_event_and_display
+        or state.efforts_filtered_by_event_and_display is None
+    ):
+        if state.best_filter == "PBs":
+            state.efforts_filtered_by_event_and_display = apply_best_only(
+                state.efforts_filtered_by_event
+            )
+        elif state.best_filter == "SBs":
+            state.efforts_filtered_by_event_and_display = apply_season_best_only(
+                state.efforts_filtered_by_event
+            )
+        else:
+            state.efforts_filtered_by_event_and_display = (
+                state.efforts_filtered_by_event
+            )
+        state._key_for_efforts_filtered_by_event_and_display = (
+            _key_for_efforts_filtered_by_event_and_display
+        )
+    efforts_filtered_by_event_and_display = state.efforts_filtered_by_event_and_display
 
-    # Featured workouts: the subset of _ranked_prefilt that ever set a new
-    # historical PB or SB.  Much smaller than _ranked_prefilt for PBs/SBs mode;
+    # Featured workouts: the subset of efforts_filtered_by_event that ever set a new
+    # historical PB or SB.  Much smaller than efforts_filtered_by_event for PBs/SBs mode;
     # date-sliced on the slow path; also used for slider annotations.
-    _featured_key = f"{state._prefilt_key}:{state.best_filter}"
-    if state._featured_key != _featured_key or state._featured_data is None:
-        state._featured_data = compute_featured_workouts(
-            _ranked_prefilt, state.best_filter
+    _featured_key = f"{state._key_for_efforts_filtered_by_event}:{state.best_filter}"
+    if state._featured_key != _featured_key or state.featured_efforts is None:
+        state.featured_efforts = compute_featured_workouts(
+            state.efforts_filtered_by_event, state.best_filter
         )
         state._featured_key = _featured_key
-    _featured_data = state._featured_data
+    featured_efforts = state.featured_efforts
 
     # ── Simulation timeline ───────────────────────────────────────────────────
     (
@@ -1781,11 +1765,11 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
     show_watts = state.chart_y_metric == "watts"
 
     # Slider annotations — stable across animation ticks; only recompute when
-    # filters or sim range changes (same inputs as _featured_data + sim_start).
+    # filters or sim range changes (same inputs as featured_efforts + sim_start).
     _annot_key = f"{_featured_key}:{sim_start}"
     if state._annot_key != _annot_key or state._annot_data is None:
         state._annot_data = build_sb_annotations(
-            _featured_data,
+            featured_efforts,
             sim_start,
             included_seasons,
             best_filter=state.best_filter,
@@ -1793,20 +1777,19 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         state._annot_key = _annot_key
 
     if not at_today:
-        rl_predictions = _fetch_rowinglevel(state, profile, display)
+        rl_predictions = _fetch_rowinglevel(
+            state, profile, efforts_filtered_by_event_and_display
+        )
     else:
         rl_predictions = {}
 
-    wc_task, wc_data = (
-        _load_wc_cp(state, profile) if state.chart_compare_wc else (None, None)
-    )
+    wr_data = load_world_record_data(state, profile) if state.chart_compare_wc else None
 
     # ── Axis bounds ───────────────────────────────────────────────────────────
-    _bounds_key = f"{state._ranked_key}:{excluded_seasons}:{show_watts}:{state.chart_x_metric}:{state.chart_log_x}"
+    _bounds_key = f"{state._key_for_quality_efforts}:{excluded_seasons}:{show_watts}:{state.chart_x_metric}:{state.chart_log_x}"
     if state._bounds_key != _bounds_key or state._bounds_data is None:
         state._bounds_data = _compute_axis_bounds(
-            all_ranked_raw,
-            excluded_seasons,
+            quality_efforts,
             show_watts,
             state.chart_x_metric == "duration",
             state.chart_log_x,
@@ -1816,14 +1799,11 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
 
     # Expand y_bounds to include WC records when comparing.
     if state.chart_compare_wc:
-        y_bounds = _expand_y_bounds_for_wc(y_bounds, wc_data, show_watts)
+        y_bounds = _expand_y_bounds_for_wc(y_bounds, wr_data, show_watts)
 
     # ── Animation bundle + sim_command ───────────────────────────────────────
     _sim_command = _manage_animation_bundle(
         state,
-        ranked_prefilt=_ranked_prefilt,
-        prefilt_excl=_prefilt_excl,
-        featured_data=_featured_data,
         sim_start=sim_start,
         total_days=total_days,
         selected_dists=selected_dists,
@@ -1835,9 +1815,24 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         y_bounds=y_bounds,
         rl_predictions=rl_predictions,
         all_seasons=all_seasons,
-        wc_data=wc_data,
+        wr_data=wr_data,
         at_today=at_today,
     )
+
+    chart_cfg, pred_rows, pauls_k_fit, pauls_k = _compute_chart_data(
+        state,
+        timeline_date=timeline_date,
+        at_today=at_today,
+        rl_predictions=rl_predictions,
+        show_watts=show_watts,
+        is_dark=is_dark,
+        x_bounds=x_bounds,
+        y_bounds=y_bounds,
+        all_seasons=all_seasons,
+        wr_data=wr_data,
+    )
+
+    rl_available = profile_complete(profile)
 
     # ── Render ────────────────────────────────────────────────────────────────
     with hd.box(gap=5, align="center", padding=(2, 2, 2, 2)):
@@ -1845,22 +1840,6 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
             _page_header(
                 state,
                 timeline_date=timeline_date,
-            )
-
-            chart_cfg, pred_rows, pauls_k_fit, pauls_k = _compute_chart_data(
-                state,
-                ranked_prefilt=_ranked_prefilt,
-                prefilt_excl=_prefilt_excl,
-                featured_data=_featured_data,
-                timeline_date=timeline_date,
-                at_today=at_today,
-                rl_predictions=rl_predictions,
-                show_watts=show_watts,
-                is_dark=is_dark,
-                x_bounds=x_bounds,
-                y_bounds=y_bounds,
-                all_seasons=all_seasons,
-                wc_data=wc_data,
             )
 
             _chart_section(
@@ -1873,11 +1852,9 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
                 sim_start=sim_start,
                 sb_annotations=state._annot_data,
                 pauls_k_fit=pauls_k_fit,
-                wc_task=wc_task,
                 sim_command=_sim_command,
             )
 
-            rl_available = profile_complete(profile)
             if not rl_available:
                 _rl_profile_notice()
 
@@ -1910,7 +1887,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
                 elif state.best_filter == "PBs":
                     hd.text("Your Personal Bests")
 
-            types = {r.get("type") for r in display}
+            types = {r.get("type") for r in efforts_filtered_by_event_and_display}
             cols = [COL_DATE]
             if len(types) > 1:
                 cols.append(COL_TYPE)
@@ -1924,4 +1901,4 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
                 COL_HR,
                 COL_LINK,
             ]
-            WorkoutTable(display, cols, paginate=False)
+            WorkoutTable(efforts_filtered_by_event_and_display, cols, paginate=False)

@@ -25,7 +25,7 @@ Public API
         lb  {(etype, evalue): pace_sec_per_500m}
         lba {(etype, evalue): anchor_distance_metres}
 
-  fetch_wc_data(gender_api, age, weight_kg)
+  fetch_wr_data(gender_api, age, weight_kg)
       → dict{"records", "cp_params", "lb", "lba", "rl_predictions"} or None
         Blocking: fetch records, fit CP, optionally fetch RL predictions.
         Intended to run inside hd.task().
@@ -417,7 +417,7 @@ def records_to_lbest(records: dict) -> tuple[dict, dict]:
 # ---------------------------------------------------------------------------
 
 
-def fetch_wc_data(gender_api: str, age: int, weight_kg: float) -> dict | None:
+def fetch_wr_data(gender_api: str, age: int, weight_kg: float) -> dict | None:
     """
     Blocking function — intended to run inside hd.task().
     Fetches Concept2 world records for the given gender/age/weight,

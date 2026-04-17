@@ -29,6 +29,34 @@ from __future__ import annotations
 
 from datetime import date
 
+from services.rowing_utils import (
+    compute_duration_s,
+    RANKED_DISTANCES,
+    RANKED_TIMES,
+    SEASON_PALETTE,
+    apply_best_only,
+    apply_season_best_only,
+    compute_pace,
+    compute_watts,
+    get_season,
+    parse_date,
+    workout_cat_key,
+    compute_pauls_constant,
+)
+
+
+from services.critical_power_model import fit_critical_power
+from services.ranked_predictions import build_prediction_table_data
+
+
+from components.power_curve_chart_builder import (
+    build_pred_datasets,
+    compute_lifetime_bests,
+    ol_event_line,
+    pcts,
+    build_wr_static_datasets,
+)
+
 
 # ---------------------------------------------------------------------------
 # compute_timeline_snapshot
@@ -38,7 +66,7 @@ from datetime import date
 def compute_timeline_snapshot(
     *,
     sim_wkts: list,
-    excl_in_time: list,
+    all_events_to_date: list,
     predictor: str,
     rl_predictions: dict | None,
     show_watts: bool,
@@ -55,7 +83,7 @@ def compute_timeline_snapshot(
     sim_wkts       — selected-event workouts visible at this date, already
                      filtered by best_filter (apply_best_only / apply_season_best_only
                      applied by the caller as needed).
-    excl_in_time   — all-event workouts visible at this date (excluded-seasons
+    all_events_to_date   — all-event workouts visible at this date (excluded-seasons
                      filter applied, but dist/time filter NOT applied); used for
                      lb_all so that disabled-event PBs still contribute to
                      Paul's Law and RowingLevel averaging.
@@ -75,23 +103,10 @@ def compute_timeline_snapshot(
         pred_canvas_labels — canvas overlay label dicts
         pred_table_rows — list of prediction table row dicts
     """
-    from services.rowing_utils import (
-        apply_best_only,
-        compute_duration_s,
-        compute_pace,
-        compute_watts,
-        compute_pauls_constant,
-    )
-    from services.critical_power_model import fit_critical_power
-    from components.power_curve_chart_builder import (
-        compute_lifetime_bests,
-        build_pred_datasets,
-    )
-    from services.ranked_predictions import build_prediction_table_data
 
     # ── Lifetime bests ────────────────────────────────────────────────────────
     lb, lb_anchor = compute_lifetime_bests(sim_wkts)
-    lb_all, lb_all_anchor = compute_lifetime_bests(excl_in_time)
+    lb_all, lb_all_anchor = compute_lifetime_bests(all_events_to_date)
 
     # ── Paul's constant ───────────────────────────────────────────────────────
     pauls_k_fit = compute_pauls_constant(lb, lb_anchor)
@@ -108,8 +123,7 @@ def compute_timeline_snapshot(
                 cp_pb_list.append({"duration_s": dur, "watts": compute_watts(pac)})
         fit_key = str(
             sorted(
-                (round(p["duration_s"], 1), round(p["watts"], 1))
-                for p in cp_pb_list
+                (round(p["duration_s"], 1), round(p["watts"], 1)) for p in cp_pb_list
             )
         )
         if cp_fit_cache is not None:
@@ -168,9 +182,9 @@ def compute_timeline_snapshot(
 
 
 def build_timeline_payload(
-    ranked_prefilt: list,
-    prefilt_excl: list,
-    featured_data: list,
+    efforts_filtered_by_event: list,
+    quality_efforts: list,
+    featured_efforts: list,
     *,
     sim_start: date,
     total_days: int,
@@ -188,39 +202,20 @@ def build_timeline_payload(
     show_components: bool,
     rl_predictions: dict,
     all_seasons: list,
-    wc_data,
+    wr_data,
     bundle_key: str,
 ) -> tuple[dict, dict]:
     """
     Precompute the full JS chart payload and a Python-side prediction-table lookup.
 
-    ranked_prefilt — selected events, quality-filtered, newest-first.
+    efforts_filtered_by_event — selected events, quality-filtered, newest-first.
     prefilt_excl   — all events (excluded-seasons only), newest-first.
-    featured_data  — historical PB/SB workouts (PBs/SBs mode), newest-first.
+    featured_efforts  — historical PB/SB workouts (PBs/SBs mode), newest-first.
 
     Returns (js_payload, pred_table_lookup) where:
       js_payload         — dict consumed by power_curve_chart_plugin.js
       pred_table_lookup  — dict[int, list] mapping keyframe_day → pred_table_rows
     """
-    from services.rowing_utils import (
-        RANKED_DISTANCES,
-        RANKED_TIMES,
-        SEASON_PALETTE,
-        apply_best_only,
-        apply_season_best_only,
-        compute_pace,
-        compute_watts as _compute_watts,
-        get_season,
-        parse_date,
-        workout_cat_key,
-        compute_pauls_constant,
-    )
-    from components.power_curve_chart_builder import (
-        compute_lifetime_bests,
-        ol_event_line,
-        pcts,
-        build_wc_static_datasets,
-    )
 
     # ── Excluded categories ──────────────────────────────────────────────────
     excluded_cats = set()
@@ -292,7 +287,7 @@ def build_timeline_payload(
                 "cat_key_str": f"{etype}:{evalue}",
                 "x": xv,
                 "y_pace": round(p, 4),
-                "y_watts": round(_compute_watts(p), 1),
+                "y_watts": round(compute_watts(p), 1),
                 "dist_m": d,
                 "event_line": ol_event_line(etype, evalue, p, d),
                 "date_label": dt.strftime("%b %d, %Y"),
@@ -301,9 +296,9 @@ def build_timeline_payload(
             }
         )
 
-    for w in ranked_prefilt:
+    for w in efforts_filtered_by_event:
         _add_to_manifest(w, excluded=False)
-    for w in prefilt_excl:
+    for w in quality_efforts:
         if workout_cat_key(w) in excluded_cats:
             _add_to_manifest(w, excluded=True)
 
@@ -312,10 +307,10 @@ def build_timeline_payload(
     # ── Keyframe builder ─────────────────────────────────────────────────────
     # Walk unique workout dates oldest→newest; emit a keyframe whenever the
     # lifetime-best dict changes (i.e. a new PB is set for any category).
-    sorted_prefilt = sorted(ranked_prefilt, key=lambda w: w.get("date", ""))
-    sorted_featured = sorted(featured_data, key=lambda w: w.get("date", ""))
+    sorted_prefilt = sorted(efforts_filtered_by_event, key=lambda w: w.get("date", ""))
+    sorted_featured = sorted(featured_efforts, key=lambda w: w.get("date", ""))
     # Sort excl oldest-first for per-keyframe lb_all slicing.
-    sorted_prefilt_excl = sorted(prefilt_excl, key=lambda w: w.get("date", ""))
+    sorted_prefilt_excl = sorted(quality_efforts, key=lambda w: w.get("date", ""))
 
     js_keyframes = [
         {
@@ -359,7 +354,7 @@ def build_timeline_payload(
 
         lb_str = {f"{k[0]}:{k[1]}": v for k, v in lb.items()}
         lb_anchor_str = {f"{k[0]}:{k[1]}": v for k, v in lb_anchor.items()}
-        lb_watts_str = {ck: round(_compute_watts(p), 1) for ck, p in lb_str.items()}
+        lb_watts_str = {ck: round(compute_watts(p), 1) for ck, p in lb_str.items()}
 
         if lb_str == prev_lb_str:
             continue  # nothing improved — no keyframe needed
@@ -384,7 +379,7 @@ def build_timeline_payload(
                 {
                     "x": dist,
                     "y_pace": round(pace, 4),
-                    "y_watts": round(_compute_watts(pace), 1),
+                    "y_watts": round(compute_watts(pace), 1),
                     "line_event": ol_event_line(etype, evalue, pace, dist),
                     "pct_pace": round(pp, 1),
                     "pct_watts": round(pw, 1),
@@ -395,14 +390,14 @@ def build_timeline_payload(
             )
 
         # All-event workouts for lb_all (Paul's Law / RowingLevel averaging).
-        excl_in_time = [
+        all_events_to_date = [
             w for w in sorted_prefilt_excl if w.get("date", "")[:10] <= date_str
         ]
 
         # Full snapshot: CP fit, pred datasets, pred table rows.
         _snap = compute_timeline_snapshot(
             sim_wkts=sim_wkts,
-            excl_in_time=excl_in_time,
+            all_events_to_date=all_events_to_date,
             predictor=predictor,
             rl_predictions=rl_predictions,
             show_watts=show_watts,
@@ -430,12 +425,12 @@ def build_timeline_payload(
         prev_lb_str = lb_str
 
     # ── Static datasets: WC records (time-invariant) ─────────────────────────
-    full_lb, full_lb_anchor = compute_lifetime_bests(ranked_prefilt)
+    full_lb, full_lb_anchor = compute_lifetime_bests(efforts_filtered_by_event)
     full_pauls_k = compute_pauls_constant(full_lb, full_lb_anchor) or 5.0
 
     static_datasets = (
-        build_wc_static_datasets(
-            wc_data,
+        build_wr_static_datasets(
+            wr_data,
             predictor=predictor,
             x_bounds=x_bounds,
             y_bounds=y_bounds,
@@ -444,7 +439,7 @@ def build_timeline_payload(
             x_mode=x_mode,
             pauls_k=full_pauls_k,
         )
-        if wc_data
+        if wr_data
         else []
     )
 

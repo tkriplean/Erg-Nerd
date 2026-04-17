@@ -7,7 +7,7 @@ Exported:
   pcts()                 — compute (pct_pace, pct_watts) improvement between two paces
   compute_lifetime_bests() — derive lifetime-best dicts from a raw workout list
   build_pred_datasets()  — build only the prediction-curve datasets for the active predictor
-  build_wc_static_datasets() — world-class record overlay datasets (time-invariant)
+  build_wr_static_datasets() — world-class record overlay datasets (time-invariant)
   build_chart_config()   — build the full Chart.js config dict
 
 All satellite helpers (_season_hsla, _pred_dataset, etc.) are private to this module.
@@ -192,8 +192,8 @@ def _pred_dataset(
     }
 
 
-def _wc_scatter_dataset(
-    wc_lb: dict, wc_lba: dict, _y, _use_duration: bool, is_dark: bool
+def _wr_scatter_dataset(
+    wr_lb: dict, wr_lba: dict, _y, _use_duration: bool, is_dark: bool
 ) -> dict:
     """
     Build a Chart.js scatter dataset for individual WC record points.
@@ -201,8 +201,8 @@ def _wc_scatter_dataset(
     """
     color = "rgba(50,210,100,0.92)" if is_dark else "rgba(20,160,55,0.92)"
     pts = []
-    for cat, pace in wc_lb.items():
-        dist = wc_lba.get(cat, 0)
+    for cat, pace in wr_lb.items():
+        dist = wr_lba.get(cat, 0)
         if not dist or pace <= 0:
             continue
         x = round(dist * pace / 500.0, 2) if _use_duration else dist
@@ -223,8 +223,8 @@ def _wc_scatter_dataset(
     }
 
 
-def _wc_pred_datasets(
-    wc_data: dict,
+def _wr_pred_datasets(
+    wr_data: dict,
     predictor: str,
     x_min: float,
     x_max: float,
@@ -244,21 +244,21 @@ def _wc_pred_datasets(
 
     rowinglevel has no WC equivalent — falls back to CP then loglog.
     """
-    wc_color = "rgba(60,180,90,0.85)" if is_dark else "rgba(30,140,60,0.85)"
-    lb, lba, cp = wc_data["lb"], wc_data["lba"], wc_data.get("cp_params")
+    wr_color = "rgba(60,180,90,0.85)" if is_dark else "rgba(30,140,60,0.85)"
+    lb, lba, cp = wr_data["lb"], wr_data["lba"], wr_data.get("cp_params")
 
     if predictor == "none":
         return []
 
     eff = predictor
     if eff == "rowinglevel":
-        # Use WC RowingLevel predictions when available (scraped in _fetch_wc_data
+        # Use WC RowingLevel predictions when available (scraped in _fetch_wr_data
         # using the WC 2k record as the reference for the user's demographics).
-        wc_rl = wc_data.get("rl_predictions") or {}
-        if wc_rl:
-            ds = _rowinglevel_datasets(wc_rl, wc_color, _y, False, lba, x_fn=x_fn)
+        wr_rl = wr_data.get("rl_predictions") or {}
+        if wr_rl:
+            ds = _rowinglevel_datasets(wr_rl, wr_color, _y, False, lba, x_fn=x_fn)
             for d in ds:
-                d["label"] = "_wc_pred"
+                d["label"] = "_wr_pred"
             return ds
         eff = "critical_power"  # fallback when WC RL predictions unavailable
 
@@ -270,7 +270,7 @@ def _wc_pred_datasets(
                 x_max,
                 _y_min,
                 _y_max,
-                wc_color,
+                wr_color,
                 _y,
                 show_watts,
                 False,
@@ -278,20 +278,20 @@ def _wc_pred_datasets(
                 x_fn=x_fn,
             )
             for d in ds_list:
-                d["label"] = "_wc_pred"
+                d["label"] = "_wr_pred"
             return ds_list
         eff = "loglog"  # fallback when CP fit unavailable
 
     if eff == "loglog":
-        ds = _loglog_dataset(lb, lba, wc_color, _y, x_fn=x_fn)
+        ds = _loglog_dataset(lb, lba, wr_color, _y, x_fn=x_fn)
         for d in ds:
-            d["label"] = "_wc_pred"
+            d["label"] = "_wr_pred"
         return ds
 
     if eff == "pauls_law":
-        ds = _pauls_law_datasets(lb, lba, wc_color, _y, False, pauls_k=5.0, x_fn=x_fn)
+        ds = _pauls_law_datasets(lb, lba, wr_color, _y, False, pauls_k=5.0, x_fn=x_fn)
         for d in ds:
-            d["label"] = "_wc_pred"
+            d["label"] = "_wr_pred"
         return ds
 
     if eff == "average":
@@ -303,14 +303,14 @@ def _wc_pred_datasets(
             5.0,
             x_min,
             x_max,
-            wc_color,
+            wr_color,
             _y,
             show_watts,
             show_components=False,
             x_fn=x_fn,
         )
         for d in ds:
-            d["label"] = "_wc_pred"
+            d["label"] = "_wr_pred"
         return ds
 
     return []
@@ -1252,14 +1252,20 @@ def build_pred_datasets(
         )
     if predictor == "loglog":
         datasets.extend(
-            _loglog_dataset(lifetime_best, lifetime_best_anchor, pred_color, _y, x_fn=_x_fn)
+            _loglog_dataset(
+                lifetime_best, lifetime_best_anchor, pred_color, _y, x_fn=_x_fn
+            )
         )
     crossover_labels: list = []
 
     if predictor == "critical_power" and critical_power_params is not None:
         _cp_with_sel = dict(critical_power_params)
-        _cp_with_sel["_sel_dists"] = {cat[1] for cat in lifetime_best if cat[0] == "dist"}
-        _cp_with_sel["_sel_times"] = {cat[1] for cat in lifetime_best if cat[0] == "time"}
+        _cp_with_sel["_sel_dists"] = {
+            cat[1] for cat in lifetime_best if cat[0] == "dist"
+        }
+        _cp_with_sel["_sel_times"] = {
+            cat[1] for cat in lifetime_best if cat[0] == "time"
+        }
         _cp_ds, _cp_xover = _cp_datasets(
             _cp_with_sel,
             x_min,
@@ -1298,8 +1304,8 @@ def build_pred_datasets(
     return datasets, canvas_labels
 
 
-def build_wc_static_datasets(
-    wc_data: dict,
+def build_wr_static_datasets(
+    wr_data: dict,
     *,
     predictor: str,
     x_bounds: tuple,
@@ -1314,9 +1320,9 @@ def build_wc_static_datasets(
     These are time-invariant (WC records don't change during animation), so
     they are computed once and stored in bundle.static_datasets.
 
-    Returns an empty list if wc_data is None or empty.
+    Returns an empty list if wr_data is None or empty.
     """
-    if not wc_data:
+    if not wr_data:
         return []
     _use_duration = x_mode == "duration"
     x_min, x_max = x_bounds if x_bounds else (100.0, 42195.0)
@@ -1327,11 +1333,11 @@ def build_wc_static_datasets(
 
     x_fn = (lambda dist, pace: round(dist * pace / 500.0, 2)) if _use_duration else None
 
-    scatter = _wc_scatter_dataset(
-        wc_data["lb"], wc_data["lba"], _y, _use_duration, is_dark
+    scatter = _wr_scatter_dataset(
+        wr_data["lb"], wr_data["lba"], _y, _use_duration, is_dark
     )
-    preds = _wc_pred_datasets(
-        wc_data,
+    preds = _wr_pred_datasets(
+        wr_data,
         predictor,
         x_min,
         x_max,
@@ -1374,7 +1380,7 @@ def build_chart_config(
     pauls_k: float = 5.0,  # personalised Paul's Law constant (sec/500m per doubling)
     excluded_workouts=(),  # workouts for deselected events — plotted faintly
     x_mode: str = "distance",  # "distance" | "duration"
-    wc_data=None,  # dict {records, cp_params, lb, lba} from concept2_records
+    wr_data=None,  # dict {records, cp_params, lb, lba} from concept2_records
 ):
     """Build a Chart.js config dict for the ranked-workouts chart.
 
@@ -1469,9 +1475,9 @@ def build_chart_config(
     else:
         _all_x = [dp["x"] for dp in data_points + excluded_data_points]
         # Include WC record x positions so their scatter points are always visible.
-        if wc_data is not None:
-            for cat, pace in wc_data["lb"].items():
-                dist = wc_data["lba"].get(cat, 0)
+        if wr_data is not None:
+            for cat, pace in wr_data["lb"].items():
+                dist = wr_data["lba"].get(cat, 0)
                 if dist and pace > 0:
                     _all_x.append(
                         round(dist * pace / 500.0, 2) if _use_duration else dist
@@ -1643,18 +1649,18 @@ def build_chart_config(
         )
 
     # ── World-class overlay ───────────────────────────────────────────────────
-    if wc_data is not None:
+    if wr_data is not None:
         # Add WC scatter points and WC prediction line.
 
         # WC scatter points (green triangles, drawn at order=1 like user scatter).
-        _wc_scatter = _wc_scatter_dataset(
-            wc_data["lb"], wc_data["lba"], _y, _use_duration, is_dark
+        _wr_scatter = _wr_scatter_dataset(
+            wr_data["lb"], wr_data["lba"], _y, _use_duration, is_dark
         )
-        datasets.append(_wc_scatter)
+        datasets.append(_wr_scatter)
 
         # WC prediction line using the selected predictor (drawn behind everything).
-        _wc_preds = _wc_pred_datasets(
-            wc_data,
+        _wr_preds = _wr_pred_datasets(
+            wr_data,
             predictor,
             x_min,
             x_max,
@@ -1666,7 +1672,7 @@ def build_chart_config(
             _x_fn,
             pauls_k,
         )
-        datasets = _wc_preds + datasets
+        datasets = _wr_preds + datasets
 
     # Canvas labels drawn by canvasLabelsPlugin in power_curve_chart_plugin.js
     canvas_labels = _canvas_labels_list(
@@ -1698,7 +1704,7 @@ def build_chart_config(
         "data": {"datasets": datasets},
         "_canvas_labels": canvas_labels,
         "_x_mode": x_mode,  # read by JS for tick formatter and gridline positions
-        "_ranked_dists": RANKED_DIST_VALUES,      # gridline positions for distance mode
+        "_ranked_dists": RANKED_DIST_VALUES,  # gridline positions for distance mode
         "_ranked_durations": _DURATION_GRIDLINES,  # gridline positions for duration mode
         "options": {
             "responsive": True,
