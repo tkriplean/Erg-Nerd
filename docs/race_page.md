@@ -81,16 +81,14 @@ all_workouts (all synced workouts)
   │
   └─▶ rankable_efforts
         │
-        ├─ _event_workouts()         match event_type + event_value
-        │    └─▶ table_wkts          used for the results table (all pieces)
-        │
-        └─ _include_filtered()       apply "All" / "SBs" filter
-             └─▶ race_wkts           boats on the canvas
+        ├─ _event_workouts()         match event_type + event_value + "All" / "SBs" / "top" filter
+        │    └─▶ racing_workouts          used for the results table (all pieces) and boats on the canvas
 ```
 
 `_include_filtered()` uses `apply_best_only()` from `services/rowing_utils.py`:
 - `"All"` → all qualifying workouts (default)
 - `"SBs"` → one best per season
+- `"top"` → top 10 overall
 
 ---
 
@@ -220,7 +218,7 @@ cleared the checkpoint + padding.
 
 ## Results Table
 
-Rendered by `_results_table()`. Shows all workouts in `table_wkts` (include
+Rendered by `_results_table()`. Shows all workouts in `racing_workouts` (include
 filter is **not** applied), sorted by result (fastest time or longest distance).
 The all-time PB row is highlighted in `primary-50` background.
 

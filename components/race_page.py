@@ -27,7 +27,7 @@ STATE VARIABLES
 
   event_type      str    "dist" | "time"
   event_value     int    meters or tenths-of-sec
-  include_filter  str    "All" | "SBs"
+  include_filter  str    "All" | "SBs" | "top"
   sort_mode       str    "date" | "result"
   show_wr_boat    bool   whether the WR ghost boat is enabled
   wr_records      dict   cached {(etype,evalue): result} from concept2_records
@@ -140,9 +140,19 @@ def _event_workouts(workouts: list, etype: str, evalue: int, machine: str) -> li
     return out
 
 
-def _include_filtered(workouts: list, include_filter: str) -> list:
+def _include_filtered(state, workouts: list, include_filter: str) -> list:
     if include_filter == "All":
         return workouts
+    elif include_filter == "top":
+        if state.event_type == "dist":
+            workouts = sorted(workouts, key=lambda w: w.get("time") or float("inf"))
+        else:
+            workouts = sorted(
+                workouts, key=lambda w: w.get("distance") or 0, reverse=True
+            )
+
+        return workouts[:10]
+
     return apply_best_only(workouts, by_season=True)
 
 
@@ -201,6 +211,7 @@ def race_page(
       4. Sort toggle (below the race)
       5. Results table
     """
+
     state = hd.state(
         event_type=_DEFAULT_EVENT_TYPE,
         event_value=_DEFAULT_EVENT_VALUE,
@@ -285,47 +296,47 @@ def race_page(
 
     # ── Derived workout sets ───────────────────────────────────────────────────
     # Table scope: event + global filters (include_filter ignored for table)
-    table_wkts = _event_workouts(
+    racing_workouts = _event_workouts(
         rankable_efforts, state.event_type, state.event_value, "All"
     )
 
     # Race scope: additionally apply include_filter
-    race_wkts = _include_filtered(table_wkts, state.include_filter)
+    racing_workouts = _include_filtered(state, racing_workouts, state.include_filter)
 
     # Season color palette
     wkt_seasons = sorted(
         {
             get_season(w.get("date", ""))
-            for w in race_wkts
+            for w in racing_workouts
             if get_season(w.get("date", "")) != "Unknown"
         }
     )
 
     # PB identification
     pb_id: int | None = None
-    if table_wkts:
+    if racing_workouts:
         if state.event_type == "dist":
             pb = min(
-                (w for w in table_wkts if w.get("time")),
+                (w for w in racing_workouts if w.get("time")),
                 key=lambda w: w["time"],
                 default=None,
             )
         else:
             pb = max(
-                (w for w in table_wkts if w.get("distance")),
+                (w for w in racing_workouts if w.get("distance")),
                 key=lambda w: w["distance"],
                 default=None,
             )
         pb_id = pb.get("id") if pb else None
 
     # ── Phase 2: one-at-a-time stroke fetch with real progress bar ────────────
-    _all_race_ids = tuple(sorted(w.get("id") for w in race_wkts if w.get("id")))
+    _all_race_ids = tuple(sorted(w.get("id") for w in racing_workouts if w.get("id")))
     _batch_key = f"{state.event_type}_{state.event_value}_{_all_race_ids}"
 
     if _batch_key != state.last_batch_key:
         missing_ids = tuple(
             w.get("id")
-            for w in race_wkts
+            for w in racing_workouts
             if w.get("id") and str(w.get("id")) not in state.strokes_by_id
         )
         state.fetch_queue = missing_ids
@@ -339,7 +350,9 @@ def race_page(
         next_id = state.fetch_queue[0]
         with hd.scope(f"fetch_{next_id}"):
             stroke_task = hd.task()
-            next_wkt = next((w for w in race_wkts if w.get("id") == next_id), None)
+            next_wkt = next(
+                (w for w in racing_workouts if w.get("id") == next_id), None
+            )
             if not stroke_task.running and not stroke_task.done and next_wkt:
                 stroke_task.run(fetch_one_stroke, client, int(user_id), next_wkt)
 
@@ -364,22 +377,22 @@ def race_page(
     # ── Sort race workouts for lane assignment ─────────────────────────────────
     if state.sort_mode == "result":
         if state.event_type == "dist":
-            sorted_race_wkts = sorted(
-                race_wkts, key=lambda w: w.get("time") or float("inf")
+            sorted_racing_workouts = sorted(
+                racing_workouts, key=lambda w: w.get("time") or float("inf")
             )
         else:
-            sorted_race_wkts = sorted(
-                race_wkts, key=lambda w: w.get("distance") or 0, reverse=True
+            sorted_racing_workouts = sorted(
+                racing_workouts, key=lambda w: w.get("distance") or 0, reverse=True
             )
     else:  # "date" — newest first
-        sorted_race_wkts = sorted(
-            race_wkts, key=lambda w: w.get("date") or "", reverse=True
+        sorted_racing_workouts = sorted(
+            racing_workouts, key=lambda w: w.get("date") or "", reverse=True
         )
 
     # ── Build races payload ────────────────────────────────────────────────────
     races_data = (
-        build_races_data(sorted_race_wkts, state.strokes_by_id, wkt_seasons)
-        if sorted_race_wkts
+        build_races_data(sorted_racing_workouts, state.strokes_by_id, wkt_seasons)
+        if sorted_racing_workouts
         else []
     )
 
@@ -429,12 +442,13 @@ def race_page(
     _include_long = {
         "All": "Great Efforts",
         "SBs": "Season Bests",
+        "top": "Top 10 Efforts",
     }
     _cur_event_lbl = _fmt_event_long(state.event_type, state.event_value)
     _cur_include_lbl = _include_long.get(state.include_filter, state.include_filter)
 
     with hd.box(align="center", gap=3, padding=2):
-        with hd.box(align="center", gap=1):
+        with hd.box(align="center", gap=1, width="100%"):
             with hd.h1():
                 with hd.hbox(gap=0.6, align="center", wrap="wrap"):
                     hd.text("A Race Between Your")
@@ -554,7 +568,6 @@ def race_page(
                 is_dark=is_dark,
             )
 
-            # ── Sort toggle (below the race) ──────────────────────────────────────────
             with hd.hbox(
                 gap=3,
                 align="center",
@@ -607,12 +620,12 @@ def race_page(
                     hd.text(f"Your Quality {_cur_event_lbl} Efforts")
                 elif state.include_filter == "SBs":
                     hd.text(f"Your {_cur_event_lbl} Season Bests")
-                elif state.include_filter == "PBs":
-                    hd.text(f"Your {_cur_event_lbl} Personal Bests")
+                elif state.include_filter == "top":
+                    hd.text(f"Your Top 10 {_cur_event_lbl} Efforts")
 
             # ── Results table ─────────────────────────────────────────────────────────
-            if table_wkts:
-                _results_table(table_wkts, state.event_type, pb_id)
+            if racing_workouts:
+                _results_table(racing_workouts, state.event_type, pb_id)
             elif not is_loading:
                 with hd.box(padding=3, align="center"):
                     hd.text(

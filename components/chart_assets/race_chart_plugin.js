@@ -432,7 +432,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   }
 
   // ── Colors ─────────────────────────────────────────────────────────────────
-  function bgColor()        { return isDark ? "#1a1a2e" : "#f0f4ff"; }
+  function bgColor()        { return isDark ? "#1a1a1e" : "white"; }
   function laneLineColor()  { return isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.07)"; }
   function textColor()      { return isDark ? "rgba(255,255,255,1)" : "rgba(0,0,0,1)"; }
   function finishLineColor(){ return isDark ? "rgba(255,255,255,1)" : "rgba(0,0,0,1)"; }
@@ -471,12 +471,6 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
 
     ctx2d.fillStyle = color;
     ctx2d.fill();
-
-    // if (isPb) {
-    //   ctx2d.lineWidth = 2;
-    //   ctx2d.strokeStyle = darkMode ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.95)";
-    //   ctx2d.stroke();
-    // }
 
     ctx2d.restore();
   }
@@ -729,7 +723,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       ctx2d.setLineDash([3, 5]);
       ctx2d.lineWidth = 1;
       ctx2d.strokeStyle = finishLineColor();
-      ctx2d.font = "11px sans-serif";
+      ctx2d.font = "13px sans-serif";
       ctx2d.textAlign = "center";
       ctx2d.fillStyle = textColor();
       for (let sd = splitInterval; sd < normDist; sd += splitInterval) {
@@ -883,9 +877,9 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
 
       // ── Label (left zone) — always shows date ──
       ctx2d.fillStyle = boat.color;
-      ctx2d.font = `${boat.is_pb ? "bold " : ""}13px sans-serif`;
+      ctx2d.font = `${boat.is_pb ? "bold " : ""}14px sans-serif`;
       ctx2d.textAlign = "right";
-      ctx2d.fillText(boat.label, LABEL_W - 8, midY + 4);
+      ctx2d.fillText((boat.is_pb ? "🥇 " : "") + boat.label, LABEL_W - 8, midY + 4);
 
       // ── Result zone (right of finish line) ──
       // rank is defined for: all finished dist boats, and top-3 time boats at end of race.
