@@ -640,7 +640,7 @@ def _find_similar(workout: dict, all_workouts: list, n: int = 8) -> list:
 # ---------------------------------------------------------------------------
 
 
-def _chart_controls(state, can_stack: bool, has_hr: bool) -> None:
+def _chart_controls(state, can_stack: bool, has_hr: bool, is_interval: bool) -> None:
     """
     Render the two-row chart control bar and mutate state in place.
 
@@ -657,7 +657,11 @@ def _chart_controls(state, can_stack: bool, has_hr: bool) -> None:
                 state.metric = rg.value
 
             if can_stack:
-                stack_sw = hd.switch("Stack", checked=state.stack, size="small")
+                if is_interval:
+                    stack_lbl = "Stack intervals"
+                else:
+                    stack_lbl = "Stack splits"
+                stack_sw = hd.switch(stack_lbl, checked=state.stack, size="small")
                 if stack_sw.changed:
                     state.stack = stack_sw.checked
                     if stack_sw.checked:
@@ -760,7 +764,7 @@ def workout_page(session_id: int, client, user_id: str) -> None:
     total_dist = workout.get("distance") or 0
     show_custom = has_strokes and not is_interval and total_dist > 0
 
-    with hd.box(padding=(1, 2, 0, 4), gap=3):
+    with hd.box(padding=(1, 2, 0, 4), gap=3, align="center"):
         with hd.hbox(gap=4, align="center", justify="end"):
             # ── Header ───────────────────────────────────────────────────────
 
@@ -784,7 +788,7 @@ def workout_page(session_id: int, client, user_id: str) -> None:
 
         # ── Chart + Splits side by side ───────────────────────────────────
 
-        with hd.hbox(gap=2, align="start", grow=True):
+        with hd.hbox(gap=2, align="start", grow=True, width="100%"):
             # Left: chart
             with hd.box(gap=1, grow=True, min_width=0):
                 if state.focused_interval is not None:
@@ -792,7 +796,7 @@ def workout_page(session_id: int, client, user_id: str) -> None:
                     graph_title = f"Workout Graph: {band_type} {state.focused_interval_excluding_rest}"
                 else:
                     graph_title = "Workout Graph"
-                hd.text(
+                hd.h2(
                     graph_title,
                     font_weight="semibold",
                     font_size="x-large",
@@ -851,7 +855,7 @@ def workout_page(session_id: int, client, user_id: str) -> None:
                         ):
                             state.focused_interval = chart.clicked_band_idx
 
-                    _chart_controls(state, can_stack, has_hr)
+                    _chart_controls(state, can_stack, has_hr, is_interval)
 
                 else:
                     hd.text(
@@ -863,7 +867,7 @@ def workout_page(session_id: int, client, user_id: str) -> None:
             # Right: splits/intervals table + custom splits editor
             with hd.box(gap=0.75):
                 with hd.hbox(gap=0.5):
-                    hd.text(
+                    hd.h2(
                         "Intervals" if is_interval else "Splits",
                         font_weight="semibold",
                         font_size="x-large",
@@ -892,27 +896,50 @@ def workout_page(session_id: int, client, user_id: str) -> None:
 
         similar = _find_similar(workout, all_workouts)
         if similar:
-            hd.text(
-                "Similar sessions",
-                font_weight="semibold",
-                font_size="x-large",
-                font_color="neutral-800",
-            )
-            is_interval_workout = workout.get("workout_type", "") in INTERVAL_WORKOUT_TYPES
-            if is_interval_workout:
-                # Similar sessions are mostly intervals — show structure column
-                workout_col = ColumnDef(
-                    "workout_structure",
-                    "Workout",
-                    "minmax(8rem,1fr)",
-                    render_value=lambda w: (
-                        interval_structure_key(w, compact=True)
-                        if w.get("workout_type", "") in INTERVAL_WORKOUT_TYPES
-                        else ""
-                    ),
+            with hd.box(align="center"):
+                hd.h2(
+                    "Similar sessions",
+                    font_weight="semibold",
+                    font_size="x-large",
+                    font_color="neutral-800",
                 )
-                cols = [COL_DATE, workout_col, COL_DISTANCE, COL_TIME, COL_PACE, COL_WATTS, COL_SPM, COL_HR, COL_LINK]
-            else:
-                # Non-interval: show standard performance columns
-                cols = [COL_DATE, COL_DISTANCE, COL_TIME, COL_PACE, COL_WATTS, COL_DRAG, COL_SPM, COL_HR, COL_LINK]
-            WorkoutTable(similar, cols)
+                is_interval_workout = (
+                    workout.get("workout_type", "") in INTERVAL_WORKOUT_TYPES
+                )
+                if is_interval_workout:
+                    # Similar sessions are mostly intervals — show structure column
+                    workout_col = ColumnDef(
+                        "workout_structure",
+                        "Workout",
+                        "minmax(8rem,1fr)",
+                        render_value=lambda w: (
+                            interval_structure_key(w, compact=True)
+                            if w.get("workout_type", "") in INTERVAL_WORKOUT_TYPES
+                            else ""
+                        ),
+                    )
+                    cols = [
+                        COL_DATE,
+                        workout_col,
+                        COL_DISTANCE,
+                        COL_TIME,
+                        COL_PACE,
+                        COL_WATTS,
+                        COL_SPM,
+                        COL_HR,
+                        COL_LINK,
+                    ]
+                else:
+                    # Non-interval: show standard performance columns
+                    cols = [
+                        COL_DATE,
+                        COL_DISTANCE,
+                        COL_TIME,
+                        COL_PACE,
+                        COL_WATTS,
+                        COL_DRAG,
+                        COL_SPM,
+                        COL_HR,
+                        COL_LINK,
+                    ]
+                WorkoutTable(similar, cols)
