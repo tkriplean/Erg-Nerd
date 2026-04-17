@@ -379,6 +379,8 @@ class Concept2Client:
               }
             }
         """
+
+        # TODO: Do we really need to store this on disk at all?
         cache_key = f"users_me_{self._user_id}" if self._user_id else "users_me"
         cached = _read_cache(cache_key)
         if cached is not None:
