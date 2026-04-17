@@ -113,11 +113,11 @@ _N_COLS = len(_DUR_COLS)
 
 # Work:rest ratio row boundaries + display label (ratio = rest/work internally)
 _RATIO_ROWS = [
-    ("Continuous", "≥ 10 : 1", 0.0, 0.10),
-    ("Short rest", "3–10 : 1", 0.10, 0.50),
-    ("Balanced", "≈ 1 : 1", 0.50, 1.50),
-    ("Long rest", "1 : 2–4", 1.50, 4.00),
-    ("Very Long", "< 1 : 4", 4.00, float("inf")),
+    ("Continuous", "≥ 10w : 1r", 0.0, 0.10),
+    ("Short rest", "3–10w : 1r", 0.10, 0.50),
+    ("Balanced", "≈ 1w : 1r", 0.50, 1.50),
+    ("Long rest", "1w : 2–4r", 1.50, 4.00),
+    ("Very Long", "< 1w : 4r", 4.00, float("inf")),
 ]
 _N_ROWS = len(_RATIO_ROWS)
 
@@ -590,7 +590,6 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
         # Main grid — CSS Grid (row-first; column widths set globally)
         with grid_box(
             grid_template_columns=col_template,
-            border="1px solid neutral-200",
             border_radius="medium",
             overflow="hidden",
         ):
@@ -603,11 +602,9 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                     justify="end",
                     height=_HEADER_H,
                     padding=(0.4, 0.6),
-                    border_right="1px solid neutral-200",
-                    border_bottom="1px solid neutral-200",
                 ):
                     hd.text(
-                        "Work : rest",
+                        "Work : rest ratio",
                         font_size="small",
                         font_color="neutral-400",
                         font_style="italic",
@@ -624,8 +621,6 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                         justify="center",
                         border_bottom="1px solid neutral-200",
                     )
-                    if ci < _N_COLS - 1:
-                        cell_props["border_right"] = "1px solid neutral-200"
                     with hd.box(**cell_props):
                         hd.text(
                             col_label,
