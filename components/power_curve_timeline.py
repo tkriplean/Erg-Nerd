@@ -6,10 +6,15 @@ Exported:
       compute all derived model data: lb, pauls_k, CP fit, prediction datasets
       for the chart, and prediction table rows.  Pure Python, no HyperDiv.
 
-  build_timeline_payload() — precompute the full JS chart payload (workout
-      manifest + keyframes) and a Python-side prediction-table lookup across
-      the entire training timeline.  Runs in a background thread via hd.task().
-      No HyperDiv calls.  Returns (js_payload, pred_table_lookup).
+  build_keyframes() — heavy half: precompute the workout manifest, per-PB
+      keyframes (scatter + prediction datasets), static datasets (WC overlay),
+      and the prediction-table lookup across the whole training timeline.
+      Runs in a background thread via hd.task().  Returns
+      (bundle_data, pred_table_lookup).
+
+  wrap_payload() — cheap half: wrap a cached ``bundle_data`` with the
+      style-only fields Chart.js consumes (log_x/log_y, overlay toggles,
+      bundle_key).  O(1); no model work.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SEPARATION OF CONCERNS
@@ -17,12 +22,14 @@ SEPARATION OF CONCERNS
 
   power_curve_chart_builder.py  — static Chart.js configs and chart-data helpers
   power_curve_timeline.py       — time-varying data (snapshots + payload)
-  power_curve_page.py           — HyperDiv orchestration: state, caching, layout
+  power_curve_animation.py      — HyperDiv bundle lifecycle (caches build_keyframes
+                                   by data_key; re-wraps on style changes)
+  power_curve_page.py           — HyperDiv orchestration: state, layout
 
 compute_timeline_snapshot is the single source of truth for per-keyframe model
-computation; build_timeline_payload calls it for every PB keyframe and stores
-the pred_table_rows in a Python-side lookup so the page can use it during
-animation without re-running the models.
+computation; build_keyframes calls it for every PB keyframe and stores the
+pred_table_rows plus pauls_k_fit in a Python-side lookup so the page can use
+both during animation without re-running the models.
 """
 
 from __future__ import annotations
@@ -75,6 +82,8 @@ def compute_timeline_snapshot(
     x_bounds,
     y_bounds,
     show_components: bool,
+    selected_dist_set: set | None = None,
+    selected_time_set: set | None = None,
     cp_fit_cache: dict | None = None,
 ) -> dict:
     """
@@ -87,6 +96,9 @@ def compute_timeline_snapshot(
                      filter applied, but dist/time filter NOT applied); used for
                      lb_all so that disabled-event PBs still contribute to
                      Paul's Law and RowingLevel averaging.
+    selected_dist_set / selected_time_set — enabled event sets for the
+                     per-model accuracy (RMSE / R²) computation in the
+                     prediction table.  None means "every event counts".
     cp_fit_cache   — optional mutable dict {fit_key: cp_params} shared across
                      multiple keyframes by build_timeline_payload.  When None
                      (slow/static path), CP is recomputed fresh each call.
@@ -102,6 +114,8 @@ def compute_timeline_snapshot(
         pred_datasets   — Chart.js dataset list for the active predictor
         pred_canvas_labels — canvas overlay label dicts
         pred_table_rows — list of prediction table row dicts
+        accuracy        — dict keyed by model short-name ("avg","cp","loglog",
+                          "pl","rl") → {"rmse", "r2", "n"} over enabled events
     """
 
     # ── Lifetime bests ────────────────────────────────────────────────────────
@@ -113,25 +127,26 @@ def compute_timeline_snapshot(
     pauls_k = pauls_k_fit if pauls_k_fit is not None else 5.0
 
     # ── Critical Power fit ────────────────────────────────────────────────────
-    cp_params = None
-    if predictor in ("critical_power", "average"):
-        cp_pb_list = []
-        for w in apply_best_only(sim_wkts):
-            dur = compute_duration_s(w)
-            pac = compute_pace(w)
-            if dur and pac:
-                cp_pb_list.append({"duration_s": dur, "watts": compute_watts(pac)})
-        fit_key = str(
-            sorted(
-                (round(p["duration_s"], 1), round(p["watts"], 1)) for p in cp_pb_list
-            )
+    # Always fit: the prediction table's CP column needs cp_params regardless
+    # of which predictor's chart curve is drawn. cp_fit_cache makes repeat
+    # fits free across keyframes during animation.
+    cp_pb_list = []
+    for w in apply_best_only(sim_wkts):
+        dur = compute_duration_s(w)
+        pac = compute_pace(w)
+        if dur and pac:
+            cp_pb_list.append({"duration_s": dur, "watts": compute_watts(pac)})
+    fit_key = str(
+        sorted(
+            (round(p["duration_s"], 1), round(p["watts"], 1)) for p in cp_pb_list
         )
-        if cp_fit_cache is not None:
-            if fit_key not in cp_fit_cache:
-                cp_fit_cache[fit_key] = fit_critical_power(cp_pb_list)
-            cp_params = cp_fit_cache[fit_key]
-        else:
-            cp_params = fit_critical_power(cp_pb_list)
+    )
+    if cp_fit_cache is not None:
+        if fit_key not in cp_fit_cache:
+            cp_fit_cache[fit_key] = fit_critical_power(cp_pb_list)
+        cp_params = cp_fit_cache[fit_key]
+    else:
+        cp_params = fit_critical_power(cp_pb_list)
 
     # ── Prediction datasets (chart curves) ────────────────────────────────────
     pred_datasets, pred_canvas_labels = build_pred_datasets(
@@ -151,8 +166,8 @@ def compute_timeline_snapshot(
         show_components=show_components,
     )
 
-    # ── Prediction table rows ─────────────────────────────────────────────────
-    pred_table_rows = build_prediction_table_data(
+    # ── Prediction table rows + accuracy ──────────────────────────────────────
+    _pred = build_prediction_table_data(
         lifetime_best=lb,
         lifetime_best_anchor=lb_anchor,
         all_lifetime_best=lb_all,
@@ -160,6 +175,8 @@ def compute_timeline_snapshot(
         critical_power_params=cp_params,
         rl_predictions=rl_predictions,
         pauls_k=pauls_k,
+        selected_dist_set=selected_dist_set,
+        selected_time_set=selected_time_set,
     )
 
     return {
@@ -172,7 +189,8 @@ def compute_timeline_snapshot(
         "cp_params": cp_params,
         "pred_datasets": pred_datasets,
         "pred_canvas_labels": pred_canvas_labels,
-        "pred_table_rows": pred_table_rows,
+        "pred_table_rows": _pred["rows"],
+        "accuracy": _pred["accuracy"],
     }
 
 
@@ -181,7 +199,7 @@ def compute_timeline_snapshot(
 # ---------------------------------------------------------------------------
 
 
-def build_timeline_payload(
+def build_keyframes(
     efforts_filtered_by_event: list,
     quality_efforts: list,
     featured_efforts: list,
@@ -196,34 +214,48 @@ def build_timeline_payload(
     x_mode: str,
     x_bounds,
     y_bounds,
-    log_x: bool,
     predictor: str,
-    draw_power_curves: str,
     show_components: bool,
     rl_predictions: dict,
     all_seasons: list,
     wr_data,
-    bundle_key: str,
 ) -> tuple[dict, dict]:
     """
-    Precompute the full JS chart payload and a Python-side prediction-table lookup.
+    Heavy, data-dependent half of the animation bundle.
 
-    efforts_filtered_by_event — selected events, quality-filtered, newest-first.
-    prefilt_excl   — all events (excluded-seasons only), newest-first.
-    featured_efforts  — historical PB/SB workouts (PBs/SBs mode), newest-first.
+    Builds everything that depends on workout data, predictor choice, and the
+    axis/metric configuration: the workout manifest, per-keyframe scatter +
+    prediction datasets, static datasets (WC overlay), and the prediction
+    table lookup.
 
-    Returns (js_payload, pred_table_lookup) where:
-      js_payload         — dict consumed by power_curve_chart_plugin.js
-      pred_table_lookup  — dict[int, list] mapping keyframe_day → pred_table_rows
+    Returns (bundle_data, pred_table_lookup) where:
+      bundle_data        — dict of the heavy fields the JS chart needs.
+                           Does NOT include the cheap style-only fields
+                           (log_x, log_y, draw_lifetime_line/season_lines,
+                           bundle_key) — those are added by ``wrap_payload``.
+      pred_table_lookup  — dict[int, dict]: keyframe_day →
+                           {"pred_rows": [...], "pauls_k_fit": float|None,
+                            "accuracy": {"cp": {...}, "loglog": {...}, ...}}
+
+    See ``wrap_payload`` for the cheap style wrapper that produces the final
+    js_payload; ``manage_animation_bundle`` caches this result by a data_key
+    so style-only toggles (log axes, overlay selection) don't re-run the
+    heavy loop.
     """
 
-    # ── Excluded categories ──────────────────────────────────────────────────
+    # ── Excluded categories + enabled event sets for accuracy ────────────────
     excluded_cats = set()
+    selected_dist_set: set = set()
+    selected_time_set: set = set()
     for i, (dist, _) in enumerate(RANKED_DISTANCES):
-        if not dist_enabled[i]:
+        if dist_enabled[i]:
+            selected_dist_set.add(dist)
+        else:
             excluded_cats.add(("dist", dist))
     for i, (tenths, _) in enumerate(RANKED_TIMES):
-        if not time_enabled[i]:
+        if time_enabled[i]:
+            selected_time_set.add(tenths)
+        else:
             excluded_cats.add(("time", tenths))
 
     # ── Season metadata ──────────────────────────────────────────────────────
@@ -323,7 +355,15 @@ def build_timeline_payload(
             "pred_canvas_labels": [],
         }
     ]
-    pred_table_lookup: dict[int, list] = {0: []}  # keyframe_day → pred_table_rows
+    # keyframe_day → {"pred_rows": [...], "pauls_k_fit": float|None}
+    #
+    # pauls_k_fit travels with the keyframe so the page's fast path can read
+    # the personalised Paul's constant without a slow-path render having gone
+    # first (which used to stash it in state._pauls_k_fit — a race-prone
+    # bridge between the two code paths).
+    pred_table_lookup: dict[int, dict] = {
+        0: {"pred_rows": [], "pauls_k_fit": None, "accuracy": {}}
+    }
     prev_lb_str = {}  # cat_key_str -> pace
     cp_fit_cache: dict = {}  # fit_key -> cp_params (shared across keyframes)
 
@@ -394,7 +434,7 @@ def build_timeline_payload(
             w for w in sorted_prefilt_excl if w.get("date", "")[:10] <= date_str
         ]
 
-        # Full snapshot: CP fit, pred datasets, pred table rows.
+        # Full snapshot: CP fit, pred datasets, pred table rows, accuracy.
         _snap = compute_timeline_snapshot(
             sim_wkts=sim_wkts,
             all_events_to_date=all_events_to_date,
@@ -406,6 +446,8 @@ def build_timeline_payload(
             x_bounds=x_bounds,
             y_bounds=y_bounds,
             show_components=show_components,
+            selected_dist_set=selected_dist_set,
+            selected_time_set=selected_time_set,
             cp_fit_cache=cp_fit_cache,
         )
 
@@ -420,7 +462,11 @@ def build_timeline_payload(
                 "pred_canvas_labels": _snap["pred_canvas_labels"],
             }
         )
-        pred_table_lookup[day] = _snap["pred_table_rows"]
+        pred_table_lookup[day] = {
+            "pred_rows": _snap["pred_table_rows"],
+            "pauls_k_fit": _snap["pauls_k_fit"],
+            "accuracy": _snap["accuracy"],
+        }
 
         prev_lb_str = lb_str
 
@@ -443,23 +489,67 @@ def build_timeline_payload(
         else []
     )
 
-    js_payload = {
+    # Note: x_bounds / y_bounds are intentionally NOT baked into bundle_data.
+    # They depend on log_x (a style-only knob) via compute_axis_bounds, so
+    # wrap_payload injects the current values on every render — otherwise
+    # toggling log_x would leave the JS chart scale & gridline filter stuck
+    # on the bounds captured when the bundle was first built.
+    bundle_data = {
         "workout_manifest": manifest,
         "keyframes": js_keyframes,
         "static_datasets": static_datasets,
         "season_meta": season_meta,
         "total_days": total_days,
         "pb_badge_lifetime_steps": 40,
-        "bundle_key": bundle_key,
-        "draw_lifetime_line": draw_power_curves == "PBs",
-        "draw_season_lines": draw_power_curves == "SBs",
         "pb_color": pb_color,
         "is_dark": is_dark,
         "show_watts": show_watts,
         "x_mode": x_mode,
-        "x_bounds": list(x_bounds) if x_bounds else None,
-        "y_bounds": list(y_bounds) if y_bounds else None,
-        "log_x": log_x,
+        # Gridline color — kept identical to the static chart's axis grid so
+        # toggling between applyConfig (static) and applyBundle (sim) paths
+        # doesn't visibly snap the gridlines on/off.  Python is the single
+        # source of truth for this colour (CLAUDE.md).
+        "grid_color": "rgba(180,180,180,0.35)",
     }
 
-    return js_payload, pred_table_lookup
+    return bundle_data, pred_table_lookup
+
+
+# ---------------------------------------------------------------------------
+# wrap_payload — cheap style wrapper
+# ---------------------------------------------------------------------------
+
+
+def wrap_payload(
+    bundle_data: dict,
+    *,
+    log_x: bool,
+    log_y: bool,
+    overlay_bests: str,
+    bundle_key: str,
+    x_bounds,
+    y_bounds,
+) -> dict:
+    """
+    Wrap a cached ``bundle_data`` dict with the style-only fields the JS
+    chart needs.  O(1) — no loops, no model work.
+
+    ``x_bounds`` / ``y_bounds`` are injected here (not baked into
+    ``bundle_data``) because they depend on ``log_x`` — a style-only knob.
+    Re-wrapping on style-key change keeps the JS chart scale and the
+    ranked-grid filter in sync with the current render's bounds.
+
+    Separating this from ``build_keyframes`` lets the animation layer cache
+    keyframes by a data_key and re-wrap on style-only toggles (log axes,
+    overlay selection) without re-running the heavy keyframe loop.
+    """
+    return {
+        **bundle_data,
+        "bundle_key": bundle_key,
+        "log_x": log_x,
+        "log_y": log_y,
+        "draw_lifetime_line": overlay_bests == "PBs",
+        "draw_season_lines": overlay_bests == "SBs",
+        "x_bounds": list(x_bounds) if x_bounds else None,
+        "y_bounds": list(y_bounds) if y_bounds else None,
+    }

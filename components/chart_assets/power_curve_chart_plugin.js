@@ -970,11 +970,17 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     const xBounds = bundle.x_bounds;   // [min, max] or null
     const yBounds = bundle.y_bounds;   // [min, max] or null
     const logX    = bundle.log_x === true;
+    const logY    = bundle.log_y === true;
     // Do NOT set reverse — let Chart.js default to false, matching the static chart.
+
+    // Gridline colour — sourced from the bundle so it matches the static
+    // chart's axis grid (Python is the single source of truth for colours).
+    const gridColor = bundle.grid_color;
 
     const xScaleOpts = {
       type: logX ? "logarithmic" : "linear",
       ticks: { callback: (val) => xLabelFn(val) },
+      grid: { color: gridColor },
       afterBuildTicks: (axis) => {
         const gridValues = useDuration ? rankedDurations : rankedDists;
         const [xMin, xMax] = xBounds || [0, Infinity];
@@ -986,11 +992,12 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     if (xBounds) { xScaleOpts.min = xBounds[0]; xScaleOpts.max = xBounds[1]; }
 
     const yScaleOpts = {
-      type: "linear",
+      type: logY ? "logarithmic" : "linear",
       ticks: {
         callback: showWatts ? (v) => Math.round(v) + "W" : (v) => formatPace(v),
         stepSize: showWatts ? 50 : 5,
       },
+      grid: { color: gridColor },
     };
     if (yBounds) { yScaleOpts.min = yBounds[0]; yScaleOpts.max = yBounds[1]; }
 
@@ -1146,6 +1153,10 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
       updatePlayButton();
       simDoneCounter++;
       ctx.updateProp("sim_done", simDoneCounter);
+      // Mirror the user-pause behavior so Python's state.sim_playing follows.
+      // Without this, sim_playing_out stays true and a subsequent seek would
+      // re-trigger play on the next render.
+      ctx.updateProp("sim_playing_out", false);
     } else {
       const next = currentDay + currentStepDays;
       // If the next step would overshoot, clamp to exactly total_days so the
@@ -1227,8 +1238,12 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
       if (cachedBundle) tick_noadvance();
     } else if (command === "stop") {
       // "stop" is a hard reset (e.g. at_today): clear isPlaying and the interval.
+      // Render the end-of-timeline frame so the chart shows full data rather
+      // than going blank — e.g. on initial mount after navigating back to the
+      // page, when a cached bundle is applied with sim_command="stop".
       isPlaying = false;
       stopAnimation();
+      if (cachedBundle) tick_noadvance();
     }
     // handleSimCommand does NOT send sim_playing_out — only user button clicks do.
     updatePlayButton();

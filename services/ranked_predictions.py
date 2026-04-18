@@ -3,11 +3,15 @@ Prediction table data builder for the ranked-events view.
 
 Exported:
   build_prediction_table_data() — compute all four predictor columns for every
-                                  ranked event, returning a list of row dicts.
-                                  Rows are sorted by expected duration so that
-                                  distance and timed events are interleaved in
+                                  ranked event, plus per-model accuracy metrics
+                                  (RMSE, R²) vs actual PBs.  Returns
+                                  ``{"rows": [...], "accuracy": {...}}`` where
+                                  rows are sorted by expected duration so that
+                                  distance and timed events interleave in
                                   power-duration order (e.g. 1 min falls between
-                                  100m and 500m).
+                                  100m and 500m), and accuracy is keyed by
+                                  model short-name ("avg", "cp", "loglog",
+                                  "pl", "rl") → ``{"rmse", "r2", "n"}``.
 
 Private helpers:
   _rl_interp_pace()   — log-log interpolation between RowingLevel distance→pace pairs
@@ -27,12 +31,15 @@ from services.rowing_utils import (
     RANKED_TIMES,
     PACE_MIN,
     PACE_MAX,
-    pauls_law_pace,
     loglog_fit,
-    loglog_predict_pace,
-    watts_to_pace,
 )
-from services.critical_power_model import critical_power_model
+from services.predictor_samplers import (
+    cp_pace_at,
+    cp_pace_at_time,
+    loglog_pace_at,
+    pauls_law_pace_at,
+    rowinglevel_pace_at,
+)
 from services.formatters import fmt_split, fmt_result_duration
 
 
@@ -169,8 +176,10 @@ def _compute_predictor_raws(
     Returns a dict with keys: cp_raw, ll_raw, pl_raw, rl_raw.
     Any value may be None if unavailable or outside [PACE_MIN, PACE_MAX].
 
-    event_type == "dist": event_value is meters.
-    event_type == "time": event_value is tenths-of-seconds; T = event_value / 10.
+    event_type == "dist": event_value is meters — sampler called directly.
+    event_type == "time": event_value is tenths-of-seconds; each sampler is
+        inverted via _solve_timed_pace to find the distance a rower covers
+        in exactly T seconds.
     cp_params: (Pow1, tau1, Pow2, tau2) tuple or None.
     pauls_k: personalised Paul's Law constant (sec/500m per doubling); default 5.0.
     """
@@ -178,91 +187,31 @@ def _compute_predictor_raws(
     dist_m = event_value if is_dist else None
     T = None if is_dist else event_value / 10.0
 
-    # ── Critical Power ────────────────────────────────────────────────────────
-    cp_raw = None
-    if cp_params is not None:
-        Pow1, tau1, Pow2, tau2 = cp_params
+    def _at(sampler):
+        """Evaluate sampler at the event distance (direct) or solve-for-T (timed)."""
         if is_dist:
+            return sampler(dist_m)
+        return _solve_timed_pace(sampler, T)
 
-            def _cp_resid(t, _d=dist_m, P1=Pow1, t1=tau1, P2=Pow2, t2=tau2):
-                P = critical_power_model(t, P1, t1, P2, t2)
-                return (P / 2.80) ** (1.0 / 3.0) * t - _d if P > 0 else -_d
+    # CP is formulated as watts(t), so for timed events evaluate directly.
+    # Composing _solve_timed_pace with cp_pace_at's own inversion fails to
+    # bracket a root in brentq.
+    cp_raw = (
+        cp_pace_at(cp_params, dist_m) if is_dist else cp_pace_at_time(cp_params, T)
+    )
 
-            try:
-                t_star = brentq(_cp_resid, 10.0, 20_000.0, xtol=0.1)
-                watts = critical_power_model(t_star, Pow1, tau1, Pow2, tau2)
-                if watts > 0:
-                    cp_raw = watts_to_pace(watts)
-            except Exception:
-                pass
-        else:
-            watts = critical_power_model(T, Pow1, tau1, Pow2, tau2)
-            if watts > 0:
-                cp_raw = watts_to_pace(watts)
-
-    # ── Log-Log ───────────────────────────────────────────────────────────────
-    ll_raw = None
-    if ll_slope is not None:
-        if is_dist:
-            ll_raw = loglog_predict_pace(ll_slope, ll_intercept, dist_m)
-        else:
-            ll_raw = _solve_timed_pace(
-                lambda d, s=ll_slope, i=ll_intercept: loglog_predict_pace(s, i, d), T
+    return {
+        "cp_raw": cp_raw,
+        "ll_raw": _at(lambda d: loglog_pace_at(ll_slope, ll_intercept, d)),
+        "pl_raw": _at(
+            lambda d: pauls_law_pace_at(
+                lifetime_best, lifetime_best_anchor, d, k=pauls_k
             )
-
-    # ── Paul's Law ────────────────────────────────────────────────────────────
-    pl_raw = None
-    if lifetime_best:
-        _pl_paces = []
-        for cat, pb_pace in lifetime_best.items():
-            anchor = lifetime_best_anchor.get(cat)
-            if not anchor:
-                continue
-            if is_dist:
-                predicted = pauls_law_pace(pb_pace, anchor, dist_m, k=pauls_k)
-                if PACE_MIN <= predicted <= PACE_MAX:
-                    _pl_paces.append(predicted)
-            else:
-                pace_star = _solve_timed_pace(
-                    lambda d, p=pb_pace, a=anchor: pauls_law_pace(p, a, d, k=pauls_k), T
-                )
-                if pace_star is not None:
-                    _pl_paces.append(pace_star)
-        if _pl_paces:
-            pl_raw = sum(_pl_paces) / len(_pl_paces)
-
-    # ── RowingLevel — distance-weighted average ───────────────────────────────
-    # rl_predictions keys are str(tuple) e.g. "('dist', 2000)"; normalise once.
-    _str_lba = {str(k): v for k, v in lifetime_best_anchor.items()}
-    rl_raw = None
-    if rl_predictions:
-        _rl_paces: list = []
-        _rl_weights: list = []
-        for cat_key, preds in rl_predictions.items():
-            if is_dist:
-                anchor_dist = _str_lba.get(cat_key)
-                pace = preds.get(dist_m) or preds.get(str(dist_m))
-                if pace is not None and PACE_MIN <= pace <= PACE_MAX:
-                    w = (
-                        1.0 / (abs(math.log2(dist_m / anchor_dist)) + 0.5)
-                        if anchor_dist
-                        else 1.0
-                    )
-                    _rl_paces.append(pace)
-                    _rl_weights.append(w)
-            else:
-                pace_star = _solve_timed_pace(
-                    lambda d, p=preds: _rl_interp_pace(p, d), T
-                )
-                if pace_star is not None:
-                    _rl_paces.append(pace_star)
-                    _rl_weights.append(1.0)
-        if _rl_paces:
-            total_w = sum(_rl_weights)
-            rl_raw = sum(w * p for w, p in zip(_rl_weights, _rl_paces)) / total_w
-
-    # print({"cp_raw": cp_raw, "ll_raw": ll_raw, "pl_raw": pl_raw, "rl_raw": rl_raw})
-    return {"cp_raw": cp_raw, "ll_raw": ll_raw, "pl_raw": pl_raw, "rl_raw": rl_raw}
+        ),
+        "rl_raw": _at(
+            lambda d: rowinglevel_pace_at(rl_predictions, lifetime_best_anchor, d)
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -279,9 +228,11 @@ def build_prediction_table_data(
     critical_power_params: Optional[dict] = None,
     rl_predictions: Optional[dict] = None,
     pauls_k: float = 5.0,
-) -> list[dict]:
+    selected_dist_set: Optional[set] = None,
+    selected_time_set: Optional[set] = None,
+) -> dict:
     """
-    Compute prediction-table rows for all four predictors simultaneously.
+    Compute prediction-table rows plus per-model accuracy.
 
     Always emits one row per canonical ranked event (all RANKED_DISTANCES then
     all RANKED_TIMES), regardless of the event-filter selection in the chart UI.
@@ -292,16 +243,25 @@ def build_prediction_table_data(
     gated on timeline_date and excluded seasons) and are used for the "Your PB"
     column so that PBs in events the user has hidden still appear.
 
-    Row dict keys:
-        label           — event display label, e.g. "2k", "30 min"
-        event_type      — "dist" | "time"
-        event_value     — meters (dist) or tenths-of-sec (time)
-        avg_pace/result/raw
-        cp_pace/result/raw
-        loglog_pace/result/raw
-        pl_pace/result/raw
-        rl_pace/result/raw
-        pb_pace/result/raw  (athlete's unfiltered best)
+    ``selected_dist_set`` / ``selected_time_set`` restrict which rows are
+    considered when computing the accuracy footer (RMSE / R² vs ``pb_raw``).
+    When either is None, every event counts — useful when a caller doesn't
+    have an enabled-event selection.
+
+    Returns ``{"rows": [...], "accuracy": {...}}`` where:
+      rows      — list of per-event row dicts.  Keys:
+                    label, event_type, event_value,
+                    avg_pace/result/raw,
+                    cp_pace/result/raw,
+                    loglog_pace/result/raw,
+                    pl_pace/result/raw,
+                    rl_pace/result/raw,
+                    pb_pace/result/raw  (athlete's unfiltered best)
+      accuracy  — dict[str, dict] keyed by model short-name
+                  ("avg", "cp", "loglog", "pl", "rl") →
+                  {"rmse": float|None, "r2": float|None, "n": int}.
+                  rmse/r2 are None when fewer than one (rmse) or two (r2)
+                  matching (prediction, PB) pairs exist.
     """
     # ── Log-Log fit (single fit across all filtered lifetime PBs) ─────────────
     _ll_fit = loglog_fit(lifetime_best, lifetime_best_anchor) if lifetime_best else None
@@ -385,6 +345,7 @@ def build_prediction_table_data(
         _avg_cands = [r for r in [cp_raw, ll_raw, pl_raw, rl_raw] if r is not None]
         _avg_r = sum(_avg_cands) / len(_avg_cands) if _avg_cands else None
         _avg_r, avg_pace, avg_result = _cell(_avg_r, "time", time_tenths)
+
         rows.append(
             {
                 "label": label,
@@ -425,4 +386,36 @@ def build_prediction_table_data(
         return row["event_value"] * pace / 500.0
 
     rows.sort(key=_expected_duration_s)
-    return rows
+
+    # ── Accuracy: RMSE + R² per model vs actual PB, over enabled events ──
+    # When selected_dist_set / selected_time_set are None, every event counts.
+    accuracy: dict = {}
+    _dist_ok = selected_dist_set is None
+    _time_ok = selected_time_set is None
+    for _ck in ("avg", "cp", "loglog", "pl", "rl"):
+        _pairs = [
+            (r[f"{_ck}_raw"], r["pb_raw"])
+            for r in rows
+            if r.get(f"{_ck}_raw") is not None
+            and r.get("pb_raw") is not None
+            and (
+                (r["event_type"] == "dist"
+                 and (_dist_ok or r["event_value"] in selected_dist_set))
+                or (r["event_type"] == "time"
+                    and (_time_ok or r["event_value"] in selected_time_set))
+            )
+        ]
+        if _pairs:
+            _actuals_v = [a for _, a in _pairs]
+            _mean_actual = sum(_actuals_v) / len(_actuals_v)
+            _ss_res = sum((p - a) ** 2 for p, a in _pairs)
+            _ss_tot = sum((a - _mean_actual) ** 2 for a in _actuals_v)
+            accuracy[_ck] = {
+                "rmse": (_ss_res / len(_pairs)) ** 0.5,
+                "r2": 1.0 - _ss_res / _ss_tot if _ss_tot > 0 else None,
+                "n": len(_pairs),
+            }
+        else:
+            accuracy[_ck] = {"rmse": None, "r2": None, "n": 0}
+
+    return {"rows": rows, "accuracy": accuracy}
