@@ -9,14 +9,13 @@ See docs/power_curve_page.md for a full reference.
 Helper logic is split across:
   services/formatters.py              — formatting helpers
   components/workout_table            — WorkoutTable
-  services/ranked_filters.py          — quality filters + season helpers
-  services/ranked_predictions.py      — multi-model prediction computation
-  services/predictor_samplers.py      — pure per-model pace samplers
-  components/power_curve_state.py     — FilterSpec/ChartStyle/AnimationState + PREDICTORS registry
-  components/power_curve_pipeline.py  — WorkoutView + build_workout_view + compute_axis_bounds
-  components/power_curve_animation.py — manage_animation_bundle + load_world_record_data
-  components/power_curve_chart_builder.py  — chart config builder
-  components/power_curve_timeline.py  — compute_timeline_snapshot + build_timeline_payload
+  services/rowing_utils.py            — quality filters, season helpers, PB/SB aggregators
+  services/predictions.py             — Predictor registry + samplers + prediction-table builder
+  components/power_curve_workouts.py  — FilterSpec + WorkoutView + build_workout_view
+  components/power_curve_animation.py — timeline snapshot + keyframe build +
+                                        bundle lifecycle + SB annotations
+  components/power_curve_chart_config.py — chart config builder + compute_axis_bounds
+  components/concept2_sync.py         — concept2_sync + load_world_record_data
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 UI LAYOUT (inside power_curve_page)
@@ -51,7 +50,7 @@ STATE VARIABLES  (declared at the top of power_curve_page())
   best_filter        str           "All" | "PBs" | "SBs" — row filter for display/table
   chart_y_metric       str           "Pace" | "Watts"
   chart_x_metric       str           "distance" | "duration"
-  chart_predictor    str           one of PREDICTORS_BY_KEY keys (see power_curve_state.py)
+  chart_predictor    str           one of PREDICTORS_BY_KEY keys (see services/predictions.py)
   overlay_bests      str           "PBs" | "SBs" | "None" — which best-curves to draw
   chart_log_x        bool          log scale on x-axis
   chart_log_y        bool          log scale on y-axis
@@ -66,7 +65,7 @@ STATE VARIABLES  (declared at the top of power_curve_page())
   sim_pred_lookup    dict          {keyframe_day: {pred_rows, pauls_k_fit, accuracy}} from build_keyframes
   last_sim_day_out   int           tracks chart.sim_day_out changes (ticks + user seeks)
   last_sim_done      int           tracks chart.sim_done changes to detect animation end
-  workout_view       WorkoutView|None  4-stage filtering pipeline result (see power_curve_pipeline.py)
+  workout_view       WorkoutView|None  4-stage filtering pipeline result (see power_curve_workouts.py)
   _view_key          tuple         (hash(FilterSpec), workout_count) — invalidates workout_view
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -114,15 +113,6 @@ CHART / PREDICTION
   x_mode "duration": x-axis is time in seconds instead of meters.  Scatter
   points use workout["time"]/10; prediction curves are transformed via
   dist * pace / 500.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-HYPERDIV QUIRKS APPLIED HERE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  radio_group subclass: hd.radio_group doesn't expose size. A local subclass
-  adds it (see below). Even then, group size doesn't shrink button padding;
-  use label_style on each radio_button:
-    hd.radio_button("X", label_style=hd.style(padding=(0, "0.5rem", 0, "0.5rem")))
 """
 
 import hashlib
@@ -159,24 +149,23 @@ from components.workout_table import (
     COL_HR,
     COL_LINK,
 )
-from components.power_curve_chart_builder import (
-    build_sb_annotations,
+from components.power_curve_chart_config import (
     build_chart_config,
-)
-from components.power_curve_timeline import (
-    compute_timeline_snapshot,
-)
-from components.power_curve_state import FilterSpec, PREDICTORS, PREDICTORS_BY_KEY
-from components.power_curve_pipeline import (
-    WorkoutView,
-    build_workout_view,
     compute_axis_bounds,
 )
+from services.predictions import PREDICTORS, PREDICTORS_BY_KEY
+from components.power_curve_workouts import (
+    FilterSpec,
+    WorkoutView,
+    build_workout_view,
+)
 from components.power_curve_animation import (
-    load_world_record_data,
+    build_sb_annotations,
+    compute_timeline_snapshot,
     lookup_bundle_entry,
     manage_animation_bundle,
 )
+from components.concept2_sync import load_world_record_data
 from components.hyperdiv_extensions import radio_group, grid_box
 
 
@@ -345,8 +334,8 @@ def _chart_settings(state, profile, pauls_k_fit):
                 # gets a dynamic personalised-K suffix when a fit is available.
                 def _pred_desc(p):
                     if p.key == "pauls_law" and pauls_k_fit is not None:
-                        return f"{p.desc} Personalised to your K = {pauls_k_fit:.1f}s/doubling."
-                    return p.desc
+                        return f"{p.extended_description} Personalised to your K = {pauls_k_fit:.1f}s/doubling."
+                    return p.extended_description
 
                 _PRED_OPTIONS = [(p.key, p.name, _pred_desc(p)) for p in PREDICTORS]
                 _pred_name = PREDICTORS_BY_KEY.get(
@@ -394,7 +383,7 @@ def _chart_settings(state, profile, pauls_k_fit):
 
                 # Gear icon → component lines dropdown (only for predictors that support it).
                 _pred_meta = PREDICTORS_BY_KEY[state.chart_predictor]
-                if _pred_meta.supports_components:
+                if _pred_meta.computed_from_components:
                     with hd.scope("comp_gear"):
                         with hd.dropdown() as _comp_dd:
                             _gear_btn = hd.icon_button(
@@ -644,7 +633,11 @@ def _prediction_table(
     Only renders when at least one row has any data.
     """
     if not any(
-        r["pb_pace"] or r["cp_pace"] or r["loglog_pace"] or r["pl_pace"] or r["rl_pace"]
+        r.get("pb_pace", None)
+        or r.get("cp_pace", None)
+        or r.get("loglog_pace", None)
+        or r.get("pl_pace", None)
+        or r.get("rl_pace", None)
         for r in pred_rows
     ):
         return
@@ -655,13 +648,13 @@ def _prediction_table(
     )
     _PRED_COLS = [("pb", "Your PB", "Your personal best for each event.")]
     for _p in PREDICTORS:
-        if _p.table_column is None:
+        if _p.key == "none":
             continue
         if _p.key == "rowinglevel" and not rl_available:
             continue
-        _tip = _pl_tip if _p.key == "pauls_law" else _p.desc
+        _tip = _pl_tip if _p.key == "pauls_law" else _p.extended_description
         _label = "Average" if _p.key == "average" else _p.name
-        _PRED_COLS.append((_p.table_column, _label, _tip))
+        _PRED_COLS.append((_p.key, _label, _tip))
 
     _HEADER_BG = "neutral-100"
     _ACC_BG = "neutral-100"
@@ -1186,7 +1179,7 @@ def _page_header(
 def _slow_path_snapshot(
     state,
     *,
-    view: WorkoutView,
+    workouts: WorkoutView,
     timeline_date: date,
     at_today: bool,
     rl_predictions: dict,
@@ -1206,21 +1199,18 @@ def _slow_path_snapshot(
     Chart.js config and the prediction-table data.  Expensive; do not call
     on every animation tick.
     """
-    quality_efforts = view.quality_efforts
+    quality_efforts = workouts.quality_efforts
     date_str = timeline_date.isoformat()
     if state.best_filter == "All":
-        efforts_filtered_by_event = view.efforts_filtered_by_event
-        _in_time = efforts_filtered_by_event[
+        efforts_filtered_by_event = workouts.efforts_filtered_by_event
+        sim_wkts = efforts_filtered_by_event[
             _bisect_date_desc(efforts_filtered_by_event, date_str) :
         ]
-        sim_wkts = _in_time
     else:
-        featured_efforts = view.featured_efforts
+        featured_efforts = workouts.featured_efforts
         _in_time = featured_efforts[_bisect_date_desc(featured_efforts, date_str) :]
         sim_wkts = apply_best_only(_in_time, by_season=state.best_filter != "PBs")
-    all_events_to_date = quality_efforts[
-        _bisect_date_desc(quality_efforts, date_str) :
-    ]
+    all_events_to_date = quality_efforts[_bisect_date_desc(quality_efforts, date_str) :]
 
     # Disabled-event workouts (faint background dots in chart).
     excluded_cats = set()
@@ -1233,15 +1223,12 @@ def _slow_path_snapshot(
 
     excluded_wkts: list = []
     if excluded_cats:
-        if state.best_filter == "all":
-            excluded_wkts = all_events_to_date
-        else:
+        excluded_wkts = [
+            w for w in all_events_to_date if workout_cat_key(w) in excluded_cats
+        ]
+        if state.best_filter != "all":
             excluded_wkts = apply_best_only(
-                [
-                    w
-                    for w in all_events_to_date
-                    if workout_cat_key(w) in excluded_cats
-                ],
+                excluded_wkts,
                 by_season=state.best_filter == "SBs",
             )
 
@@ -1316,6 +1303,7 @@ def _fast_path_snapshot(state) -> tuple:
     """
     entry = lookup_bundle_entry(state.sim_pred_lookup, state.timeline_day)
     pauls_k_fit = entry["pauls_k_fit"]
+
     return (
         None,  # chart_cfg — JS ignores config while bundle is active
         entry["pred_rows"],
@@ -1328,7 +1316,7 @@ def _fast_path_snapshot(state) -> tuple:
 def _compute_chart_data(
     state,
     *,
-    view: WorkoutView,
+    workouts: WorkoutView,
     timeline_date: date,
     at_today: bool,
     rl_predictions: dict,
@@ -1352,9 +1340,10 @@ def _compute_chart_data(
     """
     if state.sim_playing and state.sim_bundle is not None:
         return _fast_path_snapshot(state)
+
     return _slow_path_snapshot(
         state,
-        view=view,
+        workouts=workouts,
         timeline_date=timeline_date,
         at_today=at_today,
         rl_predictions=rl_predictions,
@@ -1436,10 +1425,12 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         state.workout_view = build_workout_view(sync_result[1], filters)
         state._view_key = _view_key
 
-    view: WorkoutView = state.workout_view
-    all_seasons = view.all_seasons
-    featured_efforts = view.featured_efforts
-    efforts_filtered_by_event_and_display = view.efforts_filtered_by_event_and_display
+    workouts: WorkoutView = state.workout_view
+    all_seasons = workouts.all_seasons
+    featured_efforts = workouts.featured_efforts
+    efforts_filtered_by_event_and_display = (
+        workouts.efforts_filtered_by_event_and_display
+    )
 
     # ── Filters (selected sets used for chart-level excluded-event logic) ─────
     selected_dists = {
@@ -1489,7 +1480,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
     )
     if state._bounds_key != _bounds_key or state._bounds_data is None:
         state._bounds_data = compute_axis_bounds(
-            view.quality_efforts,
+            workouts.quality_efforts,
             show_watts,
             state.chart_x_metric == "duration",
             state.chart_log_x,
@@ -1504,7 +1495,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
     # ── Animation bundle + sim_command ───────────────────────────────────────
     _sim_command = manage_animation_bundle(
         state,
-        view=view,
+        workouts=workouts,
         sim_start=sim_start,
         total_days=total_days,
         selected_dists=selected_dists,
@@ -1522,7 +1513,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
 
     chart_cfg, pred_rows, pauls_k_fit, pauls_k, accuracy = _compute_chart_data(
         state,
-        view=view,
+        workouts=workouts,
         timeline_date=timeline_date,
         at_today=at_today,
         rl_predictions=rl_predictions,

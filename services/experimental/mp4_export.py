@@ -36,8 +36,8 @@ from services.rowing_utils import (
     pauls_law_pace,
     loglog_fit,
     loglog_predict_pace,
+    workouts_before_date,
 )
-from services.ranked_filters import workouts_before_date
 
 
 # ---------------------------------------------------------------------------

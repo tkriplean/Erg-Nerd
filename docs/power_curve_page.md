@@ -62,67 +62,57 @@ files.
 |                                            | math and no cache-invalidation hashing — |
 |                                            | those live in the pure layers.           |
 +--------------------------------------------+------------------------------------------+
-| `power_curve_state.py`                     | **Pure, no HyperDiv.** Frozen            |
-|                                            | dataclasses — `FilterSpec`,              |
-|                                            | `ChartStyle`, `AnimationState` — group   |
-|                                            | the flat `hd.state` attributes into      |
-|                                            | hashable value-objects. These            |
-|                                            | dataclasses *are* the cache keys;        |
-|                                            | `hash(filters)` replaces the hand-rolled |
+| `power_curve_workouts.py`                  | **Pure, no HyperDiv.** The filtered      |
+|                                            | collection of the user's workouts as the |
+|                                            | page sees it. `FilterSpec` (frozen       |
+|                                            | dataclass — the cache key; `hash(        |
+|                                            | filters)` replaces the hand-rolled       |
 |                                            | string MD5s that used to gate each       |
-|                                            | pipeline stage. Also defines the         |
-|                                            | `Predictor` registry (`PREDICTORS`,      |
-|                                            | `PREDICTORS_BY_KEY`) — single source of  |
-|                                            | truth for predictor name, description,   |
-|                                            | whether the "Show components" toggle     |
-|                                            | applies, and the table column key.       |
-+--------------------------------------------+------------------------------------------+
-| `power_curve_pipeline.py`                  | **Pure, no HyperDiv.** `WorkoutView` +   |
+|                                            | pipeline stage) +  `WorkoutView` +       |
 |                                            | `build_workout_view(raw_workouts,        |
 |                                            | filters)` — one traversal collapsing the |
 |                                            | four filter stages (`quality_efforts`,   |
 |                                            | `efforts_filtered_by_event`,             |
 |                                            | `efforts_filtered_by_event_and_display`, |
 |                                            | `featured_efforts`) into a single        |
-|                                            | value-object. Also `compute_axis_bounds` |
-|                                            | (sensitive to `log_x` because log axes   |
-|                                            | use multiplicative padding).             |
+|                                            | value-object.                            |
 +--------------------------------------------+------------------------------------------+
-| `power_curve_animation.py`                 | HyperDiv plumbing between the pure       |
-|                                            | pipeline and the Chart.js animation.     |
-|                                            | `manage_animation_bundle` computes the   |
+| `power_curve_animation.py`                 | The animation layer top-to-bottom.       |
+|                                            | Snapshot helpers (`compute_timeline_     |
+|                                            | snapshot`, `ol_event_line`, `pcts`),     |
+|                                            | keyframe build (`build_keyframes` heavy  |
+|                                            | loop run in a background `hd.task`,      |
+|                                            | `wrap_payload` cheap style-only          |
+|                                            | wrapper, `build_sb_annotations`,         |
+|                                            | `build_wr_static_datasets`), and the     |
+|                                            | HyperDiv bundle lifecycle                |
+|                                            | (`manage_animation_bundle` computes the  |
 |                                            | split `data_key` / `style_key`, caches   |
 |                                            | keyframes in `state.sim_bundle_data`,    |
 |                                            | re-wraps via `wrap_payload` on           |
 |                                            | style-only change, and returns the       |
-|                                            | `sim_command` the JS plugin consumes.    |
-|                                            | Also houses `load_world_record_data`     |
-|                                            | (lazy WC fetch) and                      |
-|                                            | `lookup_bundle_entry` (pred-table lookup |
-|                                            | by day).                                 |
+|                                            | `sim_command` the JS plugin consumes;    |
+|                                            | `lookup_bundle_entry` — pred-table       |
+|                                            | lookup by day).                          |
 +--------------------------------------------+------------------------------------------+
-| `power_curve_timeline.py`                  | **Pure, no HyperDiv.**                   |
-|                                            | `compute_timeline_snapshot`              |
-|                                            | (per-keyframe model computation — CP     |
-|                                            | fit, pred datasets, pred rows,           |
-|                                            | accuracy), `build_keyframes` (heavy loop |
-|                                            | — runs in a background `hd.task`,        |
-|                                            | returns `(bundle_data,                   |
-|                                            | pred_table_lookup)`), `wrap_payload`     |
-|                                            | (cheap style wrapper — O(1); injects     |
-|                                            | `log_x`, `log_y`, `overlay_bests`, and   |
-|                                            | `x_bounds`/`y_bounds`).                  |
-+--------------------------------------------+------------------------------------------+
-| `power_curve_chart_builder.py`             | **Pure, no HyperDiv.** Builds the        |
+| `power_curve_chart_config.py`              | **Pure, no HyperDiv.** Builds the        |
 |                                            | Chart.js config dict for the static      |
 |                                            | (non-animating) chart: predictor curves, |
 |                                            | scatter datasets, season/lifetime        |
 |                                            | overlay lines, canvas labels, WC         |
-|                                            | overlay. Contains `build_pred_datasets`, |
-|                                            | `compute_lifetime_bests`,                |
-|                                            | `build_wr_static_datasets`, and the      |
-|                                            | per-model dataset builders used by       |
-|                                            | `compute_timeline_snapshot`.             |
+|                                            | overlay. Contains `build_chart_config`,  |
+|                                            | `build_pred_datasets`, `compute_axis_    |
+|                                            | bounds`, and the per-model dataset       |
+|                                            | builders used by                         |
+|                                            | `compute_timeline_snapshot` in the       |
+|                                            | animation module (tightly-coupled        |
+|                                            | siblings).                               |
++--------------------------------------------+------------------------------------------+
+| `concept2_sync.py`                         | Render-top helpers that ensure the data  |
+|                                            | the page needs is loaded: `concept2_     |
+|                                            | sync(client)` for user workouts,         |
+|                                            | `load_world_record_data(state, profile)` |
+|                                            | for the lazy WC fetch.                   |
 +--------------------------------------------+------------------------------------------+
 | `power_curve_chart_plugin.py`              | `PowerCurveChart` HyperDiv plugin shell  |
 |                                            | — declares the Python↔JS props           |
@@ -156,28 +146,21 @@ files.
 +---------------------------+------------------------------------------+
 | Module                    | Responsibility                           |
 +---------------------------+------------------------------------------+
-| `ranked_predictions.py`   | `build_prediction_table_data` —          |
-|                           | multi-model prediction computation.      |
-|                           | Returns `{"rows": [...], "accuracy":     |
-|                           | {...}}` where `accuracy` holds per-model |
-|                           | RMSE / R² / n over enabled events.       |
-|                           | Folding accuracy into the services layer |
-|                           | makes `_prediction_table` a pure         |
-|                           | renderer.                                |
-+---------------------------+------------------------------------------+
-| `predictor_samplers.py`   | Pure sampler functions (`cp_pace_at`,    |
-|                           | `loglog_pace_at`, `pauls_law_pace_at`,   |
-|                           | `rowinglevel_pace_at`) — "given an       |
-|                           | anchor dict, what's this model's pace at |
-|                           | distance d?" Called by                   |
-|                           | `build_prediction_table_data` and the    |
-|                           | ensemble-average dataset builder.        |
-+---------------------------+------------------------------------------+
-| `ranked_filters.py`       | Quality filters                          |
-|                           | (`apply_quality_filters`),               |
-|                           | `seasons_from`, simulation gating;       |
-|                           | `sim_workouts_at` is the date-slice used |
-|                           | by the slow path.                        |
+| `predictions.py`          | Predictor registry (`Predictor`,         |
+|                           | `PREDICTORS`, `PREDICTORS_BY_KEY` —      |
+|                           | single source of truth for each          |
+|                           | predictor's `name`, `extended_           |
+|                           | description`, `computed_from_            |
+|                           | components`, optional `component_label`  |
+|                           | / `component_desc`), per-model pace      |
+|                           | samplers (`cp_pace_at`, `loglog_pace_    |
+|                           | at`, `pauls_law_pace_at`, `rowinglevel_  |
+|                           | pace_at`), and `build_prediction_table_  |
+|                           | data` (multi-model prediction            |
+|                           | computation returning `{"rows": [...],   |
+|                           | "accuracy": {...}}` — per-model RMSE /   |
+|                           | R² / n over enabled events; makes        |
+|                           | `_prediction_table` a pure renderer).    |
 +---------------------------+------------------------------------------+
 | `critical_power_model.py` | 2-component CP model fitting, curve      |
 |                           | generation, sprint/stayer crossover,     |
@@ -192,7 +175,12 @@ files.
 +---------------------------+------------------------------------------+
 | `rowing_utils.py`         | Constants, pace/watts conversions,       |
 |                           | Paul's Law, log-log fit, season helpers, |
-|                           | `compute_featured_workouts`.             |
+|                           | rankability/quality filters              |
+|                           | (`is_rankable_noninterval`,              |
+|                           | `apply_quality_filters`, `seasons_from`, |
+|                           | `workouts_before_date`),                 |
+|                           | `compute_featured_workouts`,             |
+|                           | `compute_lifetime_bests`.                |
 +---------------------------+------------------------------------------+
 | `formatters.py`           | Display formatters including             |
 |                           | `fmt_result_duration`.                   |
@@ -201,18 +189,18 @@ files.
 ### Data flow summary
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-concept2_sync()                                   [app.py, services/concept2.py]
+concept2_sync()                                   [components/concept2_sync.py]
   └─ raw workouts
-       └─ build_workout_view(raw, FilterSpec)     [power_curve_pipeline.py]
+       └─ build_workout_view(raw, FilterSpec)     [power_curve_workouts.py]
             └─ WorkoutView
-                 ├─ compute_axis_bounds()         [power_curve_pipeline.py]
+                 ├─ compute_axis_bounds()         [power_curve_chart_config.py]
                  ├─ compute_featured_workouts()   [services/rowing_utils.py]
                  └─ manage_animation_bundle()     [power_curve_animation.py]
-                       ├─ build_keyframes() (bg)  [power_curve_timeline.py]
+                       ├─ build_keyframes() (bg)  [power_curve_animation.py]
                        │     └─ compute_timeline_snapshot() per PB keyframe
                        │           └─ build_prediction_table_data()
                        │                 └─ samplers (cp/loglog/pl/rl)
-                       ├─ wrap_payload()          [power_curve_timeline.py]
+                       ├─ wrap_payload()          [power_curve_animation.py]
                        │     injects log_x/log_y/overlay_bests/x_bounds/y_bounds
                        └─ sim_command
                  ⬇
@@ -224,10 +212,10 @@ concept2_sync()                                   [app.py, services/concept2.py]
 3. State Variables
 ------------------
 
-All state is declared as `hd.state(...)` at the top of `power_curve_page()`. The
-conceptual groupings — `FilterSpec`, `ChartStyle`, `AnimationState` — are
-defined in `power_curve_state.py` and constructed once per render from these
-flat attributes; they are what downstream layers receive.
+All state is declared as `hd.state(...)` at the top of `power_curve_page()`.
+`FilterSpec` is defined in `power_curve_workouts.py` and constructed once per
+render from the flat attributes; it is the cache key the workouts pipeline
+receives (`hash(filters)` invalidates the whole pipeline atomically).
 
 ### Chart / filter state
 
@@ -495,7 +483,7 @@ The animation layer has two halves:
 | `bundle_key`            | `"{data_key}-{style_key}"` — JS uses     |
 |                         | this to decide whether to re-apply       |
 +-------------------------+------------------------------------------+
-| `log_x` / `log_y`       | From `ChartStyle`                        |
+| `log_x` / `log_y`       | From the page's style state              |
 +-------------------------+------------------------------------------+
 | `draw_lifetime_line`    | `overlay_bests == "PBs"`                 |
 +-------------------------+------------------------------------------+
@@ -869,9 +857,10 @@ toggle is hidden.
 12. Axis Bounds
 ---------------
 
-`compute_axis_bounds` lives in `power_curve_pipeline.py` because its sole data
-input is `quality_efforts` (the first pipeline stage). It's sensitive to
-`log_x`: log axes pad multiplicatively, linear axes pad additively.
+`compute_axis_bounds` lives in `power_curve_chart_config.py` because axis
+geometry is a chart-config concern. Its sole data input is `quality_efforts`
+(the first pipeline stage). It's sensitive to `log_x`: log axes pad
+multiplicatively, linear axes pad additively.
 
 Bounds are held fixed across the simulation so the chart doesn't shift as the
 scrubber moves. They **are** recomputed when `log_x` toggles — which is why they

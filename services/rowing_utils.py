@@ -238,6 +238,34 @@ def compute_featured_workouts(workouts: list, best_filter: str) -> list:
     return featured
 
 
+def compute_lifetime_bests(workouts: list) -> tuple[dict, dict]:
+    """
+    Return (lifetime_best, lifetime_best_anchor) derived from the given workout list.
+
+    Applies a pace validity filter (PACE_MIN…PACE_MAX, non-None distance, known
+    category) to each workout before considering it for a category best.
+
+    lifetime_best        — {cat_key: best_pace_sec_per_500m}
+    lifetime_best_anchor — {cat_key: distance_m_of_the_best_performance}
+    """
+    lifetime_best: dict = {}
+    lifetime_best_anchor: dict = {}
+    for w in workouts:
+        pace = compute_pace(w)
+        if pace is None or pace < PACE_MIN or pace > PACE_MAX:
+            continue
+        dist = w.get("distance")
+        if not dist:
+            continue
+        cat = workout_cat_key(w)
+        if cat is None:
+            continue
+        if cat not in lifetime_best or pace < lifetime_best[cat]:
+            lifetime_best[cat] = pace
+            lifetime_best_anchor[cat] = dist
+    return lifetime_best, lifetime_best_anchor
+
+
 def compute_duration_s(workout: dict) -> Optional[float]:
     """
     Return the total duration of a ranked workout in seconds, or None.
@@ -342,3 +370,178 @@ def loglog_predict_pace(slope: float, intercept: float, dist_m: float) -> float:
     """Return predicted pace (sec/500m) for dist_m using a log-log fit."""
     watts = math.exp(intercept + slope * math.log(dist_m))
     return 500.0 / (watts / 2.80) ** (1.0 / 3.0)
+
+
+# ---------------------------------------------------------------------------
+# Ranked-event classification + season helpers
+# ---------------------------------------------------------------------------
+
+
+def is_rankable_noninterval(r: dict) -> bool:
+    """True if the workout matches a ranked distance or time and is not an interval."""
+    if r.get("workout_type") in INTERVAL_WORKOUT_TYPES:
+        return False
+    dist = r.get("distance")
+    time = r.get("time")
+    return dist in RANKED_DIST_SET or time in RANKED_TIME_SET
+
+
+def seasons_from(results: list) -> list:
+    """Sorted list of seasons (newest first) present in the given results."""
+    return sorted(
+        {get_season(r["date"]) for r in results if r.get("date")},
+        reverse=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Quality-filter passes
+# ---------------------------------------------------------------------------
+
+
+def _window_best(event_timeline: list, w_date: date, cat) -> float:
+    """Return the best pace within ±QUALITY_WINDOW_DAYS of w_date for cat."""
+    best = float("inf")
+    for _dt, _c, _p in event_timeline:
+        if _c == cat and abs((_dt - w_date).days) <= QUALITY_WINDOW_DAYS:
+            if _p < best:
+                best = _p
+    return best
+
+
+def _dominated_by_longer(
+    dist_timeline: list, w_date: date, eff_dist, workout_pace: float
+) -> bool:
+    """Return True if any longer-event performance within the window is > ADJ_THRESH faster."""
+    _adj_thresh = 1.0 + ADJACENT_FILTER_PCT / 100.0
+    for _dt, _d, _p in dist_timeline:
+        if (
+            _d > eff_dist
+            and abs((_dt - w_date).days) <= QUALITY_WINDOW_DAYS
+            and workout_pace >= _p * _adj_thresh
+        ):
+            return True
+    return False
+
+
+def apply_quality_filters(workouts: list) -> list:
+    """
+    Apply the three quality-filter passes to a list of ranked workouts:
+
+      1. Lifetime-PB quality filter — drop if > PB_QUALITY_PCT% slower than the
+         event's all-time best.
+      2. Rolling-window season-best filter — drop if > SB_QUALITY_PCT% slower
+         than the best at the same event within ±QUALITY_WINDOW_DAYS.
+      3. Rolling-window cross-event domination filter — drop a shorter-event
+         workout if any longer-event performance within the window is more than
+         ADJACENT_FILTER_PCT% faster (by pace).
+
+    Returns the filtered list.
+    """
+    # 1) Lifetime-PB quality filter
+    _cat_pb: dict = {}
+    for _w in workouts:
+        _p = compute_pace(_w)
+        _c = workout_cat_key(_w)
+        if _p is not None and _c is not None:
+            if _c not in _cat_pb or _p < _cat_pb[_c]:
+                _cat_pb[_c] = _p
+    _pb_thresh = 1.0 + PB_QUALITY_PCT / 100.0
+    workouts = [
+        w
+        for w in workouts
+        if (c := workout_cat_key(w)) is not None
+        and (p := compute_pace(w)) is not None
+        and p <= _cat_pb.get(c, float("inf")) * _pb_thresh
+    ]
+
+    # 2) Rolling-window season-best filter
+    _sb_thresh = 1.0 + SB_QUALITY_PCT / 100.0
+    _event_timeline: list = []  # (date, cat_key, pace)
+    for _w in workouts:
+        _p = compute_pace(_w)
+        _c = workout_cat_key(_w)
+        _dt = parse_date(_w.get("date", ""))
+        if _p is not None and _c is not None and _dt != date.min:
+            _event_timeline.append((_dt, _c, _p))
+
+    workouts = [
+        w
+        for w in workouts
+        if (c := workout_cat_key(w)) is not None
+        and (p := compute_pace(w)) is not None
+        and (dt := parse_date(w.get("date", ""))) != date.min
+        and p <= _window_best(_event_timeline, dt, c) * _sb_thresh
+    ]
+
+    # 3) Rolling-window cross-event domination filter
+    _dist_timeline: list = []  # (date, effective_dist, pace)
+    for _w in workouts:
+        _p = compute_pace(_w)
+        _d = _w.get("distance")
+        _dt = parse_date(_w.get("date", ""))
+        if _p is not None and _d and _dt != date.min:
+            _dist_timeline.append((_dt, _d, _p))
+
+    workouts = [
+        w
+        for w in workouts
+        if (p := compute_pace(w)) is not None
+        and (d := w.get("distance"))
+        and (dt := parse_date(w.get("date", ""))) != date.min
+        and not _dominated_by_longer(_dist_timeline, dt, d, p)
+    ]
+
+    return workouts
+
+
+# ---------------------------------------------------------------------------
+# Simulation date-gating
+# ---------------------------------------------------------------------------
+
+
+def workouts_before_date(
+    rankable_efforts: list,
+    timeline_date: date,
+    selected_dists: set,
+    selected_times: set,
+    excluded_seasons: set,
+    best_filter: str,
+) -> list:
+    """
+    Return the workouts visible at *timeline_date*.
+
+    Quality filters (PB quality, rolling-window SB quality, cross-event
+    domination) are applied once upfront in power_curve_page.py before the
+    simulation receives the data — whether a performance was max/near-max
+    effort does not change as timeline_date advances.
+
+    This function only applies:
+      1. Date gate (workouts on or before timeline_date)
+      2. Event filter (selected_dists / selected_times)
+      3. Season filter (excluded_seasons)
+      4. best_filter ("All" | "PBs" | "SBs")
+    """
+    date_str = timeline_date.isoformat()
+
+    # 1. Date gate
+    in_time = [w for w in rankable_efforts if (w.get("date") or "")[:10] <= date_str]
+
+    # 2. Event filter
+    in_time = [
+        w
+        for w in in_time
+        if w.get("distance") in selected_dists or w.get("time") in selected_times
+    ]
+
+    # 3. Season filter
+    in_time = [
+        w for w in in_time if get_season(w.get("date", "")) not in excluded_seasons
+    ]
+
+    # 4. best_filter
+    if best_filter == "PBs":
+        return apply_best_only(in_time)
+    if best_filter == "SBs":
+        return apply_season_best_only(in_time)
+    return in_time

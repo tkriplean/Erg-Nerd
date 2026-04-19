@@ -232,8 +232,7 @@ Columns: Date · Season · Time (or Distance for time events) · Avg Pace · Avg
 |---|---|
 | `services/stroke_utils.py` | `build_races_data()`, `fetch_one_stroke()`, `build_wr_boat()`, `synthesize_strokes()` |
 | `services/concept2_records.py` | `get_age_group_records()` — fetches/caches Concept2 WR records for WR ghost boat |
-| `services/ranked_filters.py` | `is_rankable_noninterval()`, `apply_quality_filters()` |
-| `services/rowing_utils.py` | `RANKED_DISTANCES`, `RANKED_TIMES`, `get_season()`, `apply_best_only()`, `compute_pace()`, `compute_watts()`, `age_from_dob()`, `profile_complete()` |
+| `services/rowing_utils.py` | `is_rankable_noninterval()`, `apply_quality_filters()`, `RANKED_DISTANCES`, `RANKED_TIMES`, `get_season()`, `apply_best_only()`, `compute_pace()`, `compute_watts()`, `age_from_dob()`, `profile_complete()` |
 | `services/formatters.py` | `format_time()`, `fmt_split()` |
 | `services/local_storage_compression.py` | Compress/decompress stroke cache for localStorage |
 | `components/race_chart_plugin.py` | `RaceChart` HyperDiv plugin |

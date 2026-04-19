@@ -240,7 +240,7 @@ def stayer_sprinter_metrics(params: dict) -> dict:
 - `compute_duration_s(workout) -> float | None` — converts any ranked workout
   to its duration in seconds; handles both distance and time event types.
 
-### `components/power_curve_chart_builder.py`
+### `components/power_curve_chart_config.py`
 
 - Imports from `critical_power_model`
 - `build_chart_config()` accepts a `critical_power_params` keyword argument

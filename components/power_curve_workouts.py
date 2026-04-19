@@ -1,10 +1,18 @@
 """
-Workout-filtering pipeline for the Power Curve page.
+The filtered collection of the user's workouts, as the Power Curve page sees it.
 
 Exported:
+    FilterSpec         — frozen dataclass of the data-identity inputs.  Changing
+                         any field invalidates the workout filtering pipeline.
+                         Used as the cache key for ``build_workout_view``.
+                             machine                 "All" | "RowErg" | ...
+                             excluded_seasons        tuple[str, ...]
+                             dist_enabled            tuple[bool, ...]   (RANKED_DISTANCES)
+                             time_enabled            tuple[bool, ...]   (RANKED_TIMES)
+                             best_filter             "All" | "PBs" | "SBs"
+
     WorkoutView        — frozen dataclass grouping the 4 pipeline stages plus
-                         the derived ``all_seasons`` list.  Fields match the
-                         state-variable names previously cached separately:
+                         the derived ``all_seasons`` list.  Fields:
                              quality_efforts
                              efforts_filtered_by_event
                              efforts_filtered_by_event_and_display
@@ -17,35 +25,43 @@ Exported:
         stage independently — a single ``hash(filters)`` now invalidates the
         whole pipeline atomically.
 
-    compute_axis_bounds(quality_efforts, show_watts, use_duration, log_x)
-        Pure helper (previously ``_compute_axis_bounds`` in power_curve_page).
-        Lives here because its sole input is ``quality_efforts`` — the first
-        pipeline stage.
-
-No HyperDiv dependency — safe to import from anywhere.
+No HyperDiv dependency — safe to import from anywhere.  The companion axis-
+bounds helper lives in ``components/power_curve_chart_config.py`` because
+chart geometry is a chart-config concern, not a workouts concern.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from services.ranked_filters import (
-    apply_quality_filters,
-    is_rankable_noninterval,
-    seasons_from,
-)
 from services.rowing_utils import (
     RANKED_DISTANCES,
     RANKED_TIMES,
     apply_best_only,
+    apply_quality_filters,
     apply_season_best_only,
     compute_featured_workouts,
-    compute_pace,
-    compute_watts,
     get_season,
+    is_rankable_noninterval,
+    seasons_from,
 )
 
-from components.power_curve_state import FilterSpec
+
+# ───────────────────────────────────────────────────────────────────────────
+# Filter value-object
+# ───────────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class FilterSpec:
+    """Data-identity inputs. Changing any of these invalidates the workout
+    filtering pipeline (quality filters, event selection, best-filter)."""
+
+    machine: str
+    excluded_seasons: tuple  # tuple[str, ...]
+    dist_enabled: tuple  # tuple[bool, ...], index-aligned with RANKED_DISTANCES
+    time_enabled: tuple  # tuple[bool, ...], index-aligned with RANKED_TIMES
+    best_filter: str  # "All" | "PBs" | "SBs"
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -101,14 +117,10 @@ def build_workout_view(raw_workouts: list, filters: FilterSpec) -> WorkoutView:
 
     # Stage 2 — filter by selected distance/time events.
     selected_dists = {
-        dist
-        for i, (dist, _) in enumerate(RANKED_DISTANCES)
-        if filters.dist_enabled[i]
+        dist for i, (dist, _) in enumerate(RANKED_DISTANCES) if filters.dist_enabled[i]
     }
     selected_times = {
-        tenths
-        for i, (tenths, _) in enumerate(RANKED_TIMES)
-        if filters.time_enabled[i]
+        tenths for i, (tenths, _) in enumerate(RANKED_TIMES) if filters.time_enabled[i]
     }
     by_event: list = [
         w
@@ -118,7 +130,7 @@ def build_workout_view(raw_workouts: list, filters: FilterSpec) -> WorkoutView:
 
     # Stage 3 — apply best_filter for the chart/table display list.
     if filters.best_filter == "PBs":
-        display: list = apply_best_only(by_event)
+        display = apply_best_only(by_event)
     elif filters.best_filter == "SBs":
         display = apply_season_best_only(by_event)
     else:
@@ -135,46 +147,3 @@ def build_workout_view(raw_workouts: list, filters: FilterSpec) -> WorkoutView:
         featured_efforts=featured,
         all_seasons=all_seasons,
     )
-
-
-# ───────────────────────────────────────────────────────────────────────────
-# Axis bounds — pure helper, previously _compute_axis_bounds in page.py
-# ───────────────────────────────────────────────────────────────────────────
-
-
-def compute_axis_bounds(
-    quality_efforts: list,
-    show_watts: bool,
-    use_duration: bool,
-    log_x: bool,
-) -> tuple:
-    """Stable x/y bounds from all-time PBs so the chart doesn't rescale when
-    the user toggles individual events.  Returns (x_bounds, y_bounds);
-    either may be None if data is insufficient."""
-    bests = apply_best_only(quality_efforts)
-    if not bests:
-        return None, None
-    bp = [p for w in bests if (p := compute_pace(w)) and 60 < p < 400]
-    if use_duration:
-        bx = [
-            w.get("distance") * p / 500
-            for w in bests
-            if w.get("distance") and (p := compute_pace(w)) and 60 < p < 400
-        ]
-    else:
-        bx = [w.get("distance") for w in bests if w.get("distance")]
-    if not bp or not bx:
-        return None, None
-    xr, xR = min(bx), max(bx)
-    x_bounds = (
-        (xr / 1.45, xR * 1.45)
-        if log_x
-        else (
-            max(0, xr - max((xR - xr) * 0.1, xr * 0.1)),
-            xR + max((xR - xr) * 0.1, xr * 0.1),
-        )
-    )
-    by = [compute_watts(p) if show_watts else p for p in bp]
-    yr, yR = min(by), max(by)
-    ypad = max((yR - yr) * 0.15, 5 if not show_watts else 2)
-    return x_bounds, (yr - ypad, yR + ypad)

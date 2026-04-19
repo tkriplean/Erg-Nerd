@@ -2,25 +2,24 @@
 Chart configuration builder for the ranked-workouts view.
 
 Exported:
-  build_sb_annotations() — DateSlider timeline dot annotations (one per season SB)
-  ol_event_line()        — format the first overlay-label line ("Event  time-or-dist")
-  pcts()                 — compute (pct_pace, pct_watts) improvement between two paces
-  compute_lifetime_bests() — derive lifetime-best dicts from a raw workout list
   build_pred_datasets()  — build only the prediction-curve datasets for the active predictor
-  build_wr_static_datasets() — world-class record overlay datasets (time-invariant)
   build_chart_config()   — build the full Chart.js config dict
+  compute_axis_bounds()  — stable x/y bounds from all-time PBs
 
-All satellite helpers (_season_hsla, _pred_dataset, etc.) are private to this module.
-Prediction table data is built in services/ranked_predictions.py.
-Time-varying data (keyframe snapshots, animation payload) is in
-components/power_curve_timeline.py.
+All satellite helpers (_season_hsla, _pred_dataset, _wr_scatter_dataset,
+_wr_pred_datasets, etc.) are private to this module. A few of them
+(_season_hsla, _wr_pred_datasets, _wr_scatter_dataset) are also imported
+by the tightly-coupled sibling module power_curve_animation, which owns
+the time-varying chart helpers (snapshots, keyframe payloads, WC static
+datasets, SB annotations).
+
+Prediction table data is built in services/predictions.py.
 """
 
 from __future__ import annotations
 
 import math
 import re as _re
-from datetime import date
 
 import numpy as np
 
@@ -31,7 +30,7 @@ from services.rowing_utils import (
     SEASON_PALETTE,
     PACE_MIN,
     PACE_MAX,
-    parse_date,
+    apply_best_only,
     compute_pace,
     compute_watts,
     watts_to_pace,
@@ -47,7 +46,6 @@ from services.critical_power_model import (
     critical_power_event_points,
     crossover_point,
 )
-from services.formatters import fmt_split
 
 # ---------------------------------------------------------------------------
 # Short display labels for ranked distances — derived from RANKED_DISTANCES so
@@ -70,86 +68,6 @@ _DURATION_GRIDLINES: list[int] = [10, 60, 120, 240, 600, 1800, 3600, 7200]
 def _season_hsla(idx: int, lightness_offset: int, alpha: float) -> str:
     h, s, l = SEASON_PALETTE[idx % len(SEASON_PALETTE)]
     return f"hsla({h},{s}%,{max(l + lightness_offset, 0)}%,{alpha:.2f})"
-
-
-# ---------------------------------------------------------------------------
-# Timeline annotation helper
-# ---------------------------------------------------------------------------
-
-
-def build_sb_annotations(
-    featured_workouts: list,
-    sim_start: date,
-    included_seasons: list,
-    best_filter: str = "SBs",
-) -> list:
-    """
-    Return annotation dicts for the DateSlider timeline dots.
-    Each dict: {day: int, label: str, color: str}
-
-    featured_workouts — pre-computed by compute_featured_workouts(); the
-                        workouts that ever set a new PB or SB at the time
-                        performed, sorted newest-first.
-    """
-    sorted_seasons = sorted(included_seasons)
-    s_idx = {s: i for i, s in enumerate(sorted_seasons)}
-    lbl = "PB" if best_filter == "PBs" else "SB"
-    show_season = best_filter != "PBs"
-
-    annotations = []
-    for w in featured_workouts:
-        dt = parse_date(w.get("date", ""))
-        if dt == date.min:
-            continue
-        day = (dt - sim_start).days
-        if day < 0:
-            continue
-        pace = compute_pace(w)
-        cat = workout_cat_key(w)
-        if pace is None or cat is None:
-            continue
-        season = get_season(w.get("date", ""))
-        etype, evalue = cat
-        if etype == "dist":
-            time_tenths = round(pace * 10 * evalue / 500)
-            dist_label = _DIST_LABELS.get(evalue, f"{evalue:,}m")
-            label = f"{dist_label} {lbl} — {fmt_split(time_tenths)}"
-        else:
-            mins = evalue // 600
-            label = f"{mins}min {lbl} — {w.get('distance', 0):,}m"
-        if show_season:
-            label += f" ({season})"
-        color = _season_hsla(s_idx.get(season, 0), 0, 1.0)
-        annotations.append({"day": day, "label": label, "color": color})
-
-    return annotations
-
-
-# ---------------------------------------------------------------------------
-# Overlay label helpers
-# ---------------------------------------------------------------------------
-
-
-def ol_event_line(etype, evalue, pace, dist):
-    """Format 'Event  time-or-dist' for the first overlay label line."""
-    if etype == "dist":
-        _t = fmt_split(round(pace * 10 * evalue / 500))
-        return f"{_DIST_LABELS.get(evalue, f'{evalue:,}m')}  {_t}"
-    else:
-        return f"{evalue // 600}min  {dist:,}m"
-
-
-def pcts(old_pace, new_pace):
-    """Return (pct_pace, pct_watts) improvements; both 0.0 if no prior best."""
-    if not old_pace or old_pace <= new_pace:
-        return 0.0, 0.0
-    pp = (old_pace - new_pace) / old_pace * 100
-    pw = (
-        (compute_watts(new_pace) - compute_watts(old_pace))
-        / compute_watts(old_pace)
-        * 100
-    )
-    return pp, pw
 
 
 # ---------------------------------------------------------------------------
@@ -314,45 +232,6 @@ def _wr_pred_datasets(
         return ds
 
     return []
-
-
-# ---------------------------------------------------------------------------
-# Prediction table helpers
-# ---------------------------------------------------------------------------
-
-
-def compute_lifetime_bests(workouts: list) -> tuple[dict, dict]:
-    """
-    Return (lifetime_best, lifetime_best_anchor) derived from the given workout list.
-
-    Applies the same validity filter as build_chart_config() (pace in PACE_MIN…PACE_MAX,
-    non-None distance, known category) but operates on raw workout dicts rather than
-    the pre-processed data_points format used internally by build_chart_config().
-
-    lifetime_best        — {cat_key: best_pace_sec_per_500m}
-    lifetime_best_anchor — {cat_key: distance_m_of_the_best_performance}
-    """
-    lifetime_best: dict = {}
-    lifetime_best_anchor: dict = {}
-    for w in workouts:
-        pace = compute_pace(w)
-        if pace is None or pace < PACE_MIN or pace > PACE_MAX:
-            continue
-        dist = w.get("distance")
-        if not dist:
-            continue
-        cat = workout_cat_key(w)
-        if cat is None:
-            continue
-        if cat not in lifetime_best or pace < lifetime_best[cat]:
-            lifetime_best[cat] = pace
-            lifetime_best_anchor[cat] = dist
-    return lifetime_best, lifetime_best_anchor
-
-
-# ---------------------------------------------------------------------------
-# Main chart config builder
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -813,7 +692,7 @@ def _average_datasets(
                 _p = preds.get(int(_d)) or preds.get(str(int(_d)))
                 if _p is None:
                     # log-log interpolate within the RL curve for this anchor
-                    from services.ranked_predictions import _rl_interp_pace as _rl_ip
+                    from services.predictions import _rl_interp_pace as _rl_ip
 
                     _p = _rl_ip(preds, _d)
                 if _p is not None and PACE_MIN <= _p <= PACE_MAX:
@@ -1304,54 +1183,6 @@ def build_pred_datasets(
     return datasets, canvas_labels
 
 
-def build_wr_static_datasets(
-    wr_data: dict,
-    *,
-    predictor: str,
-    x_bounds: tuple,
-    y_bounds: tuple,
-    show_watts: bool,
-    is_dark: bool,
-    x_mode: str,
-    pauls_k: float = 5.0,
-) -> list:
-    """Build the world-class scatter + prediction datasets for the sim bundle.
-
-    These are time-invariant (WC records don't change during animation), so
-    they are computed once and stored in bundle.static_datasets.
-
-    Returns an empty list if wr_data is None or empty.
-    """
-    if not wr_data:
-        return []
-    _use_duration = x_mode == "duration"
-    x_min, x_max = x_bounds if x_bounds else (100.0, 42195.0)
-    y_min, y_max = y_bounds if y_bounds else (60.0, 250.0)
-
-    def _y(pace: float) -> float:
-        return round(compute_watts(pace), 1) if show_watts else round(pace, 3)
-
-    x_fn = (lambda dist, pace: round(dist * pace / 500.0, 2)) if _use_duration else None
-
-    scatter = _wr_scatter_dataset(
-        wr_data["lb"], wr_data["lba"], _y, _use_duration, is_dark
-    )
-    preds = _wr_pred_datasets(
-        wr_data,
-        predictor,
-        x_min,
-        x_max,
-        y_min,
-        y_max,
-        _y,
-        show_watts,
-        is_dark,
-        x_fn,
-        pauls_k,
-    )
-    return preds + [scatter]
-
-
 # ---------------------------------------------------------------------------
 # Main chart config builder — orchestrates the sub-builders above
 # ---------------------------------------------------------------------------
@@ -1735,3 +1566,46 @@ def build_chart_config(
             "layout": {"padding": 16},
         },
     }
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Axis bounds — stable x/y bounds from all-time PBs
+# ───────────────────────────────────────────────────────────────────────────
+
+
+def compute_axis_bounds(
+    quality_efforts: list,
+    show_watts: bool,
+    use_duration: bool,
+    log_x: bool,
+) -> tuple:
+    """Stable x/y bounds from all-time PBs so the chart doesn't rescale when
+    the user toggles individual events.  Returns (x_bounds, y_bounds);
+    either may be None if data is insufficient."""
+    bests = apply_best_only(quality_efforts)
+    if not bests:
+        return None, None
+    bp = [p for w in bests if (p := compute_pace(w)) and 60 < p < 400]
+    if use_duration:
+        bx = [
+            w.get("distance") * p / 500
+            for w in bests
+            if w.get("distance") and (p := compute_pace(w)) and 60 < p < 400
+        ]
+    else:
+        bx = [w.get("distance") for w in bests if w.get("distance")]
+    if not bp or not bx:
+        return None, None
+    xr, xR = min(bx), max(bx)
+    x_bounds = (
+        (xr / 1.45, xR * 1.45)
+        if log_x
+        else (
+            max(0, xr - max((xR - xr) * 0.1, xr * 0.1)),
+            xR + max((xR - xr) * 0.1, xr * 0.1),
+        )
+    )
+    by = [compute_watts(p) if show_watts else p for p in bp]
+    yr, yR = min(by), max(by)
+    ypad = max((yR - yr) * 0.15, 5 if not show_watts else 2)
+    return x_bounds, (yr - ypad, yR + ypad)

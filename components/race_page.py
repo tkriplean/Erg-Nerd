@@ -56,12 +56,15 @@ from services.rowing_utils import (
     compute_watts,
     age_from_dob,
 )
-from services.ranked_filters import is_rankable_noninterval, apply_quality_filters
 from services.formatters import format_time, fmt_split
 from services.stroke_utils import build_races_data, fetch_one_stroke, build_wr_boat
 from services.concept2_records import get_age_group_records
 from components.profile_page import get_profile
-from services.rowing_utils import profile_complete
+from services.rowing_utils import (
+    apply_quality_filters,
+    is_rankable_noninterval,
+    profile_complete,
+)
 from services.local_storage_compression import (
     compress_strokes_cache,
     decompress_strokes_cache,
