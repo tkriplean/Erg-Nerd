@@ -153,8 +153,6 @@ Distribution badge colours:
 
 ### Service layer (`services/volume_bins.py`)
 
-Pure Python — no HyperDiv, no I/O.
-
 | Function                  | Purpose                                                              |
 |---------------------------|----------------------------------------------------------------------|
 | `get_reference_sbs()`     | Best pace at key events within ±365 days                             |

@@ -13,6 +13,7 @@ enforced between outbound requests.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -21,6 +22,13 @@ from pathlib import Path
 from typing import Optional
 
 from bs4 import BeautifulSoup
+
+from services.rowing_utils import (
+    profile_complete,
+    compute_pace,
+    workout_cat_key,
+    age_from_dob,
+)
 
 # ---------------------------------------------------------------------------
 # Config
@@ -214,6 +222,78 @@ def _select_radio_by_label_and_value(page, label_text: str, value: str) -> bool:
     except Exception:
         pass
     return False
+
+
+def async_fetch_rowinglevel(state, profile: dict, chart_workouts: list) -> dict:
+    """
+    Launch (or resume) the background RowingLevel scrape.
+    Only fires when at_today and profile_complete; otherwise returns {}.
+    Uses a scope key derived from profile + PB hash so the task re-fires only
+    when its inputs change.
+    Returns rl_predictions (a dict — possibly empty).
+    """
+
+    import hyperdiv as hd
+
+    if not profile_complete(profile):
+        return {}
+
+    weight_kg = (
+        profile["weight"] * 0.453592
+        if profile["weight_unit"] == "lbs"
+        else profile["weight"]
+    )
+    lbest: dict = {}
+    lbest_anchor: dict = {}
+    lbest_dates: dict = {}
+    for w in chart_workouts:
+        p = compute_pace(w)
+        c = workout_cat_key(w)
+        d = w.get("distance")
+        if p is None or c is None or not d:
+            continue
+
+        if c not in lbest or p < lbest[c]:
+            lbest[c] = p
+            lbest_anchor[c] = d
+            lbest_dates[c] = w.get("date", "")
+
+    lbest_hash = hashlib.md5(
+        json.dumps(sorted((str(k), round(v, 2)) for k, v in lbest.items())).encode()
+    ).hexdigest()[:8]
+
+    key = (
+        profile.get("gender", ""),
+        age_from_dob(profile.get("dob", "")),
+        profile.get("weight", 0.0),
+        profile.get("weight_unit", "kg"),
+    )
+    key = hashlib.md5(json.dumps(key).encode()).hexdigest()[:10]
+
+    scope_key = f"rl_{key}_{lbest_hash}"
+
+    rl_predictions = {}
+    with hd.scope(scope_key):
+        rl_task = hd.task()
+
+        def _do_scrape(gender, current_age, wkg, lb, lb_anchor, lb_dates):
+            return fetch_all_pb_predictions(
+                [], lb, lb_anchor, gender, current_age, wkg, lbest_dates=lb_dates
+            )
+
+        rl_task.run(
+            _do_scrape,
+            profile["gender"],
+            age_from_dob(profile.get("dob", "")),
+            weight_kg,
+            lbest,
+            lbest_anchor,
+            lbest_dates,
+        )
+        if rl_task.done and rl_task.result:
+            rl_predictions = rl_task.result
+
+    return rl_predictions
 
 
 def fetch_predictions(

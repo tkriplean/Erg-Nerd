@@ -141,7 +141,7 @@ files.
 |                                            | `aligned_button`).                       |
 +--------------------------------------------+------------------------------------------+
 
-### Services layer (pure Python — `services/`)
+### Services layer (`services/`)
 
 +---------------------------+------------------------------------------+
 | Module                    | Responsibility                           |
