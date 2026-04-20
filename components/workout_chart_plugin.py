@@ -62,3 +62,9 @@ class StrokeChart(hd.Plugin):
     # Index of the interval band most recently clicked by the user.
     # -1 = none clicked. Python reads this to zoom the x-axis to that interval.
     clicked_band_idx = hd.Prop(hd.Int, -1)
+
+    # Monotonically increasing click counter. Distinct from clicked_band_idx
+    # so Python can tell "same band clicked again" apart from "stale value
+    # still sitting in the prop after a Reset" — Python tracks the last seq
+    # it has processed and only acts when seq advances.
+    click_seq = hd.Prop(hd.Int, 0)

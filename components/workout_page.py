@@ -59,6 +59,9 @@ from components.workout_table import (
 from components.workout_chart_builder import (
     build_interval_rows_and_bands,
     build_stroke_chart_config,
+    _interval_colors,
+    _points_from_strokes,
+    _stitch_interval_times,
 )
 from components.workout_chart_plugin import StrokeChart
 from services.interval_utils import interval_structure_key
@@ -147,22 +150,126 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
 # ---------------------------------------------------------------------------
 # Custom splits UI
 # ---------------------------------------------------------------------------
+#
+# Persisted shape (localStorage key "custom_splits"):
+#     {str(workout_id): {"unit": "m" | "s", "values": [int, ...]}}
+#
+# Legacy values (bare list of metres) are auto-migrated in memory on load; the
+# migrated shape is written back only when the user next clicks Recalculate on
+# that workout.
 
 _CUSTOM_SPLITS_LS_KEY = "custom_splits"
 
+_TIME_BASED_WORKOUT_TYPES = {"FixedTimeSplits"}
 
-def _custom_splits_ui(
-    workout_id: int,
-    strokes: list,
-    total_dist_m: int,
-    on_splits_change,
-) -> None:
-    """Chip-row editor for custom split distances."""
+
+def _format_mmss(seconds: int) -> str:
+    """Integer seconds → 'M:SS' (e.g. 90 → '1:30', 30 → '0:30')."""
+    s = max(0, int(seconds))
+    m, sec = divmod(s, 60)
+    return f"{m}:{sec:02d}"
+
+
+def _parse_time_input(text: str):
+    """Parse chip text into integer seconds.
+
+    Accepts bare integer seconds ("90") or M:SS ("1:30").  M:SS requires a
+    2-digit seconds side so that ambiguous inputs like "1:5" are rejected
+    (could mean 65s or 105s).
+
+    Returns (seconds: int, None) on success, (None, error_message: str) on
+    failure.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return None, "Enter a duration."
+    if ":" in raw:
+        parts = raw.split(":")
+        if len(parts) != 2:
+            return None, 'Use "M:SS" format.'
+        m_str, s_str = parts
+        if len(s_str) != 2:
+            return (
+                None,
+                'Use seconds ("90") or M:SS ("1:30"). '
+                f'"{raw}" is ambiguous — write "{m_str}:{s_str.zfill(2)}".',
+            )
+        try:
+            m_val = int(m_str)
+            s_val = int(s_str)
+        except ValueError:
+            return None, f'Could not parse "{raw}" as M:SS.'
+        if m_val < 0 or s_val < 0 or s_val >= 60:
+            return None, f'"{raw}" is out of range.'
+        total = m_val * 60 + s_val
+        if total <= 0:
+            return None, "Duration must be positive."
+        return total, None
+    # Bare integer seconds.
+    try:
+        v = int(raw)
+    except ValueError:
+        return None, 'Use seconds ("90") or M:SS ("1:30").'
+    if v <= 0:
+        return None, "Duration must be positive."
+    return v, None
+
+
+_DEFAULT_SPLIT_COUNT = 5
+_SPLIT_COUNT_OPTIONS = (2, 3, 4, 5, 6, 8, 10)
+
+
+def _even_splits(total: int, n: int) -> list:
+    """Divide `total` into `n` integer splits as evenly as possible.
+
+    Distributes the remainder onto the trailing splits (each gets +1) so the
+    list sums exactly to `total`.  Example: _even_splits(5001, 5) →
+    [1000, 1000, 1000, 1000, 1001].
+    """
+    if n <= 0 or total <= 0:
+        return []
+    base = total // n
+    rem = total - base * n
+    return [base + (1 if i >= n - rem else 0) for i in range(n)]
+
+
+def _normalize_saved_entry(saved):
+    """Coerce a localStorage value (legacy list or new dict) to the new shape.
+
+    Returns {"unit": "m"|"s", "values": [int,...]} or None.
+    """
+    if isinstance(saved, list):
+        return {"unit": "m", "values": [int(v) for v in saved]}
+    if isinstance(saved, dict) and "unit" in saved and "values" in saved:
+        return {
+            "unit": saved["unit"],
+            "values": [int(v) for v in saved["values"]],
+        }
+    return None
+
+
+def _custom_splits_ui(workout: dict, strokes: list, on_splits_change) -> None:
+    """Chip-row editor for custom split distances or durations.
+
+    For distance-based workouts, chips are metres.  For FixedTimeSplits,
+    chips are integer seconds displayed as M:SS; the text input accepts
+    either bare seconds or M:SS.
+    """
+    workout_id = workout.get("id")
+    wtype = workout.get("workout_type", "")
+    is_time_based = wtype in _TIME_BASED_WORKOUT_TYPES
+    total_dist_m = workout.get("distance") or 0
+    total_time_s = (workout.get("time") or 0) // 10
+
+    target = total_time_s if is_time_based else total_dist_m
+    target_unit = "s" if is_time_based else "m"
+
     s = hd.state(
         loaded=False,
         store={},
         editing=False,
         inputs=[],
+        unit=target_unit,
         error="",
     )
 
@@ -171,14 +278,24 @@ def _custom_splits_ui(
         if not ls.done:
             return
         raw = ls.result
-        s.store = json.loads(raw) if raw else {}
-        saved = s.store.get(str(workout_id))
-        if saved:
-            s.inputs = list(saved)
+        parsed = json.loads(raw) if raw else {}
+        # Migrate legacy list-valued entries in memory so reads are uniform.
+        store = {}
+        for k, v in parsed.items():
+            normalized = _normalize_saved_entry(v)
+            if normalized is not None:
+                store[k] = normalized
+        s.store = store
+        saved = store.get(str(workout_id))
+        if saved and saved["unit"] == target_unit:
+            s.inputs = list(saved["values"])
+            s.unit = saved["unit"]
         else:
-            n = total_dist_m // 500
-            rem = total_dist_m % 500
-            s.inputs = [500] * n + ([rem] if rem else [])
+            # Smart default: divide the workout into 5 as-even-as-possible
+            # splits (e.g. 5k → 5×1000m, 30min → 5×6:00).  Beats the old
+            # fixed 500m / 60s defaults on longer sessions.
+            s.inputs = _even_splits(target, _DEFAULT_SPLIT_COUNT)
+            s.unit = target_unit
         s.loaded = True
 
     with hd.box(gap=0.5, padding_bottom=0.5):
@@ -194,24 +311,34 @@ def _custom_splits_ui(
         if s.editing:
             with hd.box(gap=0.75):
                 with hd.hbox(gap=0.5, wrap="wrap", align="center"):
-                    for i, dist in enumerate(s.inputs):
+                    for i, v in enumerate(s.inputs):
                         with hd.scope(i):
-                            ti = hd.text_input(value=str(dist), width=5, size="small")
+                            display = _format_mmss(v) if s.unit == "s" else str(v)
+                            ti = hd.text_input(value=display, width=5, size="small")
                             if ti.changed:
-                                try:
-                                    new_val = int(ti.value)
+                                if s.unit == "s":
+                                    val, err = _parse_time_input(ti.value)
+                                else:
+                                    try:
+                                        val = max(1, int(ti.value))
+                                        err = None
+                                    except ValueError:
+                                        val = None
+                                        err = "Distances must be whole numbers."
+                                if val is None:
+                                    s.error = err or "Invalid input."
+                                else:
                                     lst = list(s.inputs)
-                                    lst[i] = max(1, new_val)
+                                    lst[i] = val
                                     s.inputs = lst
                                     s.error = ""
-                                except ValueError:
-                                    s.error = "Distances must be whole numbers."
 
                     add_btn = hd.icon_button(
                         "plus-circle", font_size="small", font_color="primary"
                     )
                     if add_btn.clicked:
-                        s.inputs = list(s.inputs) + [500]
+                        default = 60 if s.unit == "s" else 500
+                        s.inputs = list(s.inputs) + [default]
 
                     if len(s.inputs) > 1:
                         rem_btn = hd.icon_button(
@@ -220,20 +347,59 @@ def _custom_splits_ui(
                         if rem_btn.clicked:
                             s.inputs = list(s.inputs)[:-1]
 
+                # Even-split helper: regenerate chips as N as-equal-as-
+                # possible splits covering the whole workout.
+                with hd.hbox(gap=0.5, align="center"):
+                    hd.text(
+                        "Divide into",
+                        font_size="x-small",
+                        font_color="neutral-500",
+                    )
+                    with hd.dropdown(f"{len(s.inputs)} splits") as _n_dd:
+                        with hd.box(
+                            background_color="neutral-0",
+                            align="start",
+                            padding=0.25,
+                        ):
+                            for n in _SPLIT_COUNT_OPTIONS:
+                                with hd.scope(f"n_{n}"):
+                                    n_btn = hd.button(
+                                        f"{n} splits",
+                                        variant="text",
+                                        size="small",
+                                        font_weight="bold"
+                                        if n == len(s.inputs)
+                                        else "normal",
+                                    )
+                                    if n_btn.clicked:
+                                        new_vals = _even_splits(target, n)
+                                        if new_vals:
+                                            s.inputs = new_vals
+                                            s.error = ""
+                                        _n_dd.opened = False
+
                 actual_sum = sum(s.inputs)
-                diff = actual_sum - total_dist_m
+                diff = actual_sum - target
+                unit_noun = "s" if s.unit == "s" else "m"
+                target_display = (
+                    _format_mmss(target) if s.unit == "s" else f"{target:,}m"
+                )
+                sum_display = (
+                    _format_mmss(actual_sum) if s.unit == "s" else f"{actual_sum:,}m"
+                )
                 if s.error:
                     hd.text(s.error, font_color="danger", font_size="x-small")
                 elif abs(diff) > 2:
                     hd.text(
-                        f"Sum ({actual_sum:,}m) must equal workout distance "
-                        f"({total_dist_m:,}m) — off by {diff:+,}m.",
+                        f"Sum ({sum_display}) must equal workout "
+                        f"{'time' if s.unit == 's' else 'distance'} "
+                        f"({target_display}) — off by {diff:+,}{unit_noun}.",
                         font_color="warning-600",
                         font_size="x-small",
                     )
                 else:
                     hd.text(
-                        f"✓ Sum: {actual_sum:,}m",
+                        f"✓ Sum: {sum_display}",
                         font_color="success",
                         font_size="x-small",
                     )
@@ -242,16 +408,16 @@ def _custom_splits_ui(
                     "Recalculate",
                     variant="primary",
                     size="small",
-                    disabled=(abs(actual_sum - total_dist_m) > 2 or bool(s.error)),
+                    disabled=(abs(diff) > 2 or bool(s.error)),
                 )
                 if recalc_btn.clicked:
-                    splits_m = list(s.inputs)
-                    s.store[str(workout_id)] = splits_m
+                    obj = {"unit": s.unit, "values": list(s.inputs)}
+                    s.store[str(workout_id)] = obj
                     hd.local_storage.set_item(
                         _CUSTOM_SPLITS_LS_KEY, json.dumps(s.store)
                     )
                     s.editing = False
-                    on_splits_change(splits_m)
+                    on_splits_change(obj)
 
 
 # ---------------------------------------------------------------------------
@@ -259,22 +425,42 @@ def _custom_splits_ui(
 # ---------------------------------------------------------------------------
 
 
-def _recalculate_splits(strokes: list, split_distances_m: list) -> list:
+def _build_interp(strokes: list, workout: dict):
+    """Build (interp_time, interp_distance) helpers over a synthetic-extended
+    stroke stream.
+
+    A synthetic final entry is appended at (total_distance, total_time) when
+    the last real stroke tails short of either total.  This guarantees that
+    interp_time(total_distance) == total_time and interp_distance(total_time)
+    == total_distance, so split sums reconcile to the workout totals.
+
+    The synthetic sentinel is used for interpolation only; callers that need
+    per-stroke aggregations (SPM, HR, watts averages) should iterate the
+    original `strokes` list, not these helpers' backing arrays.
     """
-    Interpolate stroke data to compute split metrics at custom distance boundaries.
+    if not strokes:
+        return None, None
 
-    Returns a list of dicts:
-        {distance, time_tenths, pace_tenths, spm, hr_avg, hr_max, max_watts}
+    total_d_dm = (workout.get("distance") or 0) * 10  # decimeters
+    total_t_tenths = workout.get("time") or 0  # tenths of seconds
 
-    Stroke d is in decimeters; t is in tenths of a second.
-    """
-    if not strokes or not split_distances_m:
-        return []
+    last = strokes[-1]
+    last_d_dm = last.get("d", 0)
+    last_t = last.get("t", 0)
+    need_synth = (total_d_dm > 0 and last_d_dm < total_d_dm - 5) or (
+        total_t_tenths > 0 and last_t < total_t_tenths - 1
+    )
 
-    d_m = [s.get("d", 0) / 10.0 for s in strokes]
-    t_t = [s.get("t", 0) for s in strokes]
+    extended = list(strokes)
+    if need_synth:
+        synth_d = max(total_d_dm, last_d_dm)
+        synth_t = max(total_t_tenths, last_t)
+        extended.append({"d": synth_d, "t": synth_t})
 
-    def interp_time(target_m: float) -> Optional[float]:
+    d_m = [s.get("d", 0) / 10.0 for s in extended]
+    t_t = [s.get("t", 0) for s in extended]
+
+    def interp_time(target_m: float):
         if target_m <= 0:
             return 0.0
         if target_m >= d_m[-1]:
@@ -292,19 +478,113 @@ def _recalculate_splits(strokes: list, split_distances_m: list) -> list:
         frac = (target_m - d_m[lo]) / span
         return t_t[lo] + frac * (t_t[hi] - t_t[lo])
 
-    def strokes_in_range(lo_m: float, hi_m: float) -> list:
-        return [s for s, dm in zip(strokes, d_m) if lo_m <= dm <= hi_m]
+    def interp_distance(target_t: float):
+        if target_t <= 0:
+            return 0.0
+        if target_t >= t_t[-1]:
+            return float(d_m[-1])
+        lo, hi = 0, len(t_t) - 1
+        while lo < hi - 1:
+            mid = (lo + hi) // 2
+            if t_t[mid] < target_t:
+                lo = mid
+            else:
+                hi = mid
+        span = t_t[hi] - t_t[lo]
+        if span <= 0:
+            return float(d_m[lo])
+        frac = (target_t - t_t[lo]) / span
+        return d_m[lo] + frac * (d_m[hi] - d_m[lo])
+
+    return interp_time, interp_distance
+
+
+def _recalculate_splits(strokes: list, workout: dict, custom_splits) -> list:
+    """
+    Interpolate stroke data to compute split metrics at custom boundaries.
+
+    `custom_splits` is {"unit": "m"|"s", "values": [int,...]}.  For "m" the
+    values are metre-lengths of successive splits; for "s" they are integer
+    seconds.  A synthetic final stroke is appended at the workout's reported
+    totals so that sum(distance) == total_distance and sum(time) ==
+    total_time within ±1 (see _build_interp).
+
+    Returns a list of dicts:
+        {distance, time_tenths, pace_tenths, spm, hr_avg, hr_max, max_watts}
+
+    Stroke d is in decimeters; t is in tenths of a second.
+    """
+    if not strokes or not custom_splits:
+        return []
+    values = custom_splits.get("values") or []
+    if not values:
+        return []
+    unit = custom_splits.get("unit", "m")
+
+    interp_time, interp_distance = _build_interp(strokes, workout)
+    if interp_time is None:
+        return []
+
+    # Aggregation windows use the original strokes only so the synthetic
+    # sentinel never skews SPM/HR/watts averages.
+    d_m_real = [s.get("d", 0) / 10.0 for s in strokes]
+    t_t_real = [s.get("t", 0) for s in strokes]
+
+    def strokes_in_d_range(lo_m: float, hi_m: float) -> list:
+        return [s for s, dm in zip(strokes, d_m_real) if lo_m <= dm <= hi_m]
+
+    def strokes_in_t_range(lo_t: float, hi_t: float) -> list:
+        return [s for s, tt in zip(strokes, t_t_real) if lo_t <= tt <= hi_t]
 
     result = []
+    if unit == "s":
+        cumulative_tenths = 0.0
+        for dur_s in values:
+            t_start_tenths = cumulative_tenths
+            t_end_tenths = cumulative_tenths + dur_s * 10
+            d_start = interp_distance(t_start_tenths)
+            d_end = interp_distance(t_end_tenths)
+            dist_m = max(0.0, d_end - d_start)
+            dur_tenths = dur_s * 10
+
+            window = strokes_in_t_range(t_start_tenths, t_end_tenths)
+            spm_vals = [s.get("spm") for s in window if s.get("spm")]
+            hr_vals = [s.get("hr") for s in window if s.get("hr")]
+            pace_tenths = (dur_tenths * 500.0 / dist_m) if dist_m > 0 else None
+            max_w = None
+            if window:
+                wl = [
+                    compute_watts(s["p"] / 10.0)
+                    for s in window
+                    if s.get("p") and s["p"] > 0
+                ]
+                if wl:
+                    max_w = max(wl)
+
+            result.append(
+                {
+                    "distance": dist_m,
+                    "time_tenths": dur_tenths,
+                    "pace_tenths": pace_tenths,
+                    "spm": (sum(spm_vals) / len(spm_vals)) if spm_vals else None,
+                    "hr_avg": (sum(hr_vals) / len(hr_vals)) if hr_vals else None,
+                    "hr_max": max(hr_vals) if hr_vals else None,
+                    "max_watts": max_w,
+                }
+            )
+            cumulative_tenths = t_end_tenths
+        return result
+
+    # unit == "m"
     cumulative = 0.0
-    for dist_m in split_distances_m:
+    for dist_m in values:
         start_m = cumulative
         end_m = cumulative + dist_m
         t_start = interp_time(start_m) or 0.0
         t_end = interp_time(end_m) or 0.0
         dur_tenths = t_end - t_start
 
-        window = strokes_in_range(start_m, end_m)
+        window = strokes_in_d_range(start_m, end_m)
         spm_vals = [s.get("spm") for s in window if s.get("spm")]
         hr_vals = [s.get("hr") for s in window if s.get("hr")]
         pace_tenths = (dur_tenths * 500.0 / dist_m) if dist_m > 0 else None
@@ -342,7 +622,7 @@ def _recalculate_splits(strokes: list, split_distances_m: list) -> list:
 def _splits_table(
     workout: dict,
     strokes: Optional[list],
-    custom_split_dists: Optional[list],
+    custom_splits: Optional[dict],
     focused_idx: int = -1,
     on_focus=None,
 ) -> None:
@@ -370,8 +650,8 @@ def _splits_table(
 
     # For split-based workouts
     splits_data = None
-    if custom_split_dists and strokes:
-        splits_data = _recalculate_splits(strokes, custom_split_dists)
+    if custom_splits and strokes:
+        splits_data = _recalculate_splits(strokes, workout, custom_splits)
     elif wo.get("splits"):
         splits_data = []
         for sp in wo["splits"]:
@@ -439,7 +719,7 @@ def _split_row(i, sp, col_w, ts, has_hr):
 
     cells = [
         (str(i + 1), col_w[0], "neutral-500"),
-        (fmt_distance(sp.get("distance")), col_w[1], None),
+        (fmt_distance(round(sp.get("distance"), 1)), col_w[1], None),
         (
             format_time(round(sp.get("time_tenths", 0)))
             if sp.get("time_tenths")
@@ -603,6 +883,88 @@ def _table_frame(
 # ---------------------------------------------------------------------------
 
 
+def _compare_cell(w: dict, state) -> None:
+    """Render the Compare checkbox for one similar-workout row.
+
+    Muted "—" when the row has no stroke data (can't draw a line).  The
+    checkbox is disabled while Stack mode is active so the two modes stay
+    mutually exclusive.
+    """
+    if not w.get("stroke_data"):
+        hd.text("—", font_color="neutral-300", font_size="small")
+        return
+    wid = w.get("id")
+    if wid is None:
+        hd.text("—", font_color="neutral-300", font_size="small")
+        return
+    checked = wid in state.compared_workouts
+    cb = hd.checkbox(checked=checked, disabled=state.stack, size="small")
+    if cb.changed:
+        current = set(state.compared_workouts)
+        if cb.checked:
+            current.add(wid)
+            state.stack = False
+        else:
+            current.discard(wid)
+        state.compared_workouts = tuple(sorted(current))
+
+
+def _build_compare_series(
+    compared_ids: tuple,
+    compare_tasks: dict,
+    workouts_dict: dict,
+    *,
+    show_watts: bool,
+) -> list:
+    """Turn per-id stroke-fetch tasks into the compare_series list consumed by
+    build_stroke_chart_config.  Skips entries that errored or haven't
+    resolved yet.
+    """
+    if not compared_ids:
+        return []
+    colors = _interval_colors(len(compared_ids))
+    out = []
+    for i, cid in enumerate(compared_ids):
+        task = compare_tasks.get(cid)
+        if task is None or not task.done or task.error:
+            continue
+        raw = task.result if isinstance(task.result, list) else []
+        if not raw:
+            continue
+        cw = workouts_dict.get(str(cid)) or {}
+        wtype = cw.get("workout_type", "")
+        intervals = (
+            (cw.get("workout") or {}).get("intervals")
+            if wtype in INTERVAL_WORKOUT_TYPES
+            else None
+        )
+        stitched = _stitch_interval_times(raw, intervals=intervals)
+        pace_pts, spm_pts, hr_pts, has_hr = _points_from_strokes(
+            stitched, show_watts=show_watts
+        )
+        date_str = (cw.get("date") or "")[:10]
+        dist = cw.get("distance") or 0
+        if wtype in INTERVAL_WORKOUT_TYPES:
+            suffix = interval_structure_key(cw, compact=True)
+        else:
+            suffix = fmt_distance(dist) if dist else ""
+        label = f"{date_str} · {suffix}".strip(" ·") or f"Workout {cid}"
+        total_t_s = (cw.get("time") or 0) / 10.0
+        out.append(
+            {
+                "id": cid,
+                "label": label,
+                "color": colors[i],
+                "pace_points": pace_pts,
+                "spm_points": spm_pts,
+                "hr_points": hr_pts,
+                "has_hr": has_hr,
+                "total_time_s": total_t_s,
+            }
+        )
+    return out
+
+
 def _find_similar(workout: dict, all_workouts: list, n: int = 8) -> list:
     wtype = workout.get("workout_type", "")
     wid = workout.get("id")
@@ -640,12 +1002,19 @@ def _find_similar(workout: dict, all_workouts: list, n: int = 8) -> list:
 # ---------------------------------------------------------------------------
 
 
-def _chart_controls(state, can_stack: bool, has_hr: bool, is_interval: bool) -> None:
+def _chart_controls(
+    state,
+    can_stack: bool,
+    has_hr: bool,
+    is_interval: bool,
+    has_compares: bool,
+) -> None:
     """
     Render the two-row chart control bar and mutate state in place.
 
-    Row 1: Pace/Watts radio · Stack switch (if multi-band) · Reset zoom button
-    Row 2: (stacked mode only) per-series visibility switches
+    Row 1: Pace/Watts radio · Stack switch (if multi-band; disabled while
+           any compares are active) · Reset zoom button
+    Row 2: (stacked or compare mode) per-series visibility switches
     """
     with hd.box(gap=0.75, padding_bottom=0.25):
         # Row 1: metric toggle · stack switch · reset zoom
@@ -661,7 +1030,12 @@ def _chart_controls(state, can_stack: bool, has_hr: bool, is_interval: bool) -> 
                     stack_lbl = "Stack intervals"
                 else:
                     stack_lbl = "Stack splits"
-                stack_sw = hd.switch(stack_lbl, checked=state.stack, size="small")
+                stack_sw = hd.switch(
+                    stack_lbl,
+                    checked=state.stack,
+                    size="small",
+                    disabled=has_compares,
+                )
                 if stack_sw.changed:
                     state.stack = stack_sw.checked
                     if stack_sw.checked:
@@ -674,8 +1048,8 @@ def _chart_controls(state, can_stack: bool, has_hr: bool, is_interval: bool) -> 
                     state.focused_interval = None
                     state.focused_interval_excluding_rest = None
 
-        # Row 2 (stacked only): per-series visibility toggles
-        if state.stack:
+        # Row 2: per-series visibility toggles (stacked mode or compare mode)
+        if state.stack or has_compares:
             with hd.hbox(gap=1.5, align="center"):
                 metric_label = "Watts" if state.metric == "watts" else "Pace"
                 pace_sw = hd.switch(metric_label, checked=state.show_pace, size="small")
@@ -711,6 +1085,7 @@ def workout_page(session_id: int, client, user_id: str) -> None:
         show_spm=False,  # show SPM in stacked / compare mode
         show_hr=False,  # show HR in stacked / compare mode
         compared_workouts=(),  # tuple[int,...] of other workout ids to overlay
+        last_click_seq=0,  # last chart.click_seq we've processed
     )
 
     # ── Pre-fetch workout list (task-cached; free on repeat renders) ────────
@@ -739,6 +1114,18 @@ def workout_page(session_id: int, client, user_id: str) -> None:
     if has_strokes and stroke_task.done and not stroke_task.error:
         strokes = stroke_task.result if isinstance(stroke_task.result, list) else []
 
+    # ── Fetch strokes for each compared workout (task-cached per id) ─────────
+
+    compare_tasks: dict = {}
+    compare_loading = False
+    for cid in state.compared_workouts:
+        with hd.scope(f"compare_strokes_{cid}"):
+            ct = hd.task()
+            ct.run(lambda cid=cid: client.get_strokes(int(user_id), cid))
+            compare_tasks[cid] = ct
+            if ct.running:
+                compare_loading = True
+
     # ── Title ────────────────────────────────────────────────────────────────
 
     if is_interval:
@@ -763,7 +1150,13 @@ def workout_page(session_id: int, client, user_id: str) -> None:
     # ── Layout ───────────────────────────────────────────────────────────────
 
     total_dist = workout.get("distance") or 0
-    show_custom = has_strokes and not is_interval and total_dist > 0
+    total_time_tenths = workout.get("time") or 0
+    is_time_based = wtype in _TIME_BASED_WORKOUT_TYPES
+    show_custom = (
+        has_strokes
+        and not is_interval
+        and (total_dist > 0 or (is_time_based and total_time_tenths > 0))
+    )
 
     with hd.box(padding=(1, 2, 0, 4), gap=3, align="center"):
         with hd.hbox(gap=4, align="center", justify="end"):
@@ -832,6 +1225,18 @@ def workout_page(session_id: int, client, user_id: str) -> None:
                     has_hr = any(s.get("hr") for s in strokes)
                     can_stack = is_interval or bool(
                         (workout.get("workout") or {}).get("splits")
+                        or state.custom_splits
+                    )
+                    has_compares = bool(state.compared_workouts)
+                    compare_series = (
+                        _build_compare_series(
+                            state.compared_workouts,
+                            compare_tasks,
+                            _workouts_dict,
+                            show_watts=(state.metric == "watts"),
+                        )
+                        if has_compares and not state.stack
+                        else None
                     )
 
                     with hd.scope("chart"):
@@ -847,16 +1252,33 @@ def workout_page(session_id: int, client, user_id: str) -> None:
                             show_pace=state.show_pace,
                             show_spm=state.show_spm,
                             show_hr=state.show_hr,
+                            custom_splits=state.custom_splits,
+                            compare_series=compare_series,
                         )
                         chart = StrokeChart(config=cfg, height="50vh")
+                        # Fire only on *new* clicks — the plugin's
+                        # clicked_band_idx prop keeps its last value across
+                        # renders, so we key off a monotonic seq counter
+                        # instead.  Without this, Reset zoom would re-focus
+                        # the stale band on the next render.
                         if (
                             not state.stack
+                            and chart.click_seq > state.last_click_seq
                             and chart.clicked_band_idx >= 0
-                            and chart.clicked_band_idx != state.focused_interval
                         ):
                             state.focused_interval = chart.clicked_band_idx
+                            state.last_click_seq = chart.click_seq
 
-                    _chart_controls(state, can_stack, has_hr, is_interval)
+                    if compare_loading:
+                        with hd.hbox(gap=0.5, align="center"):
+                            hd.spinner()
+                            hd.text(
+                                "Loading compare data…",
+                                font_color="neutral-500",
+                                font_size="x-small",
+                            )
+
+                    _chart_controls(state, can_stack, has_hr, is_interval, has_compares)
 
                 else:
                     hd.text(
@@ -876,11 +1298,10 @@ def workout_page(session_id: int, client, user_id: str) -> None:
                     )
                     if show_custom:
                         _custom_splits_ui(
-                            workout_id=workout["id"],
+                            workout=workout,
                             strokes=strokes or [],
-                            total_dist_m=total_dist,
-                            on_splits_change=lambda dists: setattr(
-                                state, "custom_splits", dists
+                            on_splits_change=lambda obj: setattr(
+                                state, "custom_splits", obj
                             ),
                         )
                 _splits_table(
@@ -907,6 +1328,14 @@ def workout_page(session_id: int, client, user_id: str) -> None:
                 is_interval_workout = (
                     workout.get("workout_type", "") in INTERVAL_WORKOUT_TYPES
                 )
+                compare_col = ColumnDef(
+                    key="compare",
+                    header="Compare",
+                    width="5.5rem",
+                    render_value=lambda w: "",
+                    render_cell=lambda w: _compare_cell(w, state),
+                    sortable=False,
+                )
                 if is_interval_workout:
                     # Similar sessions are mostly intervals — show structure column
                     workout_col = ColumnDef(
@@ -928,6 +1357,7 @@ def workout_page(session_id: int, client, user_id: str) -> None:
                         COL_WATTS,
                         COL_SPM,
                         COL_HR,
+                        compare_col,
                         COL_LINK,
                     ]
                 else:
@@ -941,6 +1371,7 @@ def workout_page(session_id: int, client, user_id: str) -> None:
                         COL_DRAG,
                         COL_SPM,
                         COL_HR,
+                        compare_col,
                         COL_LINK,
                     ]
                 WorkoutTable(similar, cols)

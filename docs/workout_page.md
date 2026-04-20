@@ -132,7 +132,7 @@ even when the last stroke arrives a few tenths before the interval ends.
 | Control | What it does |
 |---|---|
 | **Pace / Watts** radio | Switch the primary Y-axis between pace (sec/500m) and watts |
-| **Stack** switch | Enter stacked-intervals mode (available when there are multiple work bands) |
+| **Stack** switch | Enter stacked-intervals mode (available when there are multiple work bands; disabled while any Compare boxes are checked) |
 | **Reset zoom** button | Appears when a band is zoomed; resets to full x-axis |
 
 ### Controls — stacked mode
@@ -140,7 +140,12 @@ even when the last stroke arrives a few tenths before the interval ends.
 Enabled by the **Stack** switch.  Each work interval is overlaid on a shared
 x-axis starting at t = 0, coloured with an HSL palette from blue to orange.
 A Chart.js legend shows one entry per interval.  Entering stack mode clears
-any active zoom.
+any active zoom.  SPM and HR overlays default to **off** in stacked mode to
+keep the chart readable; toggle them back on via the switches below the chart.
+
+For non-interval workouts the stacked-mode bands are derived from the active
+custom splits — editing the custom-split chips and recalculating changes the
+intervals that get overlaid.
 
 An additional row of per-series visibility switches appears below the chart:
 
@@ -149,6 +154,30 @@ An additional row of per-series visibility switches appears below the chart:
 | **Pace** / **Watts** | Show or hide the pace/watts series for all intervals |
 | **SPM** | Show or hide the stroke-rate series for all intervals |
 | **HR** | Show or hide the heart-rate series (only present when HR data exists) |
+
+### Controls — compare mode
+
+Ticking any **Compare** checkbox in the Similar sessions table overlays that
+workout's pace (or watts), SPM, and HR series on the main chart.  Any number
+of rows can be compared at once; each is drawn as a solid line in a distinct
+HSL colour, with a Chart.js legend showing the workout date and label.  The
+primary workout keeps its own colour; compared workouts are distinguished
+by colour alone (no dashing).
+
+The legend is interactive — clicking a legend entry toggles that workout's
+visibility without zooming.  Band click-to-zoom is restricted to the plot
+area, so clicks on the legend or axes never hijack the zoom.
+
+Compare and Stack are mutually exclusive: while any Compare boxes are checked
+the Stack switch is disabled, and while Stack is on the Compare checkboxes are
+disabled.  The same per-series visibility switches that appear in stacked
+mode (**Pace/Watts**, **SPM**, **HR**) appear below the chart in compare mode
+and default to **off** for SPM and HR.
+
+Compared-workout selections are session-only — they are not persisted to
+localStorage and reset when the detail view is closed.  Compared workouts
+must have stroke data; rows without stroke data show a muted "—" in the
+Compare column instead of a checkbox.
 
 ### Interval bands (normal mode)
 
@@ -209,24 +238,50 @@ Columns: `#` · `Distance` · `Time` · `Pace` · `Watts` · `SPM` · `Avg HR` �
 The custom split editor appears when **all** of the following are true:
 - The workout is not an interval type
 - `stroke_data=True` (stroke data is required to interpolate new boundaries)
-- Total workout distance is known
+- Total workout distance (or total time, for time-based workouts) is known
 
-The editor shows a row of editable distance chips.  The default is the
-standard 500m splits.  The user can add, remove, or edit chips.
+The editor shows a row of editable chips.  For distance-based workouts
+(`FixedDistanceSplits`, `JustRow`) the chips are metres; for time-based
+workouts (`FixedTimeSplits`) they are elapsed time.  The default is the
+workout divided into **5 as-even-as-possible splits** (e.g. a 5k opens as
+`5 × 1000m`, a 30-minute piece as `5 × 6:00`).  Any remainder is distributed
+onto the trailing splits so the chips always sum exactly to the workout
+total.  The user can add, remove, or edit chips.
+
+**Even-split helper:** A "Divide into" dropdown next to the chips regenerates
+the whole row as `N` equal splits (options: 2, 3, 4, 5, 6, 8, 10).  It's the
+fast path for the common case — pick `N`, optionally tweak a chip, hit
+Recalculate.
+
+**Time input format:** Time chips accept either integer seconds (`"90"`) or
+M:SS (`"1:30"`).  A colon in the input triggers M:SS parsing; the seconds
+side must be exactly two digits and less than 60, so `"1:05"` is valid but
+`"1:5"` is rejected as ambiguous.
 
 **Validation:** The sum of all chip values must equal the workout's total
-distance within ±2 metres.  A warning is shown while the sum is off; the
-**Recalculate** button is disabled.
+distance (metres) or total time (seconds) within ±2.  A warning is shown
+while the sum is off; the **Recalculate** button is disabled.
 
 **Recalculation:** When recalculate is clicked, `_recalculate_splits()` in
-`workout_page.py` interpolates elapsed time from the stroke data at each
-cumulative split boundary (binary search + linear interpolation on the `d`
-field), then computes pace, SPM, and HR for each window.
+`workout_page.py` interpolates each cumulative split boundary from the
+stroke data (binary search + linear interpolation on `d` for metre splits
+or on `t` for time splits), then computes pace, SPM, and HR for each window.
+
+**Synthetic final stroke:** Stroke data frequently tails a few metres/tenths
+short of the workout's reported total distance and time.  During
+interpolation only, `_recalculate_splits()` appends a synthetic stroke at
+`(total_distance_dm, total_time_tenths)` so the final boundary lands exactly
+on the workout totals and the per-split distance and time columns sum
+cleanly to those totals.  SPM, HR, and watts aggregation iterate over real
+strokes only — the sentinel never contributes to averages.
 
 **Persistence:** Custom split configurations are saved to the browser's
 `localStorage` under the key `"custom_splits"` as a JSON object
-`{str(workout_id): [dist_m, ...]}`.  They survive page refreshes and are
-loaded back automatically the next time that workout is opened.
+`{str(workout_id): {"unit": "m" | "s", "values": [int, ...]}}`.  They
+survive page refreshes and are loaded back automatically the next time that
+workout is opened.  Legacy entries stored as a bare list are migrated in
+memory to `{"unit": "m", "values": [...]}` on load; the new shape is written
+back to localStorage only on the next Recalculate click.
 
 ---
 
@@ -235,6 +290,11 @@ loaded back automatically the next time that workout is opened.
 The similar sessions table at the bottom of the page shows up to 8 workouts
 from the user's history that are most similar to the current session.  Each
 row is clickable and navigates directly to that session's detail view.
+
+Each row also has a **Compare** checkbox (to the left of the **view** link).
+Ticking it overlays that workout on the main chart — see
+§4 *Controls — compare mode*.  Rows without stroke data show a muted "—"
+instead of a checkbox.  The checkbox is disabled while Stack is on.
 
 ### Matching logic
 
@@ -286,12 +346,6 @@ Navigating to that URL triggers the routing logic in `_dashboard_view()`.
   is made.  On slow connections there may be a brief spinner before the chart
   appears.  Summary cards and the splits table (from the cached workout object)
   are visible immediately.
-
-- **Custom splits for timed events.** The custom split editor currently works
-  in terms of metres.  For timed-event workouts (30 min, 60 min, etc.) where
-  the user may want splits by elapsed time rather than distance, this is not
-  yet supported.  The editor is shown but splits by time boundary must be
-  translated to approximate distances manually.
 
 - **1-minute and very short workouts.** Stroke data for very short workouts
   may contain only a handful of strokes, making the chart sparse.

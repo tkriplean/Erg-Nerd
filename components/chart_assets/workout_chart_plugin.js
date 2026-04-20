@@ -11,6 +11,7 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
   ctx.domElement.appendChild(canvas);
 
   let chartInstance = null;
+  let clickSeq = 0;
 
   // -----------------------------------------------------------------------
   // Formatters
@@ -266,9 +267,14 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
     const spmSegColor    = cfg.spmColor       || "#1e40af";
     const spmFadedColor  = cfg.spmFadedColor  || "rgba(30,64,175,0.0)";
 
-    // Clone datasets and attach segment callbacks to pace and SPM series.
+    // Clone datasets and attach segment callbacks to the *primary* pace
+    // and SPM series.  Compare-overlay datasets are flagged isCompare so
+    // we leave their borderColor/borderWidth untouched — each compared
+    // workout keeps its own distinct colour.
     const datasets = (cfg.datasets || []).map(ds => {
       const d = Object.assign({}, ds);
+      if (d.isCompare) return d;
+      if (d.borderDash) return d;
       if (d.yAxisID === "y") {
         d.segment = {
           borderColor: ctx => segFaded(ctx) ? paceFadedColor : paceColor,
@@ -325,20 +331,34 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
         maintainAspectRatio: false,
         interaction: { mode: "index", intersect: false },
         plugins: {
-          legend: { display: false },
+          legend: cfg.showLegend
+            ? {
+                display: true,
+                position: "top",
+                labels: {
+                  usePointStyle: true,
+                  pointStyle: "line",
+                  filter: (item) => !item.text.startsWith("_"),
+                  color: tickColor,
+                  font: { size: 11 },
+                },
+              }
+            : { display: false },
           tooltip: {
             callbacks: {
               title: (items) => "@ " + formatTime(items[0].parsed.x),
               label: (item) => {
                 const ds = datasets[item.datasetIndex] || {};
+                const name = (ds.label || "").replace(/^_/, "");
+                const prefix = cfg.showLegend ? ` ${name}: ` : " ";
                 if (ds.yAxisID === "y") {
                   // pace or watts
-                  if (cfg.showWatts) return ` ${Math.round(item.parsed.y)} W`;
-                  return ` ${formatPace(item.parsed.y)}`;
+                  if (cfg.showWatts) return `${prefix}${Math.round(item.parsed.y)} W`;
+                  return `${prefix}${formatPace(item.parsed.y)}`;
                 }
-                if (ds.yAxisID === "yspm") return ` ${item.parsed.y} spm`;
-                if (ds.yAxisID === "yhr")  return ` ${item.parsed.y} bpm`;
-                return ` ${item.parsed.y}`;
+                if (ds.yAxisID === "yspm") return `${prefix}${item.parsed.y} spm`;
+                if (ds.yAxisID === "yhr")  return `${prefix}${item.parsed.y} bpm`;
+                return `${prefix}${item.parsed.y}`;
               },
             },
           },
@@ -375,14 +395,26 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
 
     chartInstance = new Chart(canvas, chartCfg);
 
-    // Band click → zoom
+    // Band click → zoom.  Ignore clicks outside the plot area (legend,
+    // axes, padding) so legend-item toggles don't hijack a band click.
     canvas.addEventListener("click", (evt) => {
       if (!chartInstance) return;
       const rect = canvas.getBoundingClientRect();
       const xPx = evt.clientX - rect.left;
+      const yPx = evt.clientY - rect.top;
+      const area = chartInstance.chartArea;
+      if (
+        !area ||
+        xPx < area.left || xPx > area.right ||
+        yPx < area.top  || yPx > area.bottom
+      ) {
+        return;
+      }
       const band = findBandAtX(bands, xPx, chartInstance);
       if (band) {
+        clickSeq += 1;
         ctx.updateProp("clicked_band_idx", band.idx);
+        ctx.updateProp("click_seq", clickSeq);
       }
     });
   }
