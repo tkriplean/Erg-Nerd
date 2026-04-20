@@ -20,14 +20,8 @@ Exported:
                              all_seasons
 
     build_workout_view(raw_workouts, filters)  → WorkoutView
-        Pure, memoizable.  One traversal through all stages.  Replaces the 4
-        parallel caches + 4 hand-rolled string keys that used to gate each
-        stage independently — a single ``hash(filters)`` now invalidates the
-        whole pipeline atomically.
-
-No HyperDiv dependency — safe to import from anywhere.  The companion axis-
-bounds helper lives in ``components/power_curve_chart_config.py`` because
-chart geometry is a chart-config concern, not a workouts concern.
+        Pure, memoizable.  One traversal through all stages. A single ``hash(filters)`` 
+        invalidates the whole pipeline atomically.
 """
 
 from __future__ import annotations

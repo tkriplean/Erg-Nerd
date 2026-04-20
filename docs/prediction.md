@@ -280,14 +280,3 @@ only across events that are currently enabled via the row toggles.  Lower RMSE
 and R² closer to 1.0 indicate a better fit.  `n=` shows how many events
 contributed.
 
----
-
-## 8. Code Organisation
-
-| File | Responsibility |
-|---|---|
-| `services/rowing_utils.py` | `pauls_law_pace` (takes optional `k` param), `compute_pauls_constant`, `loglog_fit`, `loglog_predict_pace`, pace/watts conversions, RANKED_DISTANCES / RANKED_TIMES constants |
-| `services/critical_power_model.py` | Two-component CP model, fitting, curve generation, crossover and sprint/stayer metrics |
-| `services/predictions.py` | Predictor registry + per-model pace samplers + `build_prediction_table_data` (all four predictors, both event types) |
-| `components/power_curve_chart_config.py` | `build_chart_config` (chart datasets including prediction curves and components), `_rl_interp_pace`. `compute_lifetime_bests` lives in `services/rowing_utils.py`. |
-| `components/power_curve_page.py` | State management, chart settings UI, prediction table renderer, event toggles, accuracy row |

@@ -1,17 +1,16 @@
 """
 Residual Python-side helpers for the Power Curve chart after Stage 3 of the
-refactor.  Scatter, best-lines, prediction curves and axis options are now
-built in JS (see components/chart_assets/power_curve_chart_plugin.js).
+refactor.  Scatter, best-lines, prediction curves are now
+built in JS (see components/chart_assets/power_curve_chart_plugin.js), except 
+for the prediction curves dealing with world records. 
+
+TODO: treat WR prediction curves the same as others by dealing with them in 
+power_curve_chart_plugin.js. This module should be able to be eliminated. 
 
 This module keeps:
 
-  compute_axis_bounds()    — stable x/y bounds from all-time PBs.  Called once
-                             per render in power_curve_page and passed as a
-                             prop so the chart doesn't rescale when the user
-                             toggles individual events.
-
-  _season_hsla / _pred_dataset / _with_alpha / _wr_scatter_dataset /
-  _wr_pred_datasets / _rowinglevel_datasets / _pauls_law_datasets /
+  _season_hsla / _pred_dataset / _with_alpha / wr_scatter_dataset /
+  wr_pred_datasets / _rowinglevel_datasets / _pauls_law_datasets /
   _loglog_dataset / _cp_datasets / _average_datasets
                            — shared with components/power_curve_animation.py,
                              which builds the world-record overlay datasets
@@ -21,6 +20,7 @@ This module keeps:
                              changes) and the full CP/ensemble math is still
                              easier in Python.  A later stage may port them.
 """
+
 
 from __future__ import annotations
 
@@ -100,7 +100,7 @@ def _pred_dataset(
     }
 
 
-def _wr_scatter_dataset(
+def wr_scatter_dataset(
     wr_lb: dict, wr_lba: dict, _y, _use_duration: bool, is_dark: bool
 ) -> dict:
     """
@@ -131,7 +131,7 @@ def _wr_scatter_dataset(
     }
 
 
-def _wr_pred_datasets(
+def wr_pred_datasets(
     wr_data: dict,
     predictor: str,
     x_min: float,
@@ -751,46 +751,3 @@ def _average_datasets(
                 )
 
     return out
-
-
-# ───────────────────────────────────────────────────────────────────────────
-# Axis bounds — stable x/y bounds from all-time PBs
-# ───────────────────────────────────────────────────────────────────────────
-
-
-def compute_axis_bounds(
-    quality_efforts: list,
-    show_watts: bool,
-    use_duration: bool,
-    log_x: bool,
-) -> tuple:
-    """Stable x/y bounds from all-time PBs so the chart doesn't rescale when
-    the user toggles individual events.  Returns (x_bounds, y_bounds);
-    either may be None if data is insufficient."""
-    bests = apply_best_only(quality_efforts)
-    if not bests:
-        return None, None
-    bp = [p for w in bests if (p := compute_pace(w)) and 60 < p < 400]
-    if use_duration:
-        bx = [
-            w.get("distance") * p / 500
-            for w in bests
-            if w.get("distance") and (p := compute_pace(w)) and 60 < p < 400
-        ]
-    else:
-        bx = [w.get("distance") for w in bests if w.get("distance")]
-    if not bp or not bx:
-        return None, None
-    xr, xR = min(bx), max(bx)
-    x_bounds = (
-        (xr / 1.45, xR * 1.45)
-        if log_x
-        else (
-            max(0, xr - max((xR - xr) * 0.1, xr * 0.1)),
-            xR + max((xR - xr) * 0.1, xr * 0.1),
-        )
-    )
-    by = [compute_watts(p) if show_watts else p for p in bp]
-    yr, yR = min(by), max(by)
-    ypad = max((yR - yr) * 0.15, 5 if not show_watts else 2)
-    return x_bounds, (yr - ypad, yR + ypad)

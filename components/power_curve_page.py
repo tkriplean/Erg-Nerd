@@ -14,7 +14,7 @@ Helper logic is split across:
   components/power_curve_workouts.py  — FilterSpec + WorkoutView + build_workout_view
   components/power_curve_animation.py — timeline snapshot + keyframe build +
                                         bundle lifecycle + SB annotations
-  components/power_curve_chart_config.py — chart config builder + compute_axis_bounds
+  components/power_curve_chart_prediction_datasets.py — wr prediction dataset
   components/concept2_sync.py         — concept2_sync + load_world_record_data
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -116,23 +116,21 @@ CHART / PREDICTION
   dist * pace / 500.
 """
 
-import hashlib
 import json
 from datetime import date, timedelta
 import hyperdiv as hd
 
 from services.rowinglevel import fetch_all_pb_predictions
 from services.rowing_utils import (
+    apply_best_only,
+    compute_pace,
     RANKED_DISTANCES,
     RANKED_TIMES,
-    compute_pace,
-    compute_watts,
-    workout_cat_key,
-    age_from_dob,
 )
 from components.concept2_sync import concept2_sync
 from components.profile_page import get_profile
 from services.rowing_utils import profile_complete
+from services.rowinglevel import async_fetch_rowinglevel
 
 from services.concept2_records import wr_category_label
 from components.power_curve_chart_plugin import PowerCurveChart
@@ -149,9 +147,7 @@ from components.workout_table import (
     COL_HR,
     COL_LINK,
 )
-from components.power_curve_chart_config import (
-    compute_axis_bounds,
-)
+
 from services.predictions import PREDICTORS, PREDICTORS_BY_KEY
 from components.power_curve_workouts import (
     FilterSpec,
@@ -176,22 +172,6 @@ from components.hyperdiv_extensions import radio_group, grid_box
 _SPEED_OPTIONS = ("0.5x", "1x", "4x", "16x")
 _SPEED_DAYS = {"0.5x": 1, "1x": 7, "4x": 30, "16x": 91}
 _SIM_LOOKAHEAD_STEPS = 4  # ghost/arrow lookahead = this many sim steps ahead
-
-
-# ---------------------------------------------------------------------------
-# Profile hash helper
-# ---------------------------------------------------------------------------
-
-
-def _profile_hash(profile: dict) -> str:
-    """Short hash of profile fields that affect RowingLevel predictions."""
-    key = (
-        profile.get("gender", ""),
-        age_from_dob(profile.get("dob", "")),
-        profile.get("weight", 0.0),
-        profile.get("weight_unit", "kg"),
-    )
-    return hashlib.md5(json.dumps(key).encode()).hexdigest()[:10]
 
 
 # ---------------------------------------------------------------------------
@@ -894,7 +874,7 @@ def _prediction_table(
 
 
 # ---------------------------------------------------------------------------
-# Pure data helpers  (no HyperDiv, no side-effects)
+# Pure data helpers
 # ---------------------------------------------------------------------------
 
 
@@ -925,95 +905,68 @@ def _compute_sim_timeline(
     return sim_start, total_days, timeline_date, at_today, included_seasons
 
 
-def _expand_y_bounds_for_wc(
-    y_bounds: tuple | None,
-    wr_data: dict | None,
+# ───────────────────────────────────────────────────────────────────────────
+# Axis bounds — stable x/y bounds from all-time PBs
+# ───────────────────────────────────────────────────────────────────────────
+
+
+def compute_axis_bounds(
+    quality_efforts: list,
     show_watts: bool,
-) -> tuple | None:
-    """Expand y_bounds to include world-class pace/watts values.
-
-    compute_axis_bounds uses user PBs only; WC rowers are faster, so without
-    expansion the WC overlay points would be clipped.  Returns the original
-    y_bounds unchanged when wr_data is absent or empty.
-    """
-    if y_bounds is None or not wr_data:
-        return y_bounds
-    _wr_y_vals = [
-        compute_watts(pace) if show_watts else pace
-        for pace in wr_data["lb"].values()
-        if pace > 0
-    ]
-    if not _wr_y_vals:
-        return y_bounds
-    _ypad = max((y_bounds[1] - y_bounds[0]) * 0.1, 5.0 if not show_watts else 2.0)
-    return (
-        min(y_bounds[0], min(_wr_y_vals) - _ypad),
-        max(y_bounds[1], max(_wr_y_vals) + _ypad),
+    use_duration: bool,
+    log_x: bool,
+    wr_data=None,
+) -> tuple:
+    """Stable x/y bounds from all-time PBs so the chart doesn't rescale when
+    the user toggles individual events.  Returns (x_bounds, y_bounds);
+    either may be None if data is insufficient."""
+    bests = apply_best_only(quality_efforts)
+    if not bests:
+        return None, None
+    bp = [p for w in bests if (p := compute_pace(w)) and 60 < p < 400]
+    if use_duration:
+        bx = [
+            w.get("distance") * p / 500
+            for w in bests
+            if w.get("distance") and (p := compute_pace(w)) and 60 < p < 400
+        ]
+    else:
+        bx = [w.get("distance") for w in bests if w.get("distance")]
+    if not bp or not bx:
+        return None, None
+    xr, xR = min(bx), max(bx)
+    x_bounds = (
+        (xr / 1.45, xR * 1.45)
+        if log_x
+        else (
+            max(0, xr - max((xR - xr) * 0.1, xr * 0.1)),
+            xR + max((xR - xr) * 0.1, xr * 0.1),
+        )
     )
+    by = [compute_watts(p) if show_watts else p for p in bp]
+    yr, yR = min(by), max(by)
+    ypad = max((yR - yr) * 0.15, 5 if not show_watts else 2)
 
+    y_bounds = (yr - ypad, yR + ypad)
 
-# ---------------------------------------------------------------------------
-# HyperDiv async helpers  (use hd.task / hd.scope / hd.state)
-# ---------------------------------------------------------------------------
-
-
-def _fetch_rowinglevel(state, profile: dict, chart_workouts: list) -> dict:
-    """
-    Launch (or resume) the background RowingLevel scrape.
-    Only fires when at_today and profile_complete; otherwise returns {}.
-    Uses a scope key derived from profile + PB hash so the task re-fires only
-    when its inputs change.
-    Returns rl_predictions (a dict — possibly empty).
-    """
-    if not profile_complete(profile):
-        return {}
-
-    weight_kg = (
-        profile["weight"] * 0.453592
-        if profile["weight_unit"] == "lbs"
-        else profile["weight"]
-    )
-    lbest: dict = {}
-    lbest_anchor: dict = {}
-    lbest_dates: dict = {}
-    for w in chart_workouts:
-        p = compute_pace(w)
-        c = workout_cat_key(w)
-        d = w.get("distance")
-        if p is None or c is None or not d:
-            continue
-        if c not in lbest or p < lbest[c]:
-            lbest[c] = p
-            lbest_anchor[c] = d
-            lbest_dates[c] = w.get("date", "")
-
-    lbest_hash = hashlib.md5(
-        json.dumps(sorted((str(k), round(v, 2)) for k, v in lbest.items())).encode()
-    ).hexdigest()[:8]
-    scope_key = f"rl_{_profile_hash(profile)}_{lbest_hash}"
-
-    rl_predictions = {}
-    with hd.scope(scope_key):
-        rl_task = hd.task()
-
-        def _do_scrape(gender, current_age, wkg, lb, lb_anchor, lb_dates):
-            return fetch_all_pb_predictions(
-                [], lb, lb_anchor, gender, current_age, wkg, lbest_dates=lb_dates
+    if wr_data is not None:
+        """Expand y_bounds to include world-class pace/watts values."""
+        _wr_y_vals = [
+            compute_watts(pace) if show_watts else pace
+            for pace in wr_data["lb"].values()
+            if pace > 0
+        ]
+        if _wr_y_vals:
+            _ypad = max(
+                (y_bounds[1] - y_bounds[0]) * 0.1, 5.0 if not show_watts else 2.0
             )
 
-        rl_task.run(
-            _do_scrape,
-            profile["gender"],
-            age_from_dob(profile.get("dob", "")),
-            weight_kg,
-            lbest,
-            lbest_anchor,
-            lbest_dates,
-        )
-        if rl_task.done and rl_task.result:
-            rl_predictions = rl_task.result
+            y_bounds = (
+                min(y_bounds[0], min(_wr_y_vals) - _ypad),
+                max(y_bounds[1], max(_wr_y_vals) + _ypad),
+            )
 
-    return rl_predictions
+    return x_bounds, y_bounds
 
 
 # ---------------------------------------------------------------------------
@@ -1162,32 +1115,12 @@ def _page_header(
                                         cb.checked = state.time_enabled[i]
 
             hd.text("through", font_size="medium")
-            hd.text(_date_label, font_size="2x-large", font_weight="normal")
-
-
-# ---------------------------------------------------------------------------
-# Pure computation: prediction-table data read off the active bundle snapshot
-# ---------------------------------------------------------------------------
-
-
-def _read_bundle_snapshot(state) -> tuple:
-    """
-    Read pred_rows, pauls_k_fit, and accuracy from the active bundle's
-    per-snapshot lookup.
-
-    ``manage_animation_bundle`` guarantees the current selection has at least
-    a fast bundle cached before this runs, so ``sim_pred_lookup`` always has
-    an entry to read.  Returns
-    ``(pred_rows, pauls_k_fit, pauls_k, accuracy)``.
-    """
-    entry = lookup_bundle_entry(state.sim_pred_lookup, state.timeline_day)
-    pauls_k_fit = entry["pauls_k_fit"]
-    return (
-        entry["pred_rows"],
-        pauls_k_fit,
-        pauls_k_fit if pauls_k_fit is not None else 5.0,
-        entry.get("accuracy", {}),
-    )
+            hd.text(
+                _date_label,
+                font_size="2x-large",
+                font_weight="normal",
+                min_width="225px",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1298,7 +1231,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         state._annot_key = _annot_key
 
     if at_today:
-        rl_predictions = _fetch_rowinglevel(
+        rl_predictions = async_fetch_rowinglevel(
             state, profile, efforts_filtered_by_event_and_display
         )
     else:
@@ -1312,6 +1245,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         show_watts,
         state.chart_x_metric,
         state.chart_log_x,
+        state.chart_compare_wc and wr_data,
     )
     if state._bounds_key != _bounds_key or state._bounds_data is None:
         state._bounds_data = compute_axis_bounds(
@@ -1319,13 +1253,10 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
             show_watts,
             state.chart_x_metric == "duration",
             state.chart_log_x,
+            wr_data=wr_data if state.chart_compare_wc else None,
         )
         state._bounds_key = _bounds_key
     x_bounds, y_bounds = state._bounds_data
-
-    # Expand y_bounds to include WC records when comparing.
-    if state.chart_compare_wc:
-        y_bounds = _expand_y_bounds_for_wc(y_bounds, wr_data, show_watts)
 
     # ── Animation bundle + sim_command ───────────────────────────────────────
     _sim_command = manage_animation_bundle(
@@ -1362,7 +1293,11 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
         state._wk_prop_key = _wk_prop_key
     workouts_prop, season_meta_prop = state._wk_prop_data
 
-    pred_rows, pauls_k_fit, pauls_k, accuracy = _read_bundle_snapshot(state)
+    entry = lookup_bundle_entry(state.sim_pred_lookup, state.timeline_day)
+    pred_rows = entry["pred_rows"]
+    pauls_k_fit = entry["pauls_k_fit"]
+    pauls_k = pauls_k_fit if pauls_k_fit is not None else 5.0
+    accuracy = entry.get("accuracy", {})
 
     rl_available = profile_complete(profile)
 

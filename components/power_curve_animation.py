@@ -66,8 +66,8 @@ Why sections 1–2 live next to the HyperDiv bundle lifecycle in section 3:
     The animation-only chart helpers (ol_event_line,
     build_sb_annotations, build_wr_static_datasets) live here alongside the
     keyframe builder.  A handful of dataset-shaping privates
-    (``_wr_scatter_dataset``, ``_wr_pred_datasets``, ``_season_hsla``) still
-    live in ``power_curve_chart_config`` and are imported here by their
+    (``wr_scatter_dataset``, ``wr_pred_datasets``) still
+    live in ``power_curve_chart_prediction_datasets`` and are imported here by their
     underscored names because the world-record overlay composition is shared
     across that module and this one.
 
@@ -104,13 +104,10 @@ from services.critical_power_model import fit_critical_power
 from services.predictions import build_prediction_table_data
 
 from components.power_curve_workouts import WorkoutView
-from components.power_curve_chart_config import (
-    # Private WR-overlay helpers that live in chart_config; animation imports
-    # them by underscored name because the two modules are tightly-coupled
-    # siblings for WR overlay composition.
-    _season_hsla,
-    _wr_pred_datasets,
-    _wr_scatter_dataset,
+
+from components.power_curve_chart_prediction_datasets import (
+    wr_scatter_dataset,
+    wr_pred_datasets,
 )
 
 
@@ -122,6 +119,11 @@ _DIST_LABELS: dict = {d: lbl for d, lbl in RANKED_DISTANCES}
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. Snapshot helpers
 # ═══════════════════════════════════════════════════════════════════════════
+
+
+def _season_hsla(idx: int, lightness_offset: int, alpha: float) -> str:
+    h, s, l = SEASON_PALETTE[idx % len(SEASON_PALETTE)]
+    return f"hsla({h},{s}%,{max(l + lightness_offset, 0)}%,{alpha:.2f})"
 
 
 def ol_event_line(etype, evalue, pace, dist):
@@ -320,10 +322,10 @@ def build_wr_static_datasets(
 
     x_fn = (lambda dist, pace: round(dist * pace / 500.0, 2)) if _use_duration else None
 
-    scatter = _wr_scatter_dataset(
+    scatter = wr_scatter_dataset(
         wr_data["lb"], wr_data["lba"], _y, _use_duration, is_dark
     )
-    preds = _wr_pred_datasets(
+    preds = wr_pred_datasets(
         wr_data,
         predictor,
         x_min,
@@ -592,8 +594,6 @@ def build_keyframes(
             {w.get("date", "")[:10] for w in sorted_featured if w.get("date")}
         )
 
-    print(fast_only, len(sorted_featured))
-
     for date_str in seen_dates:
         dt = parse_date(date_str)
         if dt < sim_start:
@@ -716,7 +716,7 @@ def wrap_payload(
 ) -> dict:
     """
     Wrap a cached ``bundle_data`` dict with the style-only fields the JS
-    chart needs.  O(1) — no loops, no model work.
+    chart needs.
 
     ``x_bounds`` / ``y_bounds`` are injected here (not baked into
     ``bundle_data``) because they depend on ``log_x`` — a style-only knob.

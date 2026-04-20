@@ -705,11 +705,12 @@ def workout_page(session_id: int, client, user_id: str) -> None:
         metric="pace",  # "pace" | "watts"
         focused_interval=None,  # int | None  (raw band index)
         focused_interval_excluding_rest=None,  # int | None  (1-based work interval #)
-        custom_splits=None,  # list[int] | None
+        custom_splits=None,  # {"unit": "m"|"s", "values": [int,...]} | None
         stack=False,  # stacked-intervals overlay mode
-        show_pace=True,  # show pace/watts in stacked mode
-        show_spm=True,  # show SPM in stacked mode
-        show_hr=True,  # show HR in stacked mode
+        show_pace=True,  # show pace/watts in stacked / compare mode
+        show_spm=False,  # show SPM in stacked / compare mode
+        show_hr=False,  # show HR in stacked / compare mode
+        compared_workouts=(),  # tuple[int,...] of other workout ids to overlay
     )
 
     # ── Pre-fetch workout list (task-cached; free on repeat renders) ────────

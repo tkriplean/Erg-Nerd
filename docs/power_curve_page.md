@@ -95,19 +95,7 @@ files.
 |                                            | `lookup_bundle_entry` — pred-table       |
 |                                            | lookup by day).                          |
 +--------------------------------------------+------------------------------------------+
-| `power_curve_chart_config.py`              | **Pure, no HyperDiv.** Builds the        |
-|                                            | Chart.js config dict for the static      |
-|                                            | (non-animating) chart: predictor curves, |
-|                                            | scatter datasets, season/lifetime        |
-|                                            | overlay lines, canvas labels, WC         |
-|                                            | overlay. Contains `build_chart_config`,  |
-|                                            | `build_pred_datasets`, `compute_axis_    |
-|                                            | bounds`, and the per-model dataset       |
-|                                            | builders used by                         |
-|                                            | `compute_timeline_snapshot` in the       |
-|                                            | animation module (tightly-coupled        |
-|                                            | siblings).                               |
-+--------------------------------------------+------------------------------------------+
+| `power_curve_chart_prediction_datasets.py` | Builds the WR prediction datasets.       | +--------------------------------------------+------------------------------------------+
 | `concept2_sync.py`                         | Render-top helpers that ensure the data  |
 |                                            | the page needs is loaded: `concept2_     |
 |                                            | sync(client)` for user workouts,         |
@@ -193,7 +181,7 @@ concept2_sync()                                   [components/concept2_sync.py]
   └─ raw workouts
        └─ build_workout_view(raw, FilterSpec)     [power_curve_workouts.py]
             └─ WorkoutView
-                 ├─ compute_axis_bounds()         [power_curve_chart_config.py]
+                 ├─ compute_axis_bounds()         
                  ├─ compute_featured_workouts()   [services/rowing_utils.py]
                  └─ manage_animation_bundle()     [power_curve_animation.py]
                        ├─ build_keyframes() (bg)  [power_curve_animation.py]
@@ -857,8 +845,7 @@ toggle is hidden.
 12. Axis Bounds
 ---------------
 
-`compute_axis_bounds` lives in `power_curve_chart_config.py` because axis
-geometry is a chart-config concern. Its sole data input is `quality_efforts`
+`compute_axis_bounds` sole data input is `quality_efforts`
 (the first pipeline stage). It's sensitive to `log_x`: log axes pad
 multiplicatively, linear axes pad additively.
 
