@@ -377,7 +377,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
         ctx.updateProp("sim_day_out", currentDay);
       }
       isPlaying = true;
-      if (cachedBundle) startAnimation();
+      if (cachedBundle && cachedBundle.snapshots_ready) startAnimation();
       updatePlayButton();
       ctx.updateProp("sim_playing_out", true);
     }
@@ -479,7 +479,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
   // Overlapping labels are pushed downward before drawing.
   // -----------------------------------------------------------------------
 
-  const _UI_FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
+  const _UI_FONT = "Nunito Sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 
   const canvasLabelsPlugin = {
     id: "canvasLabels",
@@ -1833,9 +1833,11 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     pbEventDays   = pbEvents.sortedDays;
 
     // Sync scrubber range to the bundle timeline.
-    tlInput.min = 0;
-    tlInput.max = bundle.total_days;
-    tlSetThumb(currentDay);
+    if(tlInput.min != 0 || tlInput.max != bundle.total_days){
+      tlInput.min = 0;
+      tlInput.max = bundle.total_days;
+      tlSetThumb(currentDay);
+    }
 
     const showW   = props.show_watts;
     const simOpts = buildSimOptions(bundle, showW);

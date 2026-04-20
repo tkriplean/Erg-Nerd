@@ -12,8 +12,7 @@ Three cohesive sections:
                                   Pure Python, no HyperDiv.
 
 2. Keyframe building — heavy precomputation of the full animation payload.
-     build_sb_annotations()       DateSlider timeline dot annotations
-                                  (one per PB / season SB).
+     build_sb_annotations()       Annotations for under timeline based on featured workouts
      build_wr_static_datasets()   World-class record overlay datasets
                                   (time-invariant — computed once per bundle).
      build_keyframes()            Precompute the workout manifest, per-PB
@@ -207,7 +206,7 @@ def compute_timeline_snapshot(
 
     # ── Log-log fit (JS samples pred curves from these params) ───────────────
     _ll = loglog_fit(lb, lb_anchor)
-    ll_slope, ll_intercept = (_ll if _ll else (None, None))
+    ll_slope, ll_intercept = _ll if _ll else (None, None)
 
     # ── Prediction table rows + accuracy ──────────────────────────────────────
     _pred = build_prediction_table_data(
@@ -242,6 +241,8 @@ def compute_timeline_snapshot(
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+# TODO: build_sb_annotations should be moved to the power_curve_chart_plugin.js,
+#       and computed there when necessary.
 def build_sb_annotations(
     featured_workouts: list,
     sim_start: date,
@@ -249,7 +250,7 @@ def build_sb_annotations(
     best_filter: str = "SBs",
 ) -> list:
     """
-    Return annotation dicts for the DateSlider timeline dots.
+    Return annotation dicts for the timeline dots.
     Each dict: {day: int, label: str, color: str}
 
     featured_workouts — pre-computed by compute_featured_workouts(); the
@@ -510,13 +511,19 @@ def build_keyframes(
     # of the timeline) and full slices for late dates (predictions stale with
     # respect to the PBs-at-that-point because future workouts leaked in).
     sorted_efforts_by_event = sorted(
-        efforts_filtered_by_event, key=lambda w: w.get("date", ""), reverse=True,
+        efforts_filtered_by_event,
+        key=lambda w: w.get("date", ""),
+        reverse=True,
     )
     sorted_featured = sorted(
-        featured_efforts, key=lambda w: w.get("date", ""), reverse=True,
+        featured_efforts,
+        key=lambda w: w.get("date", ""),
+        reverse=True,
     )
     sorted_quality_efforts = sorted(
-        quality_efforts, key=lambda w: w.get("date", ""), reverse=True,
+        quality_efforts,
+        key=lambda w: w.get("date", ""),
+        reverse=True,
     )
 
     snapshots: dict[int, dict] = {
@@ -552,9 +559,7 @@ def build_keyframes(
         if best_filter == "All":
             sim_wkts = list(efforts_filtered_by_event)
         else:
-            sim_wkts = apply_best_only(
-                featured_efforts, by_season=best_filter != "PBs"
-            )
+            sim_wkts = apply_best_only(featured_efforts, by_season=best_filter != "PBs")
         _snap = compute_timeline_snapshot(
             sim_wkts=sim_wkts,
             all_events_to_date=quality_efforts,
@@ -584,8 +589,10 @@ def build_keyframes(
         seen_dates = []
     else:
         seen_dates = sorted(
-            {w.get("date", "")[:10] for w in sorted_efforts_by_event if w.get("date")}
+            {w.get("date", "")[:10] for w in sorted_featured if w.get("date")}
         )
+
+    print(fast_only, len(sorted_featured))
 
     for date_str in seen_dates:
         dt = parse_date(date_str)
@@ -899,7 +906,7 @@ def manage_animation_bundle(
         wr_data=wr_data,
     )
 
-    if _selection_key not in state.sim_full_selections:
+    if _selection_key not in state.sim_full_selections and not at_today:
         # Scope by (identity, selection) so a still-running task for a prior
         # selection under the same identity doesn't swallow this selection's
         # build.
@@ -957,10 +964,11 @@ def manage_animation_bundle(
             del new_cache[_oldest]
         state.sim_snapshot_cache = new_cache
 
-    _snapshots_ready = _selection_key in state.sim_snapshot_cache
+    _fast_snapshot_ready = _selection_key in state.sim_snapshot_cache
+    _all_snapshots_ready = _selection_key in state.sim_full_selections
 
     # Expose the current selection's pred_lookup for the prediction table.
-    if _snapshots_ready:
+    if _fast_snapshot_ready:
         state.sim_pred_lookup = state.sim_snapshot_cache[_selection_key][1]
     else:
         state.sim_pred_lookup = {}
@@ -975,13 +983,12 @@ def manage_animation_bundle(
     _bundle_key = f"{_identity_key}-{_selection_key}-{_style_key}-{_fullness}"
 
     # ── Style-side: cheap re-wrap when bundle key changes ────────────────────
-    if _snapshots_ready and state.sim_bundle_key != _bundle_key:
+    if _fast_snapshot_ready and state.sim_bundle_key != _bundle_key:
         current_bundle_data = state.sim_snapshot_cache[_selection_key][0]
         # Merge snapshots across all cached selections so JS can toggle back
         # to a previously-seen selection without a Python round-trip.
         merged_snapshots = {
-            sk: bd["snapshots"]
-            for sk, (bd, _pl) in state.sim_snapshot_cache.items()
+            sk: bd["snapshots"] for sk, (bd, _pl) in state.sim_snapshot_cache.items()
         }
         state.sim_bundle = wrap_payload(
             current_bundle_data,
@@ -992,7 +999,7 @@ def manage_animation_bundle(
             x_bounds=x_bounds,
             y_bounds=y_bounds,
             selection_key=_selection_key,
-            snapshots_ready=True,
+            snapshots_ready=_all_snapshots_ready,
             timeline_snapshots=merged_snapshots,
         )
         state.sim_bundle_key = _bundle_key
