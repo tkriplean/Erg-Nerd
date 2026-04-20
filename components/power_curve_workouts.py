@@ -37,13 +37,18 @@ from dataclasses import dataclass
 from services.rowing_utils import (
     RANKED_DISTANCES,
     RANKED_TIMES,
+    SEASON_PALETTE,
     apply_best_only,
     apply_quality_filters,
     apply_season_best_only,
     compute_featured_workouts,
+    compute_pace,
+    compute_watts,
     get_season,
     is_rankable_noninterval,
+    parse_date,
     seasons_from,
+    workout_cat_key,
 )
 
 
@@ -147,3 +152,83 @@ def build_workout_view(raw_workouts: list, filters: FilterSpec) -> WorkoutView:
         featured_efforts=featured,
         all_seasons=all_seasons,
     )
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# JS-prop builders
+# ───────────────────────────────────────────────────────────────────────────
+
+
+def build_workouts_prop(
+    workouts_list: list,
+    sim_start,
+    total_days: int,
+    sorted_seasons: list,
+) -> list:
+    """JS-ready workout entries for the ``workouts`` prop of PowerCurveChart.
+
+    Each entry:
+        day         int    — days from sim_start
+        season_idx  int    — index into sorted_seasons (oldest=0)
+        cat_key     str    — "dist:2000" | "time:10800"
+        dist_m      int    — meters (0 when missing)
+        time_s      float  — duration in seconds (always available; for distance
+                             events this is derived from pace × distance / 500)
+        y_pace      float  — sec/500m
+        y_watts     float  — watts
+        date_label  str    — "Mar 14, 2026"
+        wtype       str    — workout_type from the Concept2 record
+
+    JS derives the x-axis value from (dist_m, time_s) based on x_mode, and the
+    event_line tooltip from cat_key + _DIST_LABELS + y_pace.
+    """
+    season_idx_map = {s: i for i, s in enumerate(sorted_seasons)}
+    out: list = []
+    for w in workouts_list:
+        p = compute_pace(w)
+        d = w.get("distance")
+        ck = workout_cat_key(w)
+        if p is None or d is None or ck is None:
+            continue
+        dt = parse_date(w.get("date", ""))
+        if dt.toordinal() < sim_start.toordinal():
+            continue
+        day = (dt - sim_start).days
+        if day < 0 or day > total_days:
+            continue
+        etype, evalue = ck
+        t_raw = w.get("time")
+        time_s = (t_raw / 10.0) if t_raw else round(d * p / 500.0, 2)
+        out.append(
+            {
+                "day": day,
+                "season_idx": season_idx_map.get(get_season(w.get("date", "")), 0),
+                "cat_key": f"{etype}:{evalue}",
+                "dist_m": d,
+                "time_s": time_s,
+                "y_pace": round(p, 4),
+                "y_watts": round(compute_watts(p), 1),
+                "date_label": dt.strftime("%b %d, %Y"),
+                "wtype": w.get("workout_type", ""),
+            }
+        )
+    out.sort(key=lambda e: e["day"])
+    return out
+
+
+def build_season_meta(sorted_seasons: list) -> list:
+    """Per-season palette entries aligned with season_idx (oldest=0)."""
+
+    def _hsla(idx: int, lightness_offset: int, alpha: float) -> str:
+        h, s, l = SEASON_PALETTE[idx % len(SEASON_PALETTE)]
+        return f"hsla({h},{s}%,{max(l + lightness_offset, 0)}%,{alpha:.2f})"
+
+    return [
+        {
+            "label": s,
+            "color": _hsla(i, 0, 0.90),
+            "dim_color": _hsla(i, 0, 0.40),
+            "border_color": _hsla(i, -12, 1.0),
+        }
+        for i, s in enumerate(sorted_seasons)
+    ]

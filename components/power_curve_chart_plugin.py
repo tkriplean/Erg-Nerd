@@ -8,7 +8,7 @@ is handled entirely in JS with zero Python round-trips.
 Usage:
     from components.power_curve_chart_plugin import PowerCurveChart
     PowerCurveChart(
-        config=chart_cfg,
+        workouts=workouts_prop,
         show_watts=False,
         x_mode="distance",
         timeline_min=0,
@@ -17,13 +17,23 @@ Usage:
         timeline_annotations=sb_annotations,
     )
 
-The `config` prop is the same Chart.js dict produced by build_chart_config.
-The JS layer applies pace/watts tick formatters and a custom tooltip on top.
+Scatter, best-lines, prediction curves, axis options and tooltips are all
+built in JS from the props below.  Python owns only the data pipeline and the
+fitted-model snapshots carried in ``sim_bundle``.
 
 Props (Python → JS):
-    config               — full Chart.js config dict from build_chart_config(); used
-                           for static rendering.  JS ignores this when sim_bundle is
-                           active.
+    workouts             — list of all quality workouts w/ pre-computed numeric fields
+                           ({day, cat_key, dist_m, time_s, y_pace, y_watts, season_idx,
+                             date_label, wtype}).  JS gates visibility via sim_day_out
+                           + best_filter + selected_dists/times.
+    season_meta          — list of per-season metadata dicts
+                           ({label, color, border_color, dim_color}); index-aligned
+                           with workout.season_idx.
+    best_filter          — "All" | "PBs" | "SBs" — which workouts are visible in scatter
+    overlay_bests        — "PBs" | "SBs" | "None" — which connecting best-lines to draw
+    selected_dists       — list[int] of enabled ranked distances (meters)
+    selected_times       — list[int] of enabled ranked times (tenths of seconds)
+    is_dark              — whether the UI is in dark mode (affects PB/label colours)
     show_watts           — True → Y-axis in watts; False → pace (sec/500m)
     x_mode               — "distance" (meters, default) or "duration" (seconds)
     sim_bundle           — precomputed animation bundle dict (None until task completes)
@@ -63,8 +73,26 @@ class PowerCurveChart(hd.Plugin):
         hd.Plugin.js(_PERFORMANCE_CHART_JS),
     ]
 
-    # The full Chart.js config dict (same structure as hd.chart expects).
-    config = hd.Prop(hd.Any, None)
+    # All quality workouts with pre-computed numeric fields.  JS builds scatter
+    # + best-line datasets from this using the visibility rules below.
+    workouts = hd.Prop(hd.Any, [])
+
+    # Per-season colour metadata; index-aligned with workout.season_idx.
+    season_meta = hd.Prop(hd.Any, [])
+
+    # Row-filter for scatter visibility: "All" | "PBs" | "SBs".
+    best_filter = hd.Prop(hd.String, "All")
+
+    # Overlay connecting best-lines: "PBs" | "SBs" | "None".
+    overlay_bests = hd.Prop(hd.String, "PBs")
+
+    # Enabled event sets — workouts whose cat_key is not in either are rendered
+    # translucent and excluded from best-line computation.
+    selected_dists = hd.Prop(hd.Any, [])
+    selected_times = hd.Prop(hd.Any, [])
+
+    # Dark-mode flag; affects PB border and label colour defaults.
+    is_dark = hd.Prop(hd.Bool, False)
 
     # Controls Y-axis formatting: True = watts, False = pace (sec/500m).
     show_watts = hd.Prop(hd.Bool, False)

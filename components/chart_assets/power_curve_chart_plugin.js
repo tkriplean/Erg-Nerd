@@ -207,6 +207,32 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     return `${m}:${String(sec).padStart(2, "0")}`;
   }
 
+  /** Tenths-of-a-second → "M:SS.t" (port of services/formatters.py:fmt_split). */
+  function fmtSplit(tenths) {
+    if (!tenths) return "—";
+    const total = tenths / 10;
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return `${m}:${s.toFixed(1).padStart(4, "0")}`;
+  }
+
+  /**
+   * Port of power_curve_animation.ol_event_line.
+   * Builds the "Event  time-or-dist" string for tooltips and labels.
+   */
+  function eventLineFor(catKey, pace, distM) {
+    const [etype, evalueStr] = catKey.split(":");
+    const evalue = Number(evalueStr);
+    if (etype === "dist") {
+      const t = Math.round(pace * 10 * evalue / 500);
+      const label = DIST_LABELS[evalue] || `${evalue.toLocaleString("en-US")}m`;
+      return `${label}  ${fmtSplit(t)}`;
+    } else {
+      const mins = Math.floor(evalue / 600);
+      return `${mins}min  ${distM.toLocaleString("en-US")}m`;
+    }
+  }
+
   // -----------------------------------------------------------------------
   // Timeline scrubber — helpers, event wiring, and seek handler
   // -----------------------------------------------------------------------
@@ -602,136 +628,194 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
   // Chart lifecycle
   // -----------------------------------------------------------------------
 
-  function applyConfig(config, showWatts) {
-    if (!config) return;
-    const xMode = (config._x_mode) || "distance";
-    const rankedDists = config._ranked_dists || [100, 500, 1000, 2000, 5000, 6000, 10000, 21097, 42195];
-    const rankedDurations = config._ranked_durations || [10, 60, 120, 240, 600, 1800, 3600, 7200];
-    const processedOpts = buildOptions(config.options, showWatts, xMode, rankedDists, rankedDurations);
-    const canvasLabels = config._canvas_labels || [];
-
-    if (chartInstance) {
-      // Update in place — avoids the flash of an empty canvas on re-render.
-      chartInstance.data = config.data;
-      chartInstance.options = processedOpts;
-      chartInstance.config._canvas_labels = canvasLabels;
-      chartInstance.update("none");
-    } else {
-      chartInstance = new Chart(canvas, {
-        type: config.type,
-        data: config.data,
-        options: processedOpts,
-        plugins: [canvasLabelsPlugin],
-      });
-      chartInstance.config._canvas_labels = canvasLabels;
-    }
-  }
-
   // -----------------------------------------------------------------------
   // Animation bundle — dataset builders
   // -----------------------------------------------------------------------
 
-  /** Binary search: return last keyframe where kf.day <= currentDay. */
-  function findKeyframe(keyframes, currentDay) {
-    let lo = 0, hi = keyframes.length - 1, result = keyframes[0];
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      if (keyframes[mid].day <= currentDay) {
-        result = keyframes[mid];
-        lo = mid + 1;
-      } else {
-        hi = mid - 1;
+  /**
+   * Find the snapshot entry for the current timeline position.
+   *
+   * `timeline_snapshots` is the two-level transport: {selection_key: {day: entry}}.
+   * JS picks the inner dict via `selection_key` (current selection) and then
+   * scans the numeric day keys to find the largest one ≤ currentDay.  Returns
+   * the day-0 placeholder entry if no cached selection or no day fits — the
+   * placeholder's `snapshot` has null fit params so pred dataset builders
+   * degrade gracefully.
+   */
+  function findSnapshot(timelineSnapshots, selectionKey, currentDay) {
+    const empty = {
+      snapshot: {
+        lb: {}, lb_anchor: {},
+        cp_params: null, ll_slope: null, ll_intercept: null, pauls_k: 5.0,
+      },
+    };
+    if (!timelineSnapshots || !selectionKey) return empty;
+    const inner = timelineSnapshots[selectionKey];
+    if (!inner) return empty;
+    let bestDay = -1;
+    let bestEntry = null;
+    for (const k in inner) {
+      const d = +k;
+      if (d <= currentDay && d > bestDay) {
+        bestDay = d;
+        bestEntry = inner[k];
       }
     }
-    return result;
+    return bestEntry || empty;
   }
 
   /**
-   * Build per-season scatter datasets from the workout manifest.
-   * Returns an array of Chart.js dataset dicts.
+   * Walk the workout manifest in day order and collect PB events — days on
+   * which a new lifetime best was set for some (etype, evalue) category,
+   * restricted to non-excluded workouts.  Used for the "New PB!" badge
+   * during playback; replaces the previous Python-side ``new_pb_labels``
+   * field on each snapshot so Python no longer owns any canvas-label state.
+   *
+   * Returns { byDay: {day: [label,...]}, sortedDays: [day,...] }.  Each
+   * label carries both ``y_pace`` and ``y_watts`` so the tick loop picks
+   * the right one for the current ``show_watts`` mode without a rebuild.
    */
-  function buildScatterDatasets(manifest, cutoffDay, bundle, showWatts) {
-
-    const seasonMeta = bundle.season_meta;
-    const pbColor = bundle.pb_color;
-    const drawLifetimeLine = bundle.draw_lifetime_line;
-    const drawSeasonLines  = bundle.draw_season_lines;
-
-    // Filter workouts to those at or before cutoffDay.
-    const visible = manifest.filter(w => w.day <= cutoffDay);
-
-    // For each season: collect points, compute season bests, compute lifetime bests.
-    // lifetime_best_pace / _watts come from the keyframe, but we need them here
-    // for colouring — we'll compute from the visible manifest for independence.
-    // (Keyframe lifetime_best is used later for line drawing.)
-    const bySeason = new Map();  // season_idx -> [entry, ...]
-    for (const w of visible) {
-      if (w.excluded) continue;
-      if (!bySeason.has(w.season_idx)) bySeason.set(w.season_idx, []);
-      bySeason.get(w.season_idx).push(w);
-    }
-
-    // Compute lifetime bests across all visible non-excluded workouts.
-    const lbPace = {};  // cat_key_str -> best (lowest) pace
-    for (const w of visible) {
-      if (w.excluded) continue;
-      if (!(w.cat_key_str in lbPace) || w.y_pace < lbPace[w.cat_key_str]) {
-        lbPace[w.cat_key_str] = w.y_pace;
+  function computePBEvents(manifest, pbColor) {
+    const sorted = (manifest || [])
+      .filter(w => !w.excluded)
+      .slice()
+      .sort((a, b) => a.day - b.day);
+    const bestPace = {};  // cat_key_str -> pace
+    const byDay = {};
+    const sortedDays = [];
+    for (const w of sorted) {
+      const prev = bestPace[w.cat_key_str];
+      if (prev !== undefined && w.y_pace >= prev - 1e-9) continue;
+      const pp = prev !== undefined && prev > w.y_pace
+        ? (prev - w.y_pace) / prev * 100
+        : 0;
+      const pw = prev !== undefined
+        ? (wattsFromPace(w.y_pace) - wattsFromPace(prev)) / wattsFromPace(prev) * 100
+        : 0;
+      const label = {
+        x: w.x,
+        y_pace: w.y_pace,
+        y_watts: w.y_watts,
+        line_event: w.event_line,
+        pct_pace:  Math.round(pp * 10) / 10,
+        pct_watts: Math.round(pw * 10) / 10,
+        line_label: "\u2746 New PB!",
+        color: pbColor,
+        bold: true,
+      };
+      if (!byDay[w.day]) {
+        byDay[w.day] = [];
+        sortedDays.push(w.day);
       }
+      byDay[w.day].push(label);
+      bestPace[w.cat_key_str] = w.y_pace;
+    }
+    return { byDay, sortedDays };
+  }
+
+  /**
+   * Newest PB-event day ≤ currentDay, or -1 if none.  ``sortedDays`` is
+   * ascending so we walk until we pass ``currentDay``.
+   */
+  function newestPBEventDay(sortedDays, currentDay) {
+    let found = -1;
+    for (const d of sortedDays) {
+      if (d > currentDay) break;
+      found = d;
+    }
+    return found;
+  }
+
+  /**
+   * Build per-season scatter + best-line datasets from the `workouts` prop.
+   *
+   * Visibility rules (mirror components/power_curve_workouts.py docstring):
+   *   1. Hidden if w.day > cutoffDay.
+   *   2. best_filter="All"    → all visible-by-day workouts shown.
+   *      best_filter="PBs"    → only workouts currently holding the category PB.
+   *      best_filter="SBs"    → only workouts currently holding the (season, cat) SB.
+   *   3. Visible-but-event-filtered-out (cat_key ∉ selectedSet) → translucent;
+   *      excluded from best-line membership.
+   *   4. Visible + event-selected → full opacity; may contribute to best lines
+   *      per overlay_bests.
+   */
+  function buildScatterFromWorkouts(workouts, cutoffDay, opts) {
+    const { best_filter, overlay_bests, show_watts, x_mode,
+            is_dark, season_meta, selected_dists, selected_times } = opts;
+    if (!workouts || !workouts.length || !season_meta || !season_meta.length) {
+      return [];
+    }
+    const useDuration = x_mode === "duration";
+    const pbColor = is_dark ? "rgba(240,240,240,0.92)" : "rgba(40,40,40,0.88)";
+    const selectedSet = new Set([
+      ...(selected_dists || []).map(d => `dist:${d}`),
+      ...(selected_times || []).map(t => `time:${t}`),
+    ]);
+
+    const visible = workouts.filter(w => w.day <= cutoffDay);
+    if (!visible.length) return [];
+
+    // Category PB (across all cats, regardless of selection) and per-season SB.
+    const lbByCat = {};
+    const sbByKey = {};
+    for (const w of visible) {
+      if (!(w.cat_key in lbByCat) || w.y_pace < lbByCat[w.cat_key].y_pace) {
+        lbByCat[w.cat_key] = w;
+      }
+      const k = `${w.season_idx}|${w.cat_key}`;
+      if (!(k in sbByKey) || w.y_pace < sbByKey[k].y_pace) sbByKey[k] = w;
     }
 
-    // Season bests: (season_idx, cat_key_str) -> best pace
-    const sbPace = {};
+    function passesBestFilter(w) {
+      if (best_filter === "PBs") return lbByCat[w.cat_key] === w;
+      if (best_filter === "SBs") return sbByKey[`${w.season_idx}|${w.cat_key}`] === w;
+      return true;  // "All"
+    }
+    function xOf(w) { return useDuration ? w.time_s : w.dist_m; }
+    function yOf(w) { return show_watts ? w.y_watts : w.y_pace; }
+
+    // Bucket per season; carry classification flags for drawing.
+    const bySeason = new Map();
     for (const w of visible) {
-      if (w.excluded) continue;
-      const k = `${w.season_idx}|${w.cat_key_str}`;
-      if (!(k in sbPace) || w.y_pace < sbPace[k]) sbPace[k] = w.y_pace;
+      if (!passesBestFilter(w)) continue;
+      const inSel = selectedSet.has(w.cat_key);
+      const isLb = lbByCat[w.cat_key] === w;
+      const isSb = sbByKey[`${w.season_idx}|${w.cat_key}`] === w;
+      const entry = { w, translucent: !inSel, isLb, isSb };
+      if (!bySeason.has(w.season_idx)) bySeason.set(w.season_idx, []);
+      bySeason.get(w.season_idx).push(entry);
     }
 
     const datasets = [];
 
-    // Iterate seasons in order.
-    for (let si = 0; si < seasonMeta.length; si++) {
-      const meta = seasonMeta[si];
-      const pts  = bySeason.get(si) || [];
-
-      // Excluded points for this season.
-      const exclPts = manifest.filter(w => w.day <= cutoffDay && w.excluded && w.season_idx === si);
-
-      if (!pts.length && !exclPts.length) continue;
-
+    // ── Scatter datasets (order=1) ──────────────────────────────────────────
+    for (let si = 0; si < season_meta.length; si++) {
+      const meta = season_meta[si];
+      const entries = bySeason.get(si) || [];
+      if (!entries.length) continue;
       const data = [], bg = [], border = [], bw = [], radii = [];
-
-      // Included points
-      for (const w of pts) {
-        const yVal = showWatts ? w.y_watts : w.y_pace;
-        const isLb = Math.abs(w.y_pace - (lbPace[w.cat_key_str] ?? Infinity)) < 1e-9;
-        const isSb = Math.abs(w.y_pace - (sbPace[`${si}|${w.cat_key_str}`] ?? Infinity)) < 1e-9;
-        const alpha = (isLb || isSb) ? 1.0 : 0.40;
-        data.push({ x: w.x, y: yVal, date: w.date_label, wtype: w.wtype });
+      for (const e of entries) {
+        const { w, translucent, isLb, isSb } = e;
+        const alpha = translucent ? 0.18 : ((isLb || isSb) ? 1.0 : 0.40);
+        data.push({
+          x: xOf(w),
+          y: yOf(w),
+          date: w.date_label,
+          wtype: w.wtype,
+          _event: eventLineFor(w.cat_key, w.y_pace, w.dist_m),
+        });
         bg.push(colorWithAlpha(meta.color, alpha));
-        if (isLb) {
+        if (isLb && !translucent) {
           border.push(pbColor);
           bw.push(2.5);
           radii.push(6);
         } else {
-          border.push(colorWithAlpha(meta.border_color, Math.min(alpha + 0.15, 1.0)));
-          bw.push(1);
-          radii.push(5);
+          const borderAlpha = translucent ? 0.25 : Math.min(alpha + 0.15, 1.0);
+          border.push(colorWithAlpha(meta.border_color, borderAlpha));
+          bw.push(translucent ? 0.5 : 1);
+          radii.push(translucent ? 4 : 5);
         }
       }
-
-      // Excluded points (faint)
-      for (const w of exclPts) {
-        const yVal = showWatts ? w.y_watts : w.y_pace;
-        data.push({ x: w.x, y: yVal, date: w.date_label, wtype: w.wtype });
-        bg.push(colorWithAlpha(meta.color, 0.18));
-        border.push(colorWithAlpha(meta.border_color, 0.25));
-        bw.push(0.5);
-        radii.push(4);
-      }
-
-      if (!data.length) continue;
       datasets.push({
         type: "scatter",
         label: `Season ${meta.label}`,
@@ -745,24 +829,23 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
       });
     }
 
-    // ── Lifetime best line ───────────────────────────────────────────────────
-    if (drawLifetimeLine) {
-      const lbPts = [];
+    // ── Lifetime best line (order=3) ────────────────────────────────────────
+    if (overlay_bests === "PBs") {
+      const pts = [];
       const seen = new Set();
-      for (const w of visible) {
-        if (w.excluded) continue;
-        const ck = w.cat_key_str;
-        if (!seen.has(ck) && Math.abs(w.y_pace - (lbPace[ck] ?? Infinity)) < 1e-9) {
-          lbPts.push({ x: w.x, y: showWatts ? w.y_watts : w.y_pace });
-          seen.add(ck);
+      for (const entries of bySeason.values()) {
+        for (const { w, translucent, isLb } of entries) {
+          if (translucent || !isLb || seen.has(w.cat_key)) continue;
+          pts.push({ x: xOf(w), y: yOf(w) });
+          seen.add(w.cat_key);
         }
       }
-      lbPts.sort((a, b) => a.x - b.x);
-      if (lbPts.length) {
+      pts.sort((a, b) => a.x - b.x);
+      if (pts.length) {
         datasets.push({
           type: "line",
           label: "Lifetime Bests",
-          data: lbPts,
+          data: pts,
           borderColor: pbColor,
           backgroundColor: "rgba(0,0,0,0)",
           borderWidth: 7,
@@ -773,27 +856,25 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
       }
     }
 
-    // ── Season best lines ────────────────────────────────────────────────────
-    if (drawSeasonLines) {
-      for (let si = 0; si < seasonMeta.length; si++) {
-        const meta = seasonMeta[si];
-        const pts = bySeason.get(si) || [];
-        if (!pts.length) continue;
+    // ── Season best lines (order=2) ─────────────────────────────────────────
+    if (overlay_bests === "SBs") {
+      for (let si = 0; si < season_meta.length; si++) {
+        const meta = season_meta[si];
+        const entries = bySeason.get(si) || [];
+        if (!entries.length) continue;
+        const pts = [];
         const seenCk = new Set();
-        const sPts = [];
-        for (const w of pts) {
-          const k = `${si}|${w.cat_key_str}`;
-          if (!seenCk.has(w.cat_key_str) && Math.abs(w.y_pace - (sbPace[k] ?? Infinity)) < 1e-9) {
-            sPts.push({ x: w.x, y: showWatts ? w.y_watts : w.y_pace });
-            seenCk.add(w.cat_key_str);
-          }
+        for (const { w, translucent, isSb } of entries) {
+          if (translucent || !isSb || seenCk.has(w.cat_key)) continue;
+          pts.push({ x: xOf(w), y: yOf(w) });
+          seenCk.add(w.cat_key);
         }
-        sPts.sort((a, b) => a.x - b.x);
-        if (!sPts.length) continue;
+        pts.sort((a, b) => a.x - b.x);
+        if (!pts.length) continue;
         datasets.push({
           type: "line",
           label: `Season ${meta.label}`,
-          data: sPts,
+          data: pts,
           borderColor: meta.color,
           backgroundColor: "rgba(0,0,0,0)",
           borderWidth: 1.5,
@@ -805,6 +886,50 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     }
 
     return datasets;
+  }
+
+  /** Build a scatter-opts dict from the current prop values. */
+  function scatterOpts() {
+    return {
+      best_filter:   props.best_filter,
+      overlay_bests: props.overlay_bests,
+      show_watts:    props.show_watts,
+      x_mode:        props.x_mode,
+      is_dark:       props.is_dark,
+      season_meta:   props.season_meta || [],
+      selected_dists: props.selected_dists || [],
+      selected_times: props.selected_times || [],
+    };
+  }
+
+  /** Build a pred-opts dict from the current bundle + props. */
+  function predOpts(bundle) {
+    const xMode = bundle.x_mode || "distance";
+    // x_mode-aware fallback: duration bounds must be in seconds, not meters,
+    // otherwise the inRange filter in each pred builder rejects every point.
+    const defaultXBounds = xMode === "duration" ? [10.0, 14400.0] : [100.0, 42195.0];
+    const xb = (Array.isArray(bundle.x_bounds) && bundle.x_bounds.length === 2
+                && Number.isFinite(bundle.x_bounds[0])
+                && Number.isFinite(bundle.x_bounds[1]))
+      ? bundle.x_bounds
+      : defaultXBounds;
+    const yb = (Array.isArray(bundle.y_bounds) && bundle.y_bounds.length === 2
+                && Number.isFinite(bundle.y_bounds[0])
+                && Number.isFinite(bundle.y_bounds[1]))
+      ? bundle.y_bounds
+      : [60.0, 250.0];
+    return {
+      predictor:       bundle.predictor || "none",
+      show_components: bundle.show_components === true,
+      show_watts:      props.show_watts,
+      x_mode:          xMode,
+      is_dark:         bundle.is_dark === true,
+      x_bounds:        xb,
+      y_bounds:        yb,
+      rl_predictions:  bundle.rl_predictions || null,
+      selected_dists:  props.selected_dists || [],
+      selected_times:  props.selected_times || [],
+    };
   }
 
   /**
@@ -954,6 +1079,646 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     return 2.80 / Math.pow(pace / 500, 3);
   }
 
+  /** Convert watts back to pace (sec/500m). Inverse of wattsFromPace. */
+  function paceFromWattsVal(watts) {
+    return 500.0 * Math.pow(2.80 / watts, 1.0 / 3.0);
+  }
+
+  // -----------------------------------------------------------------------
+  // Prediction-curve math — ports of services/predictions.py +
+  // services/critical_power_model.py.  All pure; consumed by the
+  // snapshot-driven dataset builders below.
+  // -----------------------------------------------------------------------
+
+  const PACE_MIN = 60.0;
+  const PACE_MAX = 400.0;
+
+  const RANKED_DIST_VALUES = [100, 500, 1000, 2000, 5000, 6000, 10000, 21097, 42195];
+  // Same source of truth as RANKED_DISTANCES in services/rowing_utils.py.
+  const RANKED_DISTANCES_PAIRS = [
+    [100, "100m"], [500, "500m"], [1000, "1k"], [2000, "2k"],
+    [5000, "5k"], [6000, "6k"], [10000, "10k"],
+    [21097, "½ Marathon"], [42195, "Marathon"],
+  ];
+  const RANKED_TIMES_PAIRS = [
+    [600, "1 min"], [2400, "4 min"], [6000, "10 min"],
+    [18000, "30 min"], [36000, "60 min"],
+  ];
+
+  // CP curve generation — matches services/critical_power_model.py constants.
+  const CP_T_MIN = 10.0;
+  const CP_T_MAX = 10_800.0;
+  const CP_CURVE_N_PTS = 200;
+
+  function paceValid(p) {
+    return p !== null && p !== undefined && Number.isFinite(p) && p >= PACE_MIN && p <= PACE_MAX;
+  }
+
+  /** Critical Power model: P(t) = Pow1/(1+t/tau1) + Pow2/(1+t/tau2) */
+  function criticalPowerModel(t, Pow1, tau1, Pow2, tau2) {
+    return Pow1 / (1.0 + t / tau1) + Pow2 / (1.0 + t / tau2);
+  }
+
+  /**
+   * Bisection root finder.  Returns null if f(lo)*f(hi) > 0 (no sign change)
+   * or if f is non-finite anywhere on the bracket.  xtol sets convergence on
+   * the x-axis (in whatever units lo/hi are — matches scipy.optimize.brentq's
+   * xtol argument for our use cases).
+   */
+  function bisect(f, lo, hi, xtol = 0.5, maxIter = 100) {
+    let flo = f(lo), fhi = f(hi);
+    if (!Number.isFinite(flo) || !Number.isFinite(fhi)) return null;
+    if (flo === 0) return lo;
+    if (fhi === 0) return hi;
+    if (flo * fhi > 0) return null;
+    for (let i = 0; i < maxIter; i++) {
+      const mid = 0.5 * (lo + hi);
+      const fmid = f(mid);
+      if (!Number.isFinite(fmid)) return null;
+      if (Math.abs(fmid) < 1e-9 || (hi - lo) < xtol) return mid;
+      if (flo * fmid < 0) { hi = mid; fhi = fmid; }
+      else { lo = mid; flo = fmid; }
+    }
+    return 0.5 * (lo + hi);
+  }
+
+  // ── Samplers — (model_fit, dist_m) → pace or null ───────────────────────
+
+  function paceFromLogLog(slope, intercept, distM) {
+    if (slope == null || intercept == null) return null;
+    const watts = Math.exp(intercept + slope * Math.log(distM));
+    if (!Number.isFinite(watts) || watts <= 0) return null;
+    const p = paceFromWattsVal(watts);
+    return paceValid(p) ? p : null;
+  }
+
+  /** Paul's Law: p1 + k * log2(d2/d1) — predicts pace at d2 from anchor p1@d1. */
+  function paulsLawPaceSingle(p1, d1, d2, k) {
+    return p1 + k * (Math.log2(d2 / d1));
+  }
+
+  function paceFromPauls(lb, lba, distM, k) {
+    if (!lb) return null;
+    const paces = [];
+    for (const cat of Object.keys(lb)) {
+      const anchor = lba[cat];
+      if (!anchor) continue;
+      const p = paulsLawPaceSingle(lb[cat], anchor, distM, k);
+      if (paceValid(p)) paces.push(p);
+    }
+    if (!paces.length) return null;
+    return paces.reduce((a, b) => a + b, 0) / paces.length;
+  }
+
+  function cpUnpack(cpParams) {
+    if (!cpParams) return null;
+    const { Pow1, tau1, Pow2, tau2 } = cpParams;
+    if (Pow1 == null || tau1 == null || Pow2 == null || tau2 == null) return null;
+    return [Pow1, tau1, Pow2, tau2];
+  }
+
+  /**
+   * Critical Power pace at a distance — invert the monotone P(t) model:
+   * find t* such that (P(t*)/2.80)^(1/3) * t* = distM, then return
+   * paceFromWatts(P(t*)).  Matches cp_pace_at in services/predictions.py.
+   */
+  function paceFromCP(cpParams, distM) {
+    const p = cpUnpack(cpParams);
+    if (!p) return null;
+    const [Pow1, tau1, Pow2, tau2] = p;
+    const resid = (t) => {
+      const P = criticalPowerModel(t, Pow1, tau1, Pow2, tau2);
+      return P > 0 ? Math.pow(P / 2.80, 1.0 / 3.0) * t - distM : -distM;
+    };
+    const tStar = bisect(resid, 10.0, 20_000.0, 0.5);
+    if (tStar == null) return null;
+    const watts = criticalPowerModel(tStar, Pow1, tau1, Pow2, tau2);
+    if (watts <= 0) return null;
+    const pace = paceFromWattsVal(watts);
+    return paceValid(pace) ? pace : null;
+  }
+
+  // ── RowingLevel helpers ─────────────────────────────────────────────────
+
+  /** Log-log interpolate within a single RL anchor's distance→pace table. */
+  function rlInterpPace(preds, targetDist) {
+    const known = [];
+    for (const k of Object.keys(preds)) {
+      const d = Number(k);
+      const v = preds[k];
+      if (Number.isFinite(d) && d > 0 && typeof v === "number" && paceValid(v)) {
+        known.push([d, v]);
+      }
+    }
+    if (known.length < 2) return null;
+    known.sort((a, b) => a[0] - b[0]);
+    let lo, hi;
+    if (targetDist <= known[0][0]) { lo = known[0]; hi = known[1]; }
+    else if (targetDist >= known[known.length - 1][0]) {
+      lo = known[known.length - 2]; hi = known[known.length - 1];
+    } else {
+      for (let i = 0; i < known.length - 1; i++) {
+        if (known[i][0] <= targetDist && targetDist <= known[i + 1][0]) {
+          lo = known[i]; hi = known[i + 1]; break;
+        }
+      }
+      if (!lo) { lo = known[known.length - 2]; hi = known[known.length - 1]; }
+    }
+    const logDlo = Math.log(lo[0]), logDhi = Math.log(hi[0]);
+    if (logDhi === logDlo) return null;
+    const t = (Math.log(targetDist) - logDlo) / (logDhi - logDlo);
+    const logPace = Math.log(lo[1]) + t * (Math.log(hi[1]) - Math.log(lo[1]));
+    return Math.exp(logPace);
+  }
+
+  function rlPaceFromPreds(preds, distM) {
+    const dInt = Math.round(distM);
+    const direct = preds[dInt] ?? preds[String(dInt)];
+    if (paceValid(direct)) return direct;
+    const pp = rlInterpPace(preds, distM);
+    return paceValid(pp) ? pp : null;
+  }
+
+  /**
+   * Distance-weighted RL average across all anchor PBs.  Weight per anchor =
+   * 1 / (|log2(distM / anchor)| + 0.5) — anchors close in log-distance
+   * dominate.  Ports rowinglevel_pace_at from services/predictions.py.
+   */
+  function paceFromRL(rlPreds, lba, distM) {
+    if (!rlPreds) return null;
+    const strLba = {};
+    for (const k of Object.keys(lba || {})) strLba[String(k)] = lba[k];
+    const paces = [], weights = [];
+    for (const catKey of Object.keys(rlPreds)) {
+      const p = rlPaceFromPreds(rlPreds[catKey], distM);
+      if (p == null) continue;
+      const anchor = strLba[catKey];
+      const w = (anchor && distM > 0)
+        ? 1.0 / (Math.abs(Math.log2(distM / anchor)) + 0.5)
+        : 1.0;
+      paces.push(p); weights.push(w);
+    }
+    if (!paces.length) return null;
+    const totW = weights.reduce((a, b) => a + b, 0);
+    return paces.reduce((a, p, i) => a + p * weights[i], 0) / totW;
+  }
+
+  // -----------------------------------------------------------------------
+  // Prediction-dataset builders — driven by a per-keyframe "snapshot" dict
+  // {lb, lb_anchor, cp_params, ll_slope, ll_intercept, pauls_k} plus
+  // bundle-level opts {predictor, show_components, show_watts, x_mode,
+  // is_dark, x_bounds, y_bounds, rl_predictions}.
+  //
+  // Each builder returns an array of Chart.js dataset dicts (may be empty).
+  // Dispatcher: buildPredDatasetsFromSnapshot(snap, opts) →
+  //   { datasets, canvasLabels } — datasets are dataset dicts; canvasLabels
+  //   is the crossover annotation list (only populated for the CP predictor
+  //   when show_components is on).
+  // -----------------------------------------------------------------------
+
+  // Colours derived in Python are warm amber; mirror here so JS can render
+  // without a round-trip.  Single source of truth lives in chart_config.py's
+  // pred_color — if that changes, update here too.
+  function predColor(isDark) {
+    return isDark ? "rgba(220,160,55,0.80)" : "rgba(185,120,20,0.80)";
+  }
+
+  function withAlpha(color, alpha) {
+    return color.replace(
+      /(hsla|rgba)\(([^,]+),([^,]+),([^,]+),[^)]+\)/,
+      (_, fn, a, b, c) => `${fn}(${a},${b},${c},${alpha.toFixed(2)})`,
+    );
+  }
+
+  /** Build a Chart.js prediction-line dataset dict. */
+  function predDataset(label, points, color, pointRadius = 1.5, borderWidth = 1.5) {
+    return {
+      type: "line",
+      label,
+      data: points,
+      borderColor: color,
+      backgroundColor: "rgba(0,0,0,0)",
+      borderWidth,
+      borderDash: [5, 4],
+      pointRadius,
+      pointHoverRadius: pointRadius + 1.0,
+      pointHitRadius: 8,
+      pointBackgroundColor: color,
+      tension: 0,
+      order: 4,
+      isPrediction: true,
+    };
+  }
+
+  /** Y-value callback (pace → watts when show_watts). */
+  function makeYFn(showWatts) {
+    return showWatts
+      ? (pace) => Math.round(wattsFromPace(pace) * 10) / 10
+      : (pace) => Math.round(pace * 1000) / 1000;
+  }
+
+  /** X-value callback (dist, pace) → chart x for current x_mode. */
+  function makeXFn(xMode) {
+    return xMode === "duration"
+      ? (dist, pace) => Math.round(dist * pace / 500.0 * 100) / 100
+      : (dist, _p) => dist;
+  }
+
+  function inRange(pts, xMin, xMax) {
+    return pts
+      .filter(p => p.x >= xMin && p.x <= xMax)
+      .sort((a, b) => a.x - b.x);
+  }
+
+  // ── Log-Log ─────────────────────────────────────────────────────────────
+  function buildLogLogDataset(snap, opts) {
+    const { ll_slope, ll_intercept } = snap;
+    if (ll_slope == null || ll_intercept == null) return [];
+    const yFn = makeYFn(opts.show_watts);
+    const xFn = makeXFn(opts.x_mode);
+    const pts = [];
+    for (const d of RANKED_DIST_VALUES) {
+      const p = paceFromLogLog(ll_slope, ll_intercept, d);
+      if (paceValid(p)) pts.push({ x: xFn(d, p), y: yFn(p) });
+    }
+    const sorted = inRange(pts, opts.x_bounds[0], opts.x_bounds[1]);
+    if (sorted.length < 2) return [];
+    return [predDataset("_loglog_fit", sorted, opts.color, 3, 1.5)];
+  }
+
+  // ── Paul's Law ──────────────────────────────────────────────────────────
+  function buildPaulsLawDatasets(snap, opts) {
+    const { lb, lb_anchor, pauls_k } = snap;
+    const yFn = makeYFn(opts.show_watts);
+    const xFn = makeXFn(opts.x_mode);
+    const [xMin, xMax] = opts.x_bounds;
+
+    const byDist = {};
+    const perAnchor = {};
+    for (const cat of Object.keys(lb || {})) {
+      const anchor = lb_anchor[cat];
+      if (!anchor) continue;
+      const catPts = [];
+      for (const d of RANKED_DIST_VALUES) {
+        const p = paulsLawPaceSingle(lb[cat], anchor, d, pauls_k);
+        if (paceValid(p)) {
+          if (!byDist[d]) byDist[d] = [];
+          byDist[d].push(p);
+          catPts.push([d, p]);
+        }
+      }
+      if (catPts.length >= 2) perAnchor[cat] = catPts;
+    }
+
+    const out = [];
+    const avgPts = [];
+    for (const d of RANKED_DIST_VALUES) {
+      const ps = byDist[d];
+      if (ps && ps.length) {
+        const avg = ps.reduce((a, b) => a + b, 0) / ps.length;
+        avgPts.push({ x: xFn(d, avg), y: yFn(avg) });
+      }
+    }
+    const sortedAvg = inRange(avgPts, xMin, xMax);
+    if (sortedAvg.length >= 2) {
+      out.push(predDataset("_pl_avg", sortedAvg, opts.color, 1.5, 2.0));
+    }
+    if (opts.show_components) {
+      const dim = withAlpha(opts.color, 0.55);
+      for (const cat of Object.keys(perAnchor)) {
+        const pts = perAnchor[cat].map(([d, p]) => ({ x: xFn(d, p), y: yFn(p) }));
+        const sorted = inRange(pts, xMin, xMax);
+        if (sorted.length >= 2) {
+          out.push(predDataset(`_pred_${cat}`, sorted, dim, 0, 1.0));
+        }
+      }
+    }
+    return out;
+  }
+
+  // ── RowingLevel ─────────────────────────────────────────────────────────
+  function buildRowingLevelDatasets(snap, opts) {
+    const rlPreds = opts.rl_predictions;
+    if (!rlPreds) return [];
+    const { lb_anchor } = snap;
+    const yFn = makeYFn(opts.show_watts);
+    const xFn = makeXFn(opts.x_mode);
+    const [xMin, xMax] = opts.x_bounds;
+
+    // Collect all unique distances across anchor curves (excluding 100m).
+    const allDistsSet = new Set();
+    for (const catKey of Object.keys(rlPreds)) {
+      for (const dkey of Object.keys(rlPreds[catKey])) {
+        const d = Math.round(Number(dkey));
+        if (Number.isFinite(d) && d !== 100) allDistsSet.add(d);
+      }
+    }
+    const allDists = Array.from(allDistsSet).sort((a, b) => a - b);
+
+    const strLba = {};
+    for (const k of Object.keys(lb_anchor || {})) strLba[String(k)] = lb_anchor[k];
+
+    const avgPts = [];
+    for (const d of allDists) {
+      const paces = [], weights = [];
+      for (const catKey of Object.keys(rlPreds)) {
+        const preds = rlPreds[catKey];
+        const p = preds[d] ?? preds[String(d)];
+        if (!paceValid(p)) continue;
+        const anchor = strLba[catKey];
+        const w = anchor ? 1.0 / (Math.abs(Math.log2(d / anchor)) + 0.5) : 1.0;
+        paces.push(p); weights.push(w);
+      }
+      if (paces.length) {
+        const totW = weights.reduce((a, b) => a + b, 0);
+        const avg = paces.reduce((a, p, i) => a + p * weights[i], 0) / totW;
+        avgPts.push({ x: xFn(d, avg), y: yFn(avg) });
+      }
+    }
+
+    const out = [];
+    const sortedAvg = inRange(avgPts, xMin, xMax);
+    if (sortedAvg.length >= 2) {
+      out.push(predDataset("_rl_avg", sortedAvg, opts.color, 1.5, 2.0));
+    }
+    if (opts.show_components) {
+      const dim = withAlpha(opts.color, 0.55);
+      for (const catKey of Object.keys(rlPreds)) {
+        const preds = rlPreds[catKey];
+        const pts = [];
+        for (const dkey of Object.keys(preds)) {
+          const d = Math.round(Number(dkey));
+          if (!Number.isFinite(d) || d === 100) continue;
+          const p = preds[dkey];
+          if (!paceValid(p)) continue;
+          pts.push({ x: xFn(d, p), y: yFn(p) });
+        }
+        const sorted = inRange(pts, xMin, xMax);
+        if (sorted.length < 2) continue;
+        out.push(predDataset(`_rl_${catKey}`, sorted, dim, 0, 1.0));
+      }
+    }
+    return out;
+  }
+
+  // ── Critical Power ──────────────────────────────────────────────────────
+  // Returns { datasets, canvasLabels } — datasets include the curve, event
+  // markers, optional fast/slow components and crossover vline; canvasLabels
+  // carries the bottom-anchored crossover annotation when show_components.
+  function buildCPDatasets(snap, opts) {
+    const cp = snap.cp_params;
+    if (!cp) return { datasets: [], canvasLabels: [] };
+    const unpacked = cpUnpack(cp);
+    if (!unpacked) return { datasets: [], canvasLabels: [] };
+    const [Pow1, tau1, Pow2, tau2] = unpacked;
+    const yFn = makeYFn(opts.show_watts);
+    const xFn = makeXFn(opts.x_mode);
+    const [xMin, xMax] = opts.x_bounds;
+    const [yMin, yMax] = opts.y_bounds || [60.0, 250.0];
+    const isDark = opts.is_dark;
+
+    const datasets = [];
+
+    // ── Smooth curve ────────────────────────────────────────────────────
+    const cpPts = [];
+    const logMin = Math.log10(CP_T_MIN);
+    const logMax = Math.log10(CP_T_MAX);
+    for (let i = 0; i < CP_CURVE_N_PTS; i++) {
+      const lt = logMin + (logMax - logMin) * (i / (CP_CURVE_N_PTS - 1));
+      const t = Math.pow(10, lt);
+      const w = criticalPowerModel(t, Pow1, tau1, Pow2, tau2);
+      if (w <= 0) continue;
+      const pace = paceFromWattsVal(w);
+      if (!paceValid(pace)) continue;
+      const dist = t * (500.0 / pace);
+      const xv = xFn(dist, pace);
+      if (xv < xMin || xv > xMax) continue;
+      datasets.length; // unused
+      cpPts.push({ x: Math.round(xv * 10) / 10, y: yFn(pace) });
+    }
+    if (cpPts.length >= 2) {
+      datasets.push(predDataset("_critical_power", cpPts, opts.color, 0, 1.5));
+    }
+
+    // ── Event markers (one per selected ranked event) ─────────────────
+    const selDists = new Set(opts.selected_dists || []);
+    const selTimes = new Set(opts.selected_times || []);
+    const evPts = [];
+
+    for (const [distM, label] of RANKED_DISTANCES_PAIRS) {
+      if (!selDists.has(distM)) continue;
+      const resid = (t) => {
+        const P = criticalPowerModel(t, Pow1, tau1, Pow2, tau2);
+        return P > 0 ? Math.pow(P / 2.80, 1.0 / 3.0) * t - distM : -distM;
+      };
+      const tStar = bisect(resid, CP_T_MIN, CP_T_MAX, 0.1);
+      if (tStar == null) continue;
+      const w = criticalPowerModel(tStar, Pow1, tau1, Pow2, tau2);
+      if (w <= 0) continue;
+      const pace = paceFromWattsVal(w);
+      if (!paceValid(pace)) continue;
+      const dist = tStar * (500.0 / pace);
+      const xv = xFn(dist, pace);
+      if (xv < xMin || xv > xMax) continue;
+      evPts.push({ x: Math.round(xv * 10) / 10, y: yFn(pace), _event_label: label });
+    }
+    for (const [tenths, label] of RANKED_TIMES_PAIRS) {
+      if (!selTimes.has(tenths)) continue;
+      const t = tenths / 10.0;
+      const w = criticalPowerModel(t, Pow1, tau1, Pow2, tau2);
+      if (w <= 0) continue;
+      const pace = paceFromWattsVal(w);
+      if (!paceValid(pace)) continue;
+      const dist = t * (500.0 / pace);
+      const xv = xFn(dist, pace);
+      if (xv < xMin || xv > xMax) continue;
+      evPts.push({ x: Math.round(xv * 10) / 10, y: yFn(pace), _event_label: label });
+    }
+    if (evPts.length) {
+      datasets.push({
+        type: "scatter",
+        label: "_cp_event_markers",
+        data: evPts,
+        backgroundColor: opts.color,
+        borderColor: opts.color,
+        borderWidth: 1,
+        pointRadius: 4,
+        pointHoverRadius: 7,
+        pointHitRadius: 12,
+        order: 4,
+        isPrediction: true,
+      });
+    }
+
+    // ── Crossover + fast/slow components (only when show_components) ─────
+    const canvasLabels = [];
+    if (opts.show_components) {
+      const diff = (t) => Pow1 / (1.0 + t / tau1) - Pow2 / (1.0 + t / tau2);
+      let tCross = null;
+      if (diff(CP_T_MIN) * diff(CP_T_MAX) <= 0) {
+        tCross = bisect(diff, CP_T_MIN, CP_T_MAX, 0.1);
+      }
+      if (tCross != null) {
+        const wCross = criticalPowerModel(tCross, Pow1, tau1, Pow2, tau2);
+        if (wCross > 0) {
+          const paceCross = paceFromWattsVal(wCross);
+          if (paceValid(paceCross)) {
+            const distCross = tCross * (500.0 / paceCross);
+            const xCross = xFn(distCross, paceCross);
+            if (xCross >= xMin && xCross <= xMax) {
+              const xoColor = isDark ? "rgba(20, 210, 190, 0.55)" : "rgba(0, 160, 145, 0.55)";
+              const xoTextColor = isDark ? "rgba(20, 210, 190, 0.90)" : "rgba(0, 140, 128, 0.90)";
+              datasets.push({
+                type: "line",
+                label: "_cp_crossover_vline",
+                data: [{ x: xCross, y: yMin }, { x: xCross, y: yMax }],
+                borderColor: xoColor,
+                backgroundColor: "rgba(0,0,0,0)",
+                borderWidth: 1.5,
+                borderDash: [6, 4],
+                pointRadius: 0,
+                tension: 0,
+                order: 4,
+              });
+              // Human-readable duration label ("1h 23m 05s" etc.)
+              const total = Math.round(tCross);
+              const mins = Math.floor(total / 60);
+              const secs = total % 60;
+              let tLabel;
+              if (mins >= 60) {
+                const hrs = Math.floor(mins / 60);
+                const mm = mins % 60;
+                tLabel = `${hrs}h ${mm}m ${String(secs).padStart(2, "0")}s`;
+              } else if (mins > 0) {
+                tLabel = `${mins}m ${String(secs).padStart(2, "0")}s`;
+              } else {
+                tLabel = `${secs}s`;
+              }
+              canvasLabels.push({
+                x: xCross,
+                y: null,
+                _anchor: "bottom",
+                lines: [`Crossover: ${tLabel}`, "<- sprint | aerobic ->"],
+                color: xoTextColor,
+              });
+            }
+          }
+        }
+      }
+
+      // Fast/slow component curves.
+      const dim = withAlpha(opts.color, 0.62);
+      const fastPts = [], slowPts = [];
+      for (let i = 0; i < CP_CURVE_N_PTS; i++) {
+        const lt = logMin + (logMax - logMin) * (i / (CP_CURVE_N_PTS - 1));
+        const t = Math.pow(10, lt);
+        const wCombined = Pow1 / (1.0 + t / tau1) + Pow2 / (1.0 + t / tau2);
+        if (wCombined <= 0) continue;
+        const paceCombined = paceFromWattsVal(wCombined);
+        if (!paceValid(paceCombined)) continue;
+        const dist = t * (500.0 / paceCombined);
+        const xv = xFn(dist, paceCombined);
+        if (xv < xMin || xv > xMax) continue;
+        const wFast = Pow1 / (1.0 + t / tau1);
+        const wSlow = Pow2 / (1.0 + t / tau2);
+        if (opts.show_watts) {
+          fastPts.push({ x: Math.round(xv * 100) / 100, y: Math.round(wFast * 100) / 100 });
+          slowPts.push({ x: Math.round(xv * 100) / 100, y: Math.round(wSlow * 100) / 100 });
+        } else {
+          const pf = paceFromWattsVal(wFast);
+          const ps = paceFromWattsVal(wSlow);
+          if (paceValid(pf)) fastPts.push({ x: Math.round(xv * 100) / 100, y: Math.round(pf * 10000) / 10000 });
+          if (paceValid(ps)) slowPts.push({ x: Math.round(xv * 100) / 100, y: Math.round(ps * 10000) / 10000 });
+        }
+      }
+      if (fastPts.length >= 2) datasets.push(predDataset("_cp_fast", fastPts, dim, 0, 1.0));
+      if (slowPts.length >= 2) datasets.push(predDataset("_cp_slow", slowPts, dim, 0, 1.0));
+    }
+
+    return { datasets, canvasLabels };
+  }
+
+  // ── Average ensemble ────────────────────────────────────────────────────
+  function buildAverageDatasets(snap, opts) {
+    const { lb, lb_anchor, cp_params, ll_slope, ll_intercept, pauls_k } = snap;
+    const yFn = makeYFn(opts.show_watts);
+    const xFn = makeXFn(opts.x_mode);
+    const [xMin, xMax] = opts.x_bounds;
+    const N = 80;
+    const logMin = Math.log10(100.0);
+    const logMax = Math.log10(42195.0);
+
+    const avgPts = [], llPts = [], plPts = [], cpPts = [], rlPts = [];
+
+    for (let i = 0; i < N; i++) {
+      const d = Math.pow(10, logMin + (logMax - logMin) * (i / (N - 1)));
+      const paces = [];
+
+      const ll = paceFromLogLog(ll_slope, ll_intercept, d);
+      if (paceValid(ll)) { paces.push(ll); llPts.push({ x: xFn(d, ll), y: yFn(ll) }); }
+
+      const pl = paceFromPauls(lb, lb_anchor, d, pauls_k);
+      if (paceValid(pl)) { paces.push(pl); plPts.push({ x: xFn(d, pl), y: yFn(pl) }); }
+
+      const cp = paceFromCP(cp_params, d);
+      if (paceValid(cp)) { paces.push(cp); cpPts.push({ x: xFn(d, cp), y: yFn(cp) }); }
+
+      const rl = paceFromRL(opts.rl_predictions, lb_anchor, d);
+      if (paceValid(rl)) { paces.push(rl); rlPts.push({ x: xFn(d, rl), y: yFn(rl) }); }
+
+      if (paces.length) {
+        const avg = paces.reduce((a, b) => a + b, 0) / paces.length;
+        avgPts.push({ x: xFn(d, avg), y: yFn(avg) });
+      }
+    }
+
+    const out = [];
+    const sortedAvg = inRange(avgPts, xMin, xMax);
+    if (sortedAvg.length >= 2) {
+      out.push(predDataset("_avg_ensemble", sortedAvg, opts.color, 1.5, 2.5));
+    }
+    if (opts.show_components) {
+      const dim = withAlpha(opts.color, 0.55);
+      const pairs = [["_avg_ll", llPts], ["_avg_pl", plPts], ["_avg_cp", cpPts], ["_avg_rl", rlPts]];
+      for (const [label, pts] of pairs) {
+        const sorted = inRange(pts, xMin, xMax);
+        if (sorted.length >= 2) out.push(predDataset(label, sorted, dim, 0, 1.0));
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Snapshot-driven prediction builder — owns prediction-curve dataset
+   * construction on the JS side using fit parameters baked into each
+   * timeline snapshot.
+   *
+   * snap = {lb, lb_anchor, cp_params, ll_slope, ll_intercept, pauls_k}
+   * opts = {predictor, show_components, show_watts, x_mode, is_dark,
+   *         x_bounds, y_bounds, rl_predictions, selected_dists,
+   *         selected_times}
+   *
+   * Returns { datasets, canvasLabels }.  canvasLabels is populated only
+   * when the CP predictor produces a crossover annotation.
+   */
+  function buildPredDatasetsFromSnapshot(snap, rawOpts) {
+    if (!snap) return { datasets: [], canvasLabels: [] };
+    const opts = { ...rawOpts, color: predColor(rawOpts.is_dark) };
+    let p = opts.predictor;
+    // CP → log-log fallback.  fit_critical_power() needs ≥5 PBs; early in the
+    // timeline there aren't enough and cp_params is null.  Python's slow path
+    // (power_curve_page:1266) falls back to log-log in that case; mirror it
+    // here so the prediction curve doesn't vanish mid-animation.
+    if (p === "critical_power" && !snap.cp_params) p = "loglog";
+    if (p === "none") return { datasets: [], canvasLabels: [] };
+    if (p === "loglog") return { datasets: buildLogLogDataset(snap, opts), canvasLabels: [] };
+    if (p === "pauls_law") return { datasets: buildPaulsLawDatasets(snap, opts), canvasLabels: [] };
+    if (p === "rowinglevel") return { datasets: buildRowingLevelDatasets(snap, opts), canvasLabels: [] };
+    if (p === "critical_power") return buildCPDatasets(snap, opts);
+    if (p === "average") return { datasets: buildAverageDatasets(snap, opts), canvasLabels: [] };
+    return { datasets: [], canvasLabels: [] };
+  }
+
   // -----------------------------------------------------------------------
   // Sim axes options (built once per bundle, reused every tick)
   // -----------------------------------------------------------------------
@@ -1046,7 +1811,9 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
   let pbBadgeCountdown = 0;     // steps remaining for PB badge display
   let pbBadgeLabels   = [];     // canvas label dicts while badge is showing
   let simDoneCounter  = 0;      // monotonically incremented on completion
-  let lastKfDay       = -1;     // tracks which keyframe was last processed for PB badge
+  let lastKfDay       = -1;     // tracks which PB-event day was last processed for PB badge
+  let pbEventsByDay   = {};     // day -> [label,...] from computePBEvents
+  let pbEventDays     = [];     // sorted ascending list of PB-event days
 
   const SPEED_DAYS = { "0.5x": 1, "1x": 7, "4x": 30, "16x": 91 };
   const TICK_MS = 350;
@@ -1057,6 +1824,13 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     lastKfDay        = -1;
     pbBadgeCountdown = 0;
     pbBadgeLabels    = [];
+
+    // Precompute PB events from the manifest (once per bundle).  Python no
+    // longer ships per-snapshot PB labels; JS derives them here from the
+    // same manifest used for scatter/overlay datasets.
+    const pbEvents = computePBEvents(bundle.workout_manifest, bundle.pb_color);
+    pbEventsByDay = pbEvents.byDay;
+    pbEventDays   = pbEvents.sortedDays;
 
     // Sync scrubber range to the bundle timeline.
     tlInput.min = 0;
@@ -1088,36 +1862,43 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     const bundle   = cachedBundle;
     const showW    = props.show_watts;
     const manifest = bundle.workout_manifest;
-    const kf       = findKeyframe(bundle.keyframes, currentDay);
+    const kf       = findSnapshot(
+      bundle.timeline_snapshots, bundle.selection_key, currentDay,
+    );
 
     // ── Scatter + best lines ─────────────────────────────────────────────────
-    const scatterDs = buildScatterDatasets(manifest, currentDay, bundle, showW);
+    const scatterDs = buildScatterFromWorkouts(
+      props.workouts, currentDay, scatterOpts(),
+    );
 
-    // ── Prediction datasets ──────────────────────────────────────────────────
-    const predDs = kf.pred_datasets || [];
+    // ── Prediction datasets + crossover labels (JS-sampled from snapshot) ────
+    const { datasets: predDs, canvasLabels: predCanvasLabels } =
+      buildPredDatasetsFromSnapshot(kf.snapshot, predOpts(bundle));
 
     // ── Overlay datasets ─────────────────────────────────────────────────────
     const { overlayDatasets, canvasLabels: overlayLabels } =
       buildOverlayDatasets(manifest, currentDay, currentStepDays, bundle, showW);
 
     // ── PB badge ─────────────────────────────────────────────────────────────
-    // Trigger when we enter a new keyframe (kf.day changed since last tick).
-    // We can't check kf.day === currentDay because steps may skip over it.
-    if (kf.day > lastKfDay && kf.new_pb_labels && kf.new_pb_labels.length) {
-      lastKfDay = kf.day;
-      pbBadgeLabels    = kf.new_pb_labels.map(lbl => ({
-        x:          lbl.x,
-        y:          showW ? lbl.y_watts : lbl.y_pace,
-        line_event: lbl.line_event,
-        pct_pace:   lbl.pct_pace,
-        pct_watts:  lbl.pct_watts,
-        line_label: lbl.line_label,
-        color:      bundle.pb_color,
-        bold:       true,
-      }));
-      pbBadgeCountdown = bundle.pb_badge_lifetime_steps;
-    } else if (kf.day > lastKfDay) {
-      lastKfDay = kf.day;
+    // Trigger when we cross a new PB-event day.  We can't check
+    // pbEventDay === currentDay because the tick step may skip over it.
+    const pbEventDay = newestPBEventDay(pbEventDays, currentDay);
+    if (pbEventDay > lastKfDay) {
+      lastKfDay = pbEventDay;
+      const dayLabels = pbEventsByDay[pbEventDay] || [];
+      if (dayLabels.length) {
+        pbBadgeLabels = dayLabels.map(lbl => ({
+          x:          lbl.x,
+          y:          showW ? lbl.y_watts : lbl.y_pace,
+          line_event: lbl.line_event,
+          pct_pace:   lbl.pct_pace,
+          pct_watts:  lbl.pct_watts,
+          line_label: lbl.line_label,
+          color:      lbl.color,
+          bold:       lbl.bold,
+        }));
+        pbBadgeCountdown = bundle.pb_badge_lifetime_steps;
+      }
     }
 
     // Merge PB badge labels with upcoming-PB overlay labels and any
@@ -1127,8 +1908,8 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
       allCanvasLabels = [...pbBadgeLabels, ...allCanvasLabels];
       pbBadgeCountdown--;
     }
-    if (kf.pred_canvas_labels && kf.pred_canvas_labels.length) {
-      allCanvasLabels = [...allCanvasLabels, ...kf.pred_canvas_labels];
+    if (predCanvasLabels && predCanvasLabels.length) {
+      allCanvasLabels = [...allCanvasLabels, ...predCanvasLabels];
     }
 
     // ── Update chart ─────────────────────────────────────────────────────────
@@ -1195,10 +1976,15 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     const bundle   = cachedBundle;
     const showW    = props.show_watts;
     const manifest = bundle.workout_manifest;
-    const kf       = findKeyframe(bundle.keyframes, currentDay);
+    const kf       = findSnapshot(
+      bundle.timeline_snapshots, bundle.selection_key, currentDay,
+    );
 
-    const scatterDs = buildScatterDatasets(manifest, currentDay, bundle, showW);
-    const predDs    = kf.pred_datasets || [];
+    const scatterDs = buildScatterFromWorkouts(
+      props.workouts, currentDay, scatterOpts(),
+    );
+    const { datasets: predDs, canvasLabels: predCanvasLabels } =
+      buildPredDatasetsFromSnapshot(kf.snapshot, predOpts(bundle));
     const { overlayDatasets, canvasLabels: overlayLabels } =
       buildOverlayDatasets(manifest, currentDay, currentStepDays, bundle, showW);
 
@@ -1206,8 +1992,8 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     if (pbBadgeCountdown > 0) {
       allCanvasLabels = [...pbBadgeLabels, ...allCanvasLabels];
     }
-    if (kf.pred_canvas_labels && kf.pred_canvas_labels.length) {
-      allCanvasLabels = [...allCanvasLabels, ...kf.pred_canvas_labels];
+    if (predCanvasLabels && predCanvasLabels.length) {
+      allCanvasLabels = [...allCanvasLabels, ...predCanvasLabels];
     }
 
     chartInstance.data.datasets = [
@@ -1254,7 +2040,13 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
   // -----------------------------------------------------------------------
 
   let props = {
-    config:               ctx.initialProps.config               || null,
+    workouts:             ctx.initialProps.workouts             || [],
+    season_meta:          ctx.initialProps.season_meta          || [],
+    best_filter:          ctx.initialProps.best_filter          || "All",
+    overlay_bests:        ctx.initialProps.overlay_bests        || "PBs",
+    selected_dists:       ctx.initialProps.selected_dists       || [],
+    selected_times:       ctx.initialProps.selected_times       || [],
+    is_dark:              ctx.initialProps.is_dark              || false,
     show_watts:           ctx.initialProps.show_watts           || false,
     x_mode:               ctx.initialProps.x_mode               || "distance",
     sim_bundle:           ctx.initialProps.sim_bundle           || null,
@@ -1266,20 +2058,36 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     timeline_annotations: ctx.initialProps.timeline_annotations || [],
   };
 
+  // Props that affect scatter/best-line rendering.  When any of these change,
+  // rebuild scatter in place (static path) or redraw the current frame (sim).
+  const SCATTER_PROPS = new Set([
+    "workouts", "season_meta", "best_filter", "overlay_bests",
+    "selected_dists", "selected_times", "is_dark",
+  ]);
+
   currentStepDays = SPEED_DAYS[props.sim_speed] || 7;
 
-  // Apply initial state.
+  // Apply initial state.  Python always pre-populates a fast sim_bundle before
+  // the chart mounts, so the bundle branch is the only code path.
   if (props.sim_bundle) {
     if (!cachedBundle || cachedBundle.bundle_key !== props.sim_bundle.bundle_key) {
       applyBundle(props.sim_bundle);
     }
     handleSimCommand(props.sim_command);
-  } else if (props.config) {
-    applyConfig(props.config, props.show_watts);
   }
 
   ctx.onPropUpdate((propName, propValue) => {
     props[propName] = propValue;
+
+    if (SCATTER_PROPS.has(propName)) {
+      // Scatter-affecting props: redraw the current frame.  With the bundle
+      // always present, a paused animation simply re-renders from the current
+      // snapshot.
+      if (cachedBundle && intervalId === null) {
+        tick_noadvance();
+      }
+      return;
+    }
 
     if (propName === "sim_bundle") {
       if (propValue) {
@@ -1301,6 +2109,13 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
         // Always apply the current sim_command after receiving a bundle so that
         // "play" is honoured even if the command prop didn't change this cycle.
         handleSimCommand(props.sim_command);
+      } else {
+        // Bundle cleared (identity_key change in Python — e.g. user toggled
+        // best_filter / excluded seasons / predictor).  Pause and drop the
+        // cached bundle; Python will ship a fresh fast bundle within the same
+        // render cycle, which will re-enter the applyBundle branch above.
+        pauseAnimation();
+        cachedBundle = null;
       }
       return;
     }
@@ -1318,18 +2133,11 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
       return;
     }
 
-    if (propName === "show_watts" || propName === "config" || propName === "x_mode") {
-      // Static config update — only re-render if we're not in bundle animation mode.
-      if (!cachedBundle || !intervalId) {
-        // When paused with an active bundle, sync currentDay to Python's slider
-        // position so that pressing Play resumes from where the slider was moved.
-        // The config prop always arrives with the updated position embedded as _sim_day.
-        if (cachedBundle && !intervalId && props.config && props.config._sim_day !== undefined) {
-          currentDay = props.config._sim_day;
-          tlSetThumb(currentDay);
-        }
-        applyConfig(props.config, props.show_watts);
-      }
+    if (propName === "show_watts" || propName === "x_mode") {
+      // These change Chart.js axis options on the next applyBundle — settings
+      // that mutate data_key trigger a bundle rebuild on the Python side, so
+      // the incoming sim_bundle prop update drives the re-render.  No local
+      // action needed here.
       return;
     }
 

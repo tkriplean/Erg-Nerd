@@ -5,7 +5,6 @@ Three cohesive sections:
 
 1. Snapshot helpers — per-keyframe model computation.
      ol_event_line()              format the overlay "Event  time-or-dist" line.
-     pcts()                       (pct_pace, pct_watts) improvement between paces.
      compute_timeline_snapshot()  given the workouts visible at a timeline
                                   position, compute all derived model data
                                   (lifetime bests, Paul's K, CP fit, prediction
@@ -31,23 +30,31 @@ Three cohesive sections:
 3. Bundle lifecycle — HyperDiv plumbing (the only non-pure part).
      lookup_bundle_entry()        Latest pred_table_lookup entry at or before
                                   a given day.
-     manage_animation_bundle()    Split data_key / style_key caching of
-                                  ``state.sim_bundle_data`` (heavy keyframes)
-                                  and ``state.sim_bundle`` (style-wrapped
-                                  payload); launches the background
-                                  build_keyframes task; returns sim_command.
+     manage_animation_bundle()    Three-key caching of per-selection snapshot
+                                  sets in ``state.sim_snapshot_cache`` (LRU
+                                  bounded to ``_SNAPSHOT_CACHE_MAX``);
+                                  launches the background build_keyframes
+                                  task; returns sim_command.
 
         Key split:
-          data_key   — workout identity + predictor + x_mode + show_components
-                       + show_watts + WC fetch state.  Change → re-run the
-                       expensive keyframe loop.
-          style_key  — log_x, log_y, overlay_bests, x_bounds, y_bounds.
-                       Change → only re-wrap the cached bundle_data (O(1) —
-                       no task).  Bounds live on the style side because they
-                       depend on log_x and are injected by wrap_payload.
+          identity_key  — workout identity + predictor + x_mode + show_components
+                          + show_watts + best_filter + excluded_seasons + WC
+                          fetch state.  Change → invalidate the entire LRU
+                          cache.
+          selection_key — hash of (selected_dists, selected_times).  Inner
+                          dimension of the cache; different selections share
+                          the same identity but have their own snapshot set.
+          style_key     — log_x, log_y, overlay_bests, x_bounds, y_bounds.
+                          Change → only re-wrap the cached bundle_data (O(1)
+                          — no task).  Bounds live on the style side because
+                          they depend on log_x and are injected by wrap_payload.
 
-        The combined (data_key, style_key) forms the ``bundle_key`` the JS
-        compares to decide whether to re-apply the bundle.
+        The combined (identity_key, selection_key, style_key) forms the
+        ``bundle_key`` the JS compares to decide whether to re-apply the
+        bundle.  The transported ``timeline_snapshots`` prop is a two-level
+        dict ``{selection_key: {day: entry}}`` merged from every cached
+        selection, so JS can switch to a previously-seen selection without a
+        Python round-trip.
 
 Why sections 1–2 live next to the HyperDiv bundle lifecycle in section 3:
     The animation story has its own cohesive invariant set (bundle_key, task
@@ -57,18 +64,16 @@ Why sections 1–2 live next to the HyperDiv bundle lifecycle in section 3:
     keyframe and stores pred_table_rows + pauls_k_fit in a Python-side lookup
     so the page can read both during animation without re-running the models.
 
-    The animation-only chart helpers (ol_event_line, pcts,
-    build_sb_annotations, build_wr_static_datasets) formerly lived in
-    chart_config.py but none of them are used by the slow-path
-    build_chart_config; they belong here alongside the keyframe builder.
-    A handful of dataset-shaping privates (``_wr_scatter_dataset``,
-    ``_wr_pred_datasets``, ``_season_hsla``) remain in chart_config because
-    build_chart_config still uses them; we import them here by underscored
-    name — these two modules are tightly-coupled siblings.
+    The animation-only chart helpers (ol_event_line,
+    build_sb_annotations, build_wr_static_datasets) live here alongside the
+    keyframe builder.  A handful of dataset-shaping privates
+    (``_wr_scatter_dataset``, ``_wr_pred_datasets``, ``_season_hsla``) still
+    live in ``power_curve_chart_config`` and are imported here by their
+    underscored names because the world-record overlay composition is shared
+    across that module and this one.
 
-    Also: the old ``state._pauls_k_fit`` bridge between slow and fast paths
-    is gone.  pauls_k_fit now travels inside ``pred_table_lookup`` entries,
-    so the fast path reads it from the bundle atomically with pred_rows.
+    pauls_k_fit travels inside ``pred_table_lookup`` entries so the bundle
+    reader can pull it atomically with pred_rows.
 """
 
 from __future__ import annotations
@@ -91,6 +96,7 @@ from services.rowing_utils import (
     compute_pauls_constant,
     compute_watts,
     get_season,
+    loglog_fit,
     parse_date,
     workout_cat_key,
 )
@@ -100,10 +106,8 @@ from services.predictions import build_prediction_table_data
 
 from components.power_curve_workouts import WorkoutView
 from components.power_curve_chart_config import (
-    build_pred_datasets,
-    # Private sub-builders shared with build_chart_config; kept in chart_config
-    # (where build_chart_config also uses them) and imported here by their
-    # underscored names — animation and chart_config are tightly-coupled
+    # Private WR-overlay helpers that live in chart_config; animation imports
+    # them by underscored name because the two modules are tightly-coupled
     # siblings for WR overlay composition.
     _season_hsla,
     _wr_pred_datasets,
@@ -130,31 +134,11 @@ def ol_event_line(etype, evalue, pace, dist):
         return f"{evalue // 600}min  {dist:,}m"
 
 
-def pcts(old_pace, new_pace):
-    """Return (pct_pace, pct_watts) improvements; both 0.0 if no prior best."""
-    if not old_pace or old_pace <= new_pace:
-        return 0.0, 0.0
-    pp = (old_pace - new_pace) / old_pace * 100
-    pw = (
-        (compute_watts(new_pace) - compute_watts(old_pace))
-        / compute_watts(old_pace)
-        * 100
-    )
-    return pp, pw
-
-
 def compute_timeline_snapshot(
     *,
     sim_wkts: list,
     all_events_to_date: list,
-    predictor: str,
     rl_predictions: dict | None,
-    show_watts: bool,
-    is_dark: bool,
-    x_mode: str,
-    x_bounds,
-    y_bounds,
-    show_components: bool,
     selected_dist_set: set | None = None,
     selected_time_set: set | None = None,
     cp_fit_cache: dict | None = None,
@@ -184,8 +168,8 @@ def compute_timeline_snapshot(
         pauls_k_fit     — personalised Paul's constant, or None if < 2 PBs
         pauls_k         — pauls_k_fit or population default 5.0
         cp_params       — Critical Power fit dict, or None if insufficient data
-        pred_datasets   — Chart.js dataset list for the active predictor
-        pred_canvas_labels — canvas overlay label dicts
+        ll_slope        — log-log slope (None if < 2 PBs) — JS samples curve
+        ll_intercept    — log-log intercept paired with ll_slope
         pred_table_rows — list of prediction table row dicts
         accuracy        — dict keyed by Predictor.key ("average",
                           "critical_power", "loglog", "pauls_law",
@@ -221,23 +205,9 @@ def compute_timeline_snapshot(
     else:
         cp_params = fit_critical_power(cp_pb_list)
 
-    # ── Prediction datasets (chart curves) ────────────────────────────────────
-    pred_datasets, pred_canvas_labels = build_pred_datasets(
-        predictor=predictor,
-        lifetime_best=lb,
-        lifetime_best_anchor=lb_anchor,
-        critical_power_params=cp_params,
-        rl_predictions=(
-            rl_predictions if predictor in ("rowinglevel", "average") else None
-        ),
-        pauls_k=pauls_k,
-        show_watts=show_watts,
-        is_dark=is_dark,
-        x_mode=x_mode,
-        x_bounds=x_bounds,
-        y_bounds=y_bounds,
-        show_components=show_components,
-    )
+    # ── Log-log fit (JS samples pred curves from these params) ───────────────
+    _ll = loglog_fit(lb, lb_anchor)
+    ll_slope, ll_intercept = (_ll if _ll else (None, None))
 
     # ── Prediction table rows + accuracy ──────────────────────────────────────
     _pred = build_prediction_table_data(
@@ -260,8 +230,8 @@ def compute_timeline_snapshot(
         "pauls_k_fit": pauls_k_fit,
         "pauls_k": pauls_k,
         "cp_params": cp_params,
-        "pred_datasets": pred_datasets,
-        "pred_canvas_labels": pred_canvas_labels,
+        "ll_slope": ll_slope,
+        "ll_intercept": ll_intercept,
         "pred_table_rows": _pred["rows"],
         "accuracy": _pred["accuracy"],
     }
@@ -404,6 +374,7 @@ def build_keyframes(
     rl_predictions: dict,
     all_seasons: list,
     wr_data,
+    fast_only: bool = False,
 ) -> tuple[dict, dict]:
     """
     Heavy, data-dependent half of the animation bundle.
@@ -421,6 +392,13 @@ def build_keyframes(
       pred_table_lookup  — dict[int, dict]: keyframe_day →
                            {"pred_rows": [...], "pauls_k_fit": float|None,
                             "accuracy": {"cp": {...}, "loglog": {...}, ...}}
+
+    ``fast_only=True`` skips the historical per-date walk and emits a single
+    end-state snapshot stored under day=0, so the nearest-≤ lookup returns
+    it for any ``currentDay``.  Used synchronously from
+    ``manage_animation_bundle`` on cache-miss so the initial render isn't
+    blank while the full historical build runs in the background.  The bg
+    task result replaces the fast bundle entry when it completes.
 
     See ``wrap_payload`` for the cheap style wrapper that produces the final
     js_payload; ``manage_animation_bundle`` caches this result by a data_key
@@ -524,24 +502,35 @@ def build_keyframes(
     # ── Keyframe builder ─────────────────────────────────────────────────────
     # Walk unique workout dates oldest→newest; emit a keyframe whenever the
     # lifetime-best dict changes (i.e. a new PB is set for any category).
+    # Newest-first: ``_bisect_date_desc`` walks a descending-by-date list and
+    # returns the first index whose workouts are all dated ≤ date_str, so the
+    # per-keyframe slice ``list[i:]`` is "everything at or before this date."
+    # A previous refactor accidentally sorted ascending here, which made the
+    # bisect return empty slices for early dates (no predictions at the start
+    # of the timeline) and full slices for late dates (predictions stale with
+    # respect to the PBs-at-that-point because future workouts leaked in).
     sorted_efforts_by_event = sorted(
-        efforts_filtered_by_event, key=lambda w: w.get("date", "")
+        efforts_filtered_by_event, key=lambda w: w.get("date", ""), reverse=True,
     )
-    sorted_featured = sorted(featured_efforts, key=lambda w: w.get("date", ""))
-    # Sort excl oldest-first for per-keyframe lb_all slicing.
-    sorted_quality_efforts = sorted(quality_efforts, key=lambda w: w.get("date", ""))
+    sorted_featured = sorted(
+        featured_efforts, key=lambda w: w.get("date", ""), reverse=True,
+    )
+    sorted_quality_efforts = sorted(
+        quality_efforts, key=lambda w: w.get("date", ""), reverse=True,
+    )
 
-    js_keyframes = [
-        {
-            "day": 0,
-            "lifetime_best_pace": {},
-            "lifetime_best_watts": {},
-            "new_pbs": [],
-            "new_pb_labels": [],
-            "pred_datasets": [],
-            "pred_canvas_labels": [],
+    snapshots: dict[int, dict] = {
+        0: {
+            "snapshot": {
+                "lb": {},
+                "lb_anchor": {},
+                "cp_params": None,
+                "ll_slope": None,
+                "ll_intercept": None,
+                "pauls_k": 5.0,
+            },
         }
-    ]
+    }
     # keyframe_day → {"pred_rows": [...], "pauls_k_fit": float|None}
     #
     # pauls_k_fit travels with the keyframe so the page's fast path can read
@@ -554,9 +543,49 @@ def build_keyframes(
     prev_lb_str = {}  # cat_key_str -> pace
     cp_fit_cache: dict = {}  # fit_key -> cp_params (shared across keyframes)
 
-    seen_dates = sorted(
-        {w.get("date", "")[:10] for w in sorted_efforts_by_event if w.get("date")}
-    )
+    # ── Fast path: single end-state snapshot ─────────────────────────────────
+    # When fast_only=True, skip the per-date walk and emit one snapshot that
+    # reflects the current (end-of-timeline) bests.  Stored under day=0 so the
+    # JS nearest-≤ lookup returns it for any currentDay the user lands on
+    # before the full historical build replaces this entry in the cache.
+    if fast_only:
+        if best_filter == "All":
+            sim_wkts = list(efforts_filtered_by_event)
+        else:
+            sim_wkts = apply_best_only(
+                featured_efforts, by_season=best_filter != "PBs"
+            )
+        _snap = compute_timeline_snapshot(
+            sim_wkts=sim_wkts,
+            all_events_to_date=quality_efforts,
+            rl_predictions=rl_predictions,
+            selected_dist_set=selected_dist_set,
+            selected_time_set=selected_time_set,
+        )
+        lb_str = {f"{k[0]}:{k[1]}": v for k, v in _snap["lb"].items()}
+        lb_anchor_str = {f"{k[0]}:{k[1]}": v for k, v in _snap["lb_anchor"].items()}
+        snapshots[0] = {
+            "snapshot": {
+                "lb": lb_str,
+                "lb_anchor": lb_anchor_str,
+                "cp_params": _snap["cp_params"],
+                "ll_slope": _snap["ll_slope"],
+                "ll_intercept": _snap["ll_intercept"],
+                "pauls_k": _snap["pauls_k"],
+            },
+        }
+        pred_table_lookup[0] = {
+            "pred_rows": _snap["pred_table_rows"],
+            "pauls_k_fit": _snap["pauls_k_fit"],
+            "accuracy": _snap["accuracy"],
+        }
+        # Skip the historical per-date walk; fall through to static_datasets
+        # + bundle_data assembly below.
+        seen_dates = []
+    else:
+        seen_dates = sorted(
+            {w.get("date", "")[:10] for w in sorted_efforts_by_event if w.get("date")}
+        )
 
     for date_str in seen_dates:
         dt = parse_date(date_str)
@@ -584,69 +613,30 @@ def build_keyframes(
 
         lb_str = {f"{k[0]}:{k[1]}": v for k, v in lb.items()}
         lb_anchor_str = {f"{k[0]}:{k[1]}": v for k, v in lb_anchor.items()}
-        lb_watts_str = {ck: round(compute_watts(p), 1) for ck, p in lb_str.items()}
 
         if lb_str == prev_lb_str:
             continue  # nothing improved — no keyframe needed
-
-        # Which categories got a new PB?
-        new_pb_strs = [
-            ck
-            for ck, p in lb_str.items()
-            if p < prev_lb_str.get(ck, float("inf")) - 1e-9
-        ]
-
-        # Build PB labels (canvas label dicts)
-        new_pb_labels = []
-        for ck_str in new_pb_strs:
-            pace = lb_str[ck_str]
-            dist = lb_anchor_str.get(ck_str, 0)
-            etype, evalue_str = ck_str.split(":", 1)
-            evalue = int(evalue_str)
-            prev_pace = prev_lb_str.get(ck_str)
-            pp, pw = pcts(prev_pace, pace) if prev_pace else (0.0, 0.0)
-            new_pb_labels.append(
-                {
-                    "x": dist,
-                    "y_pace": round(pace, 4),
-                    "y_watts": round(compute_watts(pace), 1),
-                    "line_event": ol_event_line(etype, evalue, pace, dist),
-                    "pct_pace": round(pp, 1),
-                    "pct_watts": round(pw, 1),
-                    "line_label": "\u2746 New PB!",
-                    "color": pb_color,
-                    "bold": True,
-                }
-            )
 
         # Full snapshot: CP fit, pred datasets, pred table rows, accuracy.
         _snap = compute_timeline_snapshot(
             sim_wkts=sim_wkts,
             all_events_to_date=all_events_to_date,
-            predictor=predictor,
             rl_predictions=rl_predictions,
-            show_watts=show_watts,
-            is_dark=is_dark,
-            x_mode=x_mode,
-            x_bounds=x_bounds,
-            y_bounds=y_bounds,
-            show_components=show_components,
             selected_dist_set=selected_dist_set,
             selected_time_set=selected_time_set,
             cp_fit_cache=cp_fit_cache,
         )
 
-        js_keyframes.append(
-            {
-                "day": day,
-                "lifetime_best_pace": lb_str,
-                "lifetime_best_watts": lb_watts_str,
-                "new_pbs": new_pb_strs,
-                "new_pb_labels": new_pb_labels,
-                "pred_datasets": _snap["pred_datasets"],
-                "pred_canvas_labels": _snap["pred_canvas_labels"],
-            }
-        )
+        snapshots[day] = {
+            "snapshot": {
+                "lb": lb_str,
+                "lb_anchor": lb_anchor_str,
+                "cp_params": _snap["cp_params"],
+                "ll_slope": _snap["ll_slope"],
+                "ll_intercept": _snap["ll_intercept"],
+                "pauls_k": _snap["pauls_k"],
+            },
+        }
         pred_table_lookup[day] = {
             "pred_rows": _snap["pred_table_rows"],
             "pauls_k_fit": _snap["pauls_k_fit"],
@@ -681,7 +671,7 @@ def build_keyframes(
     # on the bounds captured when the bundle was first built.
     bundle_data = {
         "workout_manifest": manifest,
-        "keyframes": js_keyframes,
+        "snapshots": snapshots,
         "static_datasets": static_datasets,
         "season_meta": season_meta,
         "total_days": total_days,
@@ -690,10 +680,14 @@ def build_keyframes(
         "is_dark": is_dark,
         "show_watts": show_watts,
         "x_mode": x_mode,
-        # Gridline color — kept identical to the static chart's axis grid so
-        # toggling between applyConfig (static) and applyBundle (sim) paths
-        # doesn't visibly snap the gridlines on/off.  Python is the single
-        # source of truth for this colour (CLAUDE.md).
+        # JS samples pred curves per-keyframe from snapshot fit params; these
+        # bundle-level props are the ones predOpts(bundle) reads and that do
+        # not vary per keyframe.
+        "predictor": predictor,
+        "show_components": show_components,
+        "rl_predictions": rl_predictions,
+        # Gridline color.  Python is the single source of truth for this
+        # colour (CLAUDE.md) — JS reads it from the bundle.
         "grid_color": "rgba(180,180,180,0.35)",
     }
 
@@ -709,6 +703,9 @@ def wrap_payload(
     bundle_key: str,
     x_bounds,
     y_bounds,
+    selection_key: str,
+    snapshots_ready: bool,
+    timeline_snapshots: dict,
 ) -> dict:
     """
     Wrap a cached ``bundle_data`` dict with the style-only fields the JS
@@ -719,11 +716,23 @@ def wrap_payload(
     Re-wrapping on style-key change keeps the JS chart scale and the
     ranked-grid filter in sync with the current render's bounds.
 
+    ``timeline_snapshots`` is the two-level dict {selection_key: {day: entry}}
+    merged from the per-selection LRU cache — JS looks up the inner dict via
+    ``selection_key`` and picks the nearest-≤ day.  This replaces the older
+    single-level ``keyframes`` list; caching multiple selections lets the user
+    toggle event sets without re-fitting.  ``snapshots_ready`` is true when
+    the current selection's snapshots are fully built.
+
+    The per-selection ``snapshots`` field on ``bundle_data`` is intentionally
+    dropped from the transport payload — JS reads from ``timeline_snapshots``
+    instead.
+
     Separating this from ``build_keyframes`` lets the animation layer cache
-    keyframes by a data_key and re-wrap on style-only toggles (log axes,
-    overlay selection) without re-running the heavy keyframe loop.
+    snapshots by (identity_key, selection_key) and re-wrap on style-only
+    toggles (log axes, overlay selection) without re-running the heavy
+    keyframe loop.
     """
-    return {
+    out = {
         **bundle_data,
         "bundle_key": bundle_key,
         "log_x": log_x,
@@ -732,7 +741,15 @@ def wrap_payload(
         "draw_season_lines": overlay_bests == "SBs",
         "x_bounds": list(x_bounds) if x_bounds else None,
         "y_bounds": list(y_bounds) if y_bounds else None,
+        "selection_key": selection_key,
+        "snapshots_ready": snapshots_ready,
+        "timeline_snapshots": timeline_snapshots,
     }
+    # The per-selection snapshots dict on bundle_data is inlined into the
+    # two-level timeline_snapshots above; strip it from the transport payload
+    # to avoid shipping the same data twice.
+    out.pop("snapshots", None)
+    return out
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -758,6 +775,9 @@ def lookup_bundle_entry(lookup: dict, day: int | None) -> dict:
     return lookup.get(max((d for d in lookup if d <= day), default=0), empty)
 
 
+_SNAPSHOT_CACHE_MAX = 4
+
+
 def manage_animation_bundle(
     state,
     *,
@@ -777,30 +797,37 @@ def manage_animation_bundle(
     at_today: bool,
 ) -> str:
     """
-    Manage the animation bundle lifecycle with split data_key / style_key.
+    Manage the animation bundle lifecycle.
 
     Returns ``sim_command``: ``"play"`` | ``"pause"`` | ``"stop"``.
 
     sim_command semantics:
-      * ``"play"``   — playing, not at today, bundle ready → JS ticks forward
-      * ``"pause"``  — bundle not ready yet (hold JS), or paused with a bundle
+      * ``"play"``   — playing, not at today, snapshots ready → JS ticks forward
+      * ``"pause"``  — snapshots not ready yet (hold JS), or paused with a bundle
       * ``"stop"``   — at_today (timeline_day is None) or no bundle at all
 
-    Caching strategy:
-      * ``state.sim_bundle_data`` holds the heavy keyframe dict, keyed by
-        ``state.sim_data_key``.  Invalidated + rebuilt via ``build_keyframes``
-        in a background task whenever any data input changes.
-      * ``state.sim_bundle`` is the final js_payload sent to Chart.js — always
-        derived synchronously from ``bundle_data`` via ``wrap_payload``.
-        Style toggles (log axes, overlay selection) bypass the task entirely.
+    Caching strategy (three keys):
+      * ``identity_key`` — workout identity + predictor + x_mode + show_components
+        + show_watts + best_filter + excluded_seasons + WR fetch state.  Changing
+        any of these invalidates the per-selection LRU cache entirely.
+      * ``selection_key`` — hash of (selected_dists, selected_times).  Inner
+        cache dimension so the user can toggle event selections without
+        re-fitting if that selection has been seen recently.
+      * ``style_key`` — log_x, log_y, overlay_bests, axis bounds.  Style-only
+        toggles that bypass the task entirely (cheap ``wrap_payload`` re-run).
+
+      ``state.sim_snapshot_cache`` maps ``selection_key → (bundle_data,
+      pred_lookup)`` with LRU eviction at ``_SNAPSHOT_CACHE_MAX`` entries
+      (insertion-ordered dict; oldest evicted on overflow).  The transported
+      ``timeline_snapshots`` prop is the two-level merge of every cached
+      selection's snapshots, so JS can look up previously-seen selections
+      without a Python round-trip.
     """
-    _data_key = hashlib.md5(
+    _identity_key = hashlib.md5(
         json.dumps(
             [
                 state.chart_predictor,
                 state.best_filter,
-                sorted(list(selected_dists)),
-                sorted(list(selected_times)),
                 sorted(list(excluded_seasons)),
                 show_watts,
                 state.chart_x_metric,
@@ -815,6 +842,13 @@ def manage_animation_bundle(
             sort_keys=True,
         ).encode()
     ).hexdigest()[:12]
+
+    _selection_key = hashlib.md5(
+        json.dumps(
+            [sorted(list(selected_dists)), sorted(list(selected_times))],
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()[:8]
 
     _style_key = hashlib.md5(
         json.dumps(
@@ -832,20 +866,44 @@ def manage_animation_bundle(
         ).encode()
     ).hexdigest()[:8]
 
-    _bundle_key = f"{_data_key}-{_style_key}"
-
-    # ── Data-side: rebuild keyframes when data inputs change ─────────────────
-    if state.sim_data_key != _data_key:
-        state.sim_bundle_data = None
+    # ── Identity change: blow away the LRU cache ─────────────────────────────
+    if state.sim_identity_key != _identity_key:
+        state.sim_snapshot_cache = {}
+        state.sim_full_selections = frozenset()
+        state.sim_identity_key = _identity_key
         state.sim_pred_lookup = {}
-        state.sim_data_key = _data_key
-        # Force a re-wrap too since the underlying data changed.
         state.sim_bundle = None
         state.sim_bundle_key = ""
 
-    if state.sim_bundle_data is None:
-        # Heavy: build keyframes in a background task.
-        with hd.scope(f"sim_bundle_{_data_key}"):
+    # ── Background task: full historical build ───────────────────────────────
+    # Always inspect the task for this selection, even when the cache already
+    # holds a fast bundle.  When the task completes, its result replaces the
+    # fast bundle in the cache and ``state.sim_full_selections`` flips, which
+    # promotes the bundle_key suffix from ``fast`` → ``full`` below and drives
+    # the style-side re-wrap so JS swaps its cached bundle.
+    _keyframes_kwargs = dict(
+        sim_start=sim_start,
+        total_days=total_days,
+        best_filter=state.best_filter,
+        dist_enabled=state.dist_enabled,
+        time_enabled=state.time_enabled,
+        show_watts=show_watts,
+        is_dark=is_dark,
+        x_mode=state.chart_x_metric,
+        x_bounds=x_bounds,
+        y_bounds=y_bounds,
+        predictor=state.chart_predictor,
+        show_components=state.chart_show_components,
+        rl_predictions=rl_predictions,
+        all_seasons=all_seasons,
+        wr_data=wr_data,
+    )
+
+    if _selection_key not in state.sim_full_selections:
+        # Scope by (identity, selection) so a still-running task for a prior
+        # selection under the same identity doesn't swallow this selection's
+        # build.
+        with hd.scope(f"sim_bundle_{_identity_key}_{_selection_key}"):
             _bt = hd.task()
             if not _bt.running and not _bt.done:
                 _bt.run(
@@ -853,27 +911,23 @@ def manage_animation_bundle(
                     workouts.efforts_filtered_by_event,
                     workouts.quality_efforts,
                     workouts.featured_efforts,
-                    sim_start=sim_start,
-                    total_days=total_days,
-                    best_filter=state.best_filter,
-                    dist_enabled=state.dist_enabled,
-                    time_enabled=state.time_enabled,
-                    show_watts=show_watts,
-                    is_dark=is_dark,
-                    x_mode=state.chart_x_metric,
-                    x_bounds=x_bounds,
-                    y_bounds=y_bounds,
-                    predictor=state.chart_predictor,
-                    show_components=state.chart_show_components,
-                    rl_predictions=rl_predictions,
-                    all_seasons=all_seasons,
-                    wr_data=wr_data,
+                    **_keyframes_kwargs,
                 )
             if _bt.done:
                 if _bt.result:
                     bundle_data, pred_lookup = _bt.result
-                    state.sim_bundle_data = bundle_data
-                    state.sim_pred_lookup = pred_lookup
+                    # LRU insertion + eviction.  Plain dict preserves insertion
+                    # order in Py3.7+; re-binding keeps HyperDiv's reactive
+                    # state-change detection happy.
+                    new_cache = dict(state.sim_snapshot_cache)
+                    new_cache[_selection_key] = (bundle_data, pred_lookup)
+                    while len(new_cache) > _SNAPSHOT_CACHE_MAX:
+                        _oldest = next(iter(new_cache))
+                        del new_cache[_oldest]
+                    state.sim_snapshot_cache = new_cache
+                    state.sim_full_selections = frozenset(
+                        state.sim_full_selections | {_selection_key}
+                    )
                 elif _bt.error:
                     # Task failed — stop playing and surface the error.
                     state.sim_playing = False
@@ -883,19 +937,63 @@ def manage_animation_bundle(
                         closable=True,
                     )
 
-    # ── Style-side: cheap re-wrap on every render ────────────────────────────
-    # When only style changed, keyframes stay cached and this is the only
-    # work we do.  When data changed, we also fall through here once the task
-    # completes and populates sim_bundle_data.
-    if state.sim_bundle_data is not None and state.sim_bundle_key != _bundle_key:
+    # ── Fast bundle: synchronous placeholder for initial render ──────────────
+    # If nothing is cached for this selection yet, compute a single end-state
+    # snapshot now so the chart has something to render while the full
+    # historical task runs.  The bg task's result will overwrite this entry
+    # on the render following its completion.
+    if _selection_key not in state.sim_snapshot_cache:
+        fast_data, fast_lookup = build_keyframes(
+            workouts.efforts_filtered_by_event,
+            workouts.quality_efforts,
+            workouts.featured_efforts,
+            fast_only=True,
+            **_keyframes_kwargs,
+        )
+        new_cache = dict(state.sim_snapshot_cache)
+        new_cache[_selection_key] = (fast_data, fast_lookup)
+        while len(new_cache) > _SNAPSHOT_CACHE_MAX:
+            _oldest = next(iter(new_cache))
+            del new_cache[_oldest]
+        state.sim_snapshot_cache = new_cache
+
+    _snapshots_ready = _selection_key in state.sim_snapshot_cache
+
+    # Expose the current selection's pred_lookup for the prediction table.
+    if _snapshots_ready:
+        state.sim_pred_lookup = state.sim_snapshot_cache[_selection_key][1]
+    else:
+        state.sim_pred_lookup = {}
+
+    # Bundle key — include the fast/full suffix so JS sees a real bundle_key
+    # change when the bg task replaces a fast bundle with the full historical
+    # one (identity / selection / style are all unchanged across that swap, so
+    # without this suffix ``applyBundle``'s early-out would keep the fast
+    # bundle's single day-0 snapshot even after Python ships the full bundle,
+    # which is what made mid-animation prediction curves appear frozen).
+    _fullness = "full" if _selection_key in state.sim_full_selections else "fast"
+    _bundle_key = f"{_identity_key}-{_selection_key}-{_style_key}-{_fullness}"
+
+    # ── Style-side: cheap re-wrap when bundle key changes ────────────────────
+    if _snapshots_ready and state.sim_bundle_key != _bundle_key:
+        current_bundle_data = state.sim_snapshot_cache[_selection_key][0]
+        # Merge snapshots across all cached selections so JS can toggle back
+        # to a previously-seen selection without a Python round-trip.
+        merged_snapshots = {
+            sk: bd["snapshots"]
+            for sk, (bd, _pl) in state.sim_snapshot_cache.items()
+        }
         state.sim_bundle = wrap_payload(
-            state.sim_bundle_data,
+            current_bundle_data,
             log_x=state.chart_log_x,
             log_y=state.chart_log_y,
             overlay_bests=state.overlay_bests,
             bundle_key=_bundle_key,
             x_bounds=x_bounds,
             y_bounds=y_bounds,
+            selection_key=_selection_key,
+            snapshots_ready=True,
+            timeline_snapshots=merged_snapshots,
         )
         state.sim_bundle_key = _bundle_key
 
