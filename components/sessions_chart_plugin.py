@@ -26,7 +26,7 @@ with open(os.path.join(_HERE, "chart_assets", "sessions_chart_plugin.js")) as _f
 
 
 class SessionsChart(hd.Plugin):
-    _name       = "SessionsChart"
+    _name = "SessionsChart"
     _assets_root = os.path.join(_HERE, "chart_assets")
     _assets = [
         # Same Chart.js CDN copy as RowingChart / VolumeChart.
@@ -46,10 +46,10 @@ class SessionsChart(hd.Plugin):
 
     # Window bounds sent from Python (e.g. ◄/► buttons, window-size selector).
     # JS uses these to position the brush but never writes back to them.
-    target_window_start = hd.Prop(hd.Int, 0)   # Unix ms
-    target_window_end   = hd.Prop(hd.Int, 0)   # Unix ms
+    target_window_start = hd.Prop(hd.Int, 0)  # Unix ms
+    target_window_end = hd.Prop(hd.Int, 0)  # Unix ms
 
-    is_dark    = hd.Prop(hd.Bool, False)
+    is_dark = hd.Prop(hd.Bool, False)
 
     # Y-axis metric: False = pace (sec/500m), True = watts.
     # Python computes y-values using the appropriate metric before passing points;
@@ -60,9 +60,9 @@ class SessionsChart(hd.Plugin):
 
     # Last brush position after a user drag or jump-click.
     # Python reads these to sync its state after a brush interaction.
-    brush_start = hd.Prop(hd.Int, 0)   # Unix ms
-    brush_end   = hd.Prop(hd.Int, 0)   # Unix ms
+    brush_start = hd.Prop(hd.Int, 0)  # Unix ms
+    brush_end = hd.Prop(hd.Int, 0)  # Unix ms
 
     # Monotonically incremented by JS on every genuine user interaction.
-    # Python gates state updates on this changing (same pattern as DateSlider).
-    change_id   = hd.Prop(hd.Int, 0)
+    # Python gates state updates on this changing
+    change_id = hd.Prop(hd.Int, 0)

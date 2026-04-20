@@ -17,7 +17,7 @@ For the mathematics of the four prediction models, see [docs/prediction.md][1].
 Chart box:
     Header: "Qualifying Performances through <date>"
     RowingLevel profile warning (only when RL predictor selected and profile incomplete)
-    Transport bar: [▶ Play / ⏸ Pause]  [speed]  ─── DateSlider ───
+    Transport bar: [▶ Play / ⏸ Pause]  [speed] 
     PowerCurveChart (75vh — Chart.js scatter/line)
 
     Row 1 settings:
