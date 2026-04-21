@@ -44,8 +44,8 @@ locking.
 
 Size limits
 -----------
-- ``MAX_WORKOUTS_ZB64_BYTES`` = 20 MB compressed (covers ~200k workouts).
-- ``MAX_STROKES_BYTES``        =  2 MB per workout (covers marathons).
+- ``MAX_WORKOUTS_ZB64_BYTES`` = 40 MB compressed (covers ~400k workouts).
+- ``MAX_STROKES_BYTES``        =  5 MB per workout (covers 100ks).
 Writes exceeding these bounds are rejected to keep disk usage bounded.
 """
 
@@ -71,8 +71,8 @@ from services.rowing_utils import age_from_dob
 _ROOT = Path(__file__).resolve().parent.parent
 _BASE = (_ROOT / ".public_profiles").resolve()
 
-MAX_WORKOUTS_ZB64_BYTES = 20 * 1024 * 1024  # 20 MB compressed ceiling
-MAX_STROKES_BYTES = 2 * 1024 * 1024  # 2 MB per workout ceiling
+MAX_WORKOUTS_ZB64_BYTES = 40 * 1024 * 1024  # 20 MB compressed ceiling
+MAX_STROKES_BYTES = 5 * 1024 * 1024  # 2 MB per workout ceiling
 
 # Schema v2: stores ``yob`` (year of birth) rather than a frozen ``age`` so
 # the derived age stays correct as years pass.  ``age`` is still written for

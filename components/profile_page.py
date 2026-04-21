@@ -207,16 +207,6 @@ def profile_page(ctx=None) -> None:
         action_key=""
     )  # "publish_all_<ts>" | "publish_profile_<ts>" | "unpublish_<ts>"
 
-    def _workouts_from_blob() -> dict:
-        try:
-            return (
-                decompress_workouts(state.ls_workouts_blob)
-                if state.ls_workouts_blob
-                else {}
-            )
-        except Exception:
-            return {}
-
     if publish_action.action_key and ctx is not None and ctx.user_id:
         with hd.scope(publish_action.action_key):
             pt = hd.task()
@@ -231,7 +221,7 @@ def profile_page(ctx=None) -> None:
                         ctx.user_id,
                         _current_profile(),
                         display_name or "Rower",
-                        _workouts_from_blob(),
+                        _workouts_from_blob(state),
                     )
             elif publish_action.action_key.startswith("publish_profile_"):
 
@@ -361,6 +351,7 @@ def profile_page(ctx=None) -> None:
 
         # ── Public profile toggle ───────────────────────────────────────────
         hd.divider()
+
         _public_profile_section(ctx, state, publish_action, display_name)
 
 
@@ -415,6 +406,31 @@ def _public_profile_section(ctx, state, publish_action, display_name: str) -> No
                     font_size="small",
                 )
 
+        # Confirmation dialog
+        confirm_private_open = hd.dialog("Make profile private?")
+
+        with confirm_private_open:
+            with hd.box(gap=1, padding=1):
+                hd.text(
+                    "Switching to private deletes the profile and workout data we "
+                    "have on file for you, and the public link will stop working "
+                    "immediately. Nothing will be stored on the Erg Nerd server.",
+                    font_color="neutral-700",
+                )
+                with hd.hbox(gap=1, justify="end", padding_top=1):
+                    if hd.button("Cancel", size="small").clicked:
+                        confirm_private_open.opened = False
+                    if hd.button(
+                        "Make private", variant="danger", size="small"
+                    ).clicked:
+                        import time as _t
+
+                        state.public = False
+                        _save_via_state(state)
+                        publish_action.action_key = f"unpublish_{_t.time()}"
+                        confirm_private_open.opened = False
+                        sw.checked = False
+
         if sw.changed and ctx is not None and ctx.user_id:
             import time as _t
 
@@ -422,7 +438,7 @@ def _public_profile_section(ctx, state, publish_action, display_name: str) -> No
                 # OFF → ON: validate workouts are available first. Toggling
                 # before the initial sync completes would publish an empty
                 # dict, which publish_workouts rejects with ValueError.
-                if not _workouts_from_blob():
+                if not _workouts_from_blob(state):
                     state.publish_status = "need_sync"
                 else:
                     state.publish_status = "publishing"
@@ -431,7 +447,8 @@ def _public_profile_section(ctx, state, publish_action, display_name: str) -> No
                     publish_action.action_key = f"publish_all_{_t.time()}"
             elif not sw.checked and state.public:
                 # ON → OFF: open confirmation dialog; keep flag until confirmed.
-                state.confirm_private_open = True
+                sw.checked = True
+                confirm_private_open.opened = True
 
         # Share URL when public
         if state.public and ctx is not None and ctx.user_id:
@@ -451,31 +468,16 @@ def _public_profile_section(ctx, state, publish_action, display_name: str) -> No
                     font_size="small",
                 )
 
-        # Confirmation dialog
-        with hd.dialog(
-            "Make profile private?", opened=state.confirm_private_open
-        ) as dlg:
-            with hd.box(gap=1, padding=1):
-                hd.text(
-                    "Switching to private deletes the profile and workout data we "
-                    "have on file for you, and the public link will stop working "
-                    "immediately. Nothing will be stored on the Erg Nerd server.",
-                    font_color="neutral-700",
-                )
-                with hd.hbox(gap=1, justify="end", padding_top=1):
-                    if hd.button("Cancel", size="small").clicked:
-                        state.confirm_private_open = False
-                        dlg.opened = False
-                    if hd.button(
-                        "Make private", variant="danger", size="small"
-                    ).clicked:
-                        import time as _t
 
-                        state.public = False
-                        _save_via_state(state)
-                        publish_action.action_key = f"unpublish_{_t.time()}"
-                        state.confirm_private_open = False
-                        dlg.opened = False
+def _workouts_from_blob(state) -> dict:
+    try:
+        return (
+            decompress_workouts(state.ls_workouts_blob)
+            if state.ls_workouts_blob
+            else {}
+        )
+    except Exception:
+        return {}
 
 
 def _save_via_state(state) -> None:
