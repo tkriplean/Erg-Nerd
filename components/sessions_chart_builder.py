@@ -410,7 +410,7 @@ def step_ms(all_ms: list, window_size: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def sessions_chart(workouts: list) -> None:
+def sessions_chart(workouts: list, ctx=None) -> None:
     """
     Render the pace-vs-date focus+context chart with brush navigator,
     session filters, and an in-window workouts table.
@@ -469,7 +469,10 @@ def sessions_chart(workouts: list) -> None:
             with hd.hbox(gap=.6, align="center"):
                 hd.text("Take a Gander at ")
                 with hd.dropdown() as _sessions_dd:
-                    _sessions_label = f"All Your{" Long " if state.filter_10k else " "} {" " if state.filter_ivl == "All" else state.filter_ivl} Work"
+                    from components.view_context import your as _your
+
+                    _poss = _your(ctx)
+                    _sessions_label = f"All {_poss}{" Long " if state.filter_10k else " "} {" " if state.filter_ivl == "All" else state.filter_ivl} Work"
                     _sessions_btn = hd.button(
                         _sessions_label, caret=True, size="medium", font_color="neutral-800", font_size=2, font_weight="bold", slot=_sessions_dd.trigger
                     )

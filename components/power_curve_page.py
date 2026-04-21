@@ -127,8 +127,8 @@ from services.rowing_utils import (
     RANKED_DISTANCES,
     RANKED_TIMES,
 )
-from components.concept2_sync import concept2_sync
-from components.profile_page import get_profile
+from components.concept2_sync import sync_from_context
+from components.profile_page import get_profile_from_context
 from services.rowing_utils import profile_complete
 from services.rowinglevel import async_fetch_rowinglevel
 
@@ -612,6 +612,7 @@ def _prediction_table(
     accuracy: dict,
     rl_available: bool = True,
     pauls_k: float = 5.0,
+    ctx=None,
 ) -> None:
     """
     Renders the multi-model prediction grid (Your PB, CP, Log-Log, Paul's Law,
@@ -632,11 +633,15 @@ def _prediction_table(
     ):
         return
 
+    from components.view_context import your as _your
+
+    _poss = _your(ctx)
+    _poss_lower = _your(ctx, capitalize=False)
     _pl_tip = (
         f"Predicts +{pauls_k:.1f} s/500m for each doubling of distance "
-        f"(your personalised value), applied from each anchor PB and averaged."
+        f"({_poss_lower} personalised value), applied from each anchor PB and averaged."
     )
-    _PRED_COLS = [("pb", "Your PB", "Your personal best for each event.")]
+    _PRED_COLS = [("pb", f"{_poss} PB", f"{_poss} personal best for each event.")]
     for _p in PREDICTORS:
         if _p.key == "none":
             continue
@@ -1128,7 +1133,7 @@ def _page_header(
 # ---------------------------------------------------------------------------
 
 
-def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -> None:
+def power_curve_page(ctx, excluded_seasons=(), machine="All") -> None:
     """
     Top-level entry point for the Performance tab.
     Fetches data, computes all derived state, then calls sub-components.
@@ -1171,8 +1176,8 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
     is_dark = hd.theme().is_dark
 
     # ── Profile & Data ───────────────────────────────────────────────────────────────
-    profile = get_profile()
-    sync_result = concept2_sync(client)
+    profile = get_profile_from_context(ctx)
+    sync_result = sync_from_context(ctx)
 
     if sync_result is None or profile is None:
         hd.box(padding=2, min_height="80vh")
@@ -1347,16 +1352,20 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
                 accuracy,
                 rl_available=rl_available,
                 pauls_k=pauls_k,
+                ctx=ctx,
             )
 
         with hd.box(align="center"):
             with hd.h2():
+                from components.view_context import your as _your_local
+
+                _poss_h2 = _your_local(ctx)
                 if state.best_filter == "All":
                     hd.text("High Quality Efforts")
                 elif state.best_filter == "SBs":
-                    hd.text("Your Season Bests")
+                    hd.text(f"{_poss_h2} Season Bests")
                 elif state.best_filter == "PBs":
-                    hd.text("Your Personal Bests")
+                    hd.text(f"{_poss_h2} Personal Bests")
 
             types = {r.get("type") for r in efforts_filtered_by_event_and_display}
             cols = [COL_DATE]

@@ -57,7 +57,8 @@ import statistics
 import hyperdiv as hd
 
 from services.rowing_utils import INTERVAL_WORKOUT_TYPES, get_season
-from components.concept2_sync import concept2_sync
+from components.concept2_sync import sync_from_context
+from components.view_context import your
 from services.interval_utils import (
     avg_workpace_tenths,
     avg_work_spm,
@@ -749,10 +750,10 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
 # ---------------------------------------------------------------------------
 
 
-def intervals_page(client, user_id: str, excluded_seasons=(), machine="All") -> None:
+def intervals_page(ctx, excluded_seasons=(), machine="All") -> None:
     """Top-level HyperDiv component for the Interval Workouts tab."""
 
-    result = concept2_sync(client)
+    result = sync_from_context(ctx)
     if result is None:
         hd.box(padding=2, min_height="80vh")
         return
@@ -890,7 +891,7 @@ def intervals_page(client, user_id: str, excluded_seasons=(), machine="All") -> 
     ]
 
     with hd.box(align="center", gap=1, padding=2, min_height="80vh"):
-        hd.h1("Review Your Fondest Interval Sessions")
+        hd.h1(f"Review {your(ctx)} Fondest Interval Sessions")
 
         with hd.box(width="100%"):
             # Pre-compute non-cell filters so the grid counts stay in sync with

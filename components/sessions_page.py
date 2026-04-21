@@ -5,7 +5,7 @@ Sessions tab — pace-vs-date scatter chart + recent-workouts table.
 import hyperdiv as hd
 
 from components.sessions_chart_builder import sessions_chart
-from components.concept2_sync import concept2_sync
+from components.concept2_sync import sync_from_context
 from services.rowing_utils import get_season
 
 
@@ -14,10 +14,10 @@ from services.rowing_utils import get_season
 # ---------------------------------------------------------------------------
 
 
-def sessions_page(client, user_id: str, excluded_seasons=(), machine="All") -> None:
+def sessions_page(ctx, excluded_seasons=(), machine="All") -> None:
     """Top-level component for the Sessions tab."""
 
-    result = concept2_sync(client)
+    result = sync_from_context(ctx)
     if result is None:
         hd.box(padding=2, min_height="80vh")
         return
@@ -40,4 +40,4 @@ def sessions_page(client, user_id: str, excluded_seasons=(), machine="All") -> N
 
     # ── Pace-vs-date scatter + windowed workouts table ────────────────────────
     with hd.box(padding=2, min_height="80vh", gap=2):
-        sessions_chart(all_workouts)
+        sessions_chart(all_workouts, ctx=ctx)

@@ -71,7 +71,7 @@ from services.rowing_utils import (
 )
 
 from components.hyperdiv_extensions import radio_group
-from components.concept2_sync import concept2_sync
+from components.concept2_sync import sync_from_context, strokes_for
 
 
 # ---------------------------------------------------------------------------
@@ -911,24 +911,22 @@ def _compare_cell(w: dict, state) -> None:
 
 def _build_compare_series(
     compared_ids: tuple,
-    compare_tasks: dict,
+    compare_results: dict,
     workouts_dict: dict,
     *,
     show_watts: bool,
 ) -> list:
-    """Turn per-id stroke-fetch tasks into the compare_series list consumed by
-    build_stroke_chart_config.  Skips entries that errored or haven't
-    resolved yet.
+    """Turn per-id stroke result dicts into the compare_series list consumed
+    by build_stroke_chart_config.  Skips entries that errored or haven't
+    resolved yet.  ``compare_results`` maps cid → list[stroke] (possibly
+    empty) for resolved entries, or is missing the key while loading.
     """
     if not compared_ids:
         return []
     colors = _interval_colors(len(compared_ids))
     out = []
     for i, cid in enumerate(compared_ids):
-        task = compare_tasks.get(cid)
-        if task is None or not task.done or task.error:
-            continue
-        raw = task.result if isinstance(task.result, list) else []
+        raw = compare_results.get(cid)
         if not raw:
             continue
         cw = workouts_dict.get(str(cid)) or {}
@@ -1071,7 +1069,7 @@ def _chart_controls(
 # ---------------------------------------------------------------------------
 
 
-def workout_page(session_id: int, client, user_id: str) -> None:
+def workout_page(session_id: int, ctx) -> None:
     """Render the full-screen workout detail overlay."""
     _theme = hd.theme()
 
@@ -1089,7 +1087,7 @@ def workout_page(session_id: int, client, user_id: str) -> None:
     )
 
     # ── Pre-fetch workout list (task-cached; free on repeat renders) ────────
-    sync_result = concept2_sync(client)
+    sync_result = sync_from_context(ctx)
     if sync_result is None:
         hd.box(padding=2, min_height="80vh")
         return
@@ -1097,35 +1095,28 @@ def workout_page(session_id: int, client, user_id: str) -> None:
     _workouts_dict, all_workouts = sync_result
     workout = _workouts_dict.get(str(session_id))
 
-    # ── Fetch stroke data ────────────────────────────────────────────────────
+    # ── Fetch stroke data (unified via concept2_sync.strokes_for) ────────────
 
     has_strokes = bool(workout.get("stroke_data"))
-    stroke_task = hd.task()
-
     wtype = workout.get("workout_type", "")
     is_interval = wtype in INTERVAL_WORKOUT_TYPES
 
-    def _fetch_detail():
-        return client.get_strokes(int(user_id), workout["id"])
+    stroke_result = strokes_for(ctx, workout)
+    stroke_status = stroke_result["status"]
+    stroke_error = stroke_result["error"]
+    strokes = stroke_result["strokes"]
 
-    if has_strokes:
-        stroke_task.run(_fetch_detail)
+    # ── Fetch strokes for each compared workout ───────────────────────────────
 
-    strokes = None
-    if has_strokes and stroke_task.done and not stroke_task.error:
-        strokes = stroke_task.result if isinstance(stroke_task.result, list) else []
-
-    # ── Fetch strokes for each compared workout (task-cached per id) ─────────
-
-    compare_tasks: dict = {}
+    compare_results: dict = {}
     compare_loading = False
     for cid in state.compared_workouts:
-        with hd.scope(f"compare_strokes_{cid}"):
-            ct = hd.task()
-            ct.run(lambda cid=cid: client.get_strokes(int(user_id), cid))
-            compare_tasks[cid] = ct
-            if ct.running:
-                compare_loading = True
+        cw = _workouts_dict.get(str(cid)) or {"id": cid, "stroke_data": True}
+        cr = strokes_for(ctx, cw)
+        if cr["status"] == "loaded":
+            compare_results[cid] = cr["strokes"] or []
+        elif cr["status"] == "loading":
+            compare_loading = True
 
     # ── Title ────────────────────────────────────────────────────────────────
 
@@ -1198,7 +1189,7 @@ def workout_page(session_id: int, client, user_id: str) -> None:
                     font_color="neutral-800",
                 )
 
-                if not has_strokes:
+                if stroke_status == "no_strokes":
                     with hd.box(
                         padding=2,
                         align="center",
@@ -1212,13 +1203,36 @@ def workout_page(session_id: int, client, user_id: str) -> None:
                             "Stroke data not available for this session.",
                             font_color="neutral-500",
                         )
-                elif stroke_task.running:
+                elif stroke_status == "uncached":
+                    with hd.box(
+                        padding=2,
+                        align="center",
+                        border_radius="medium",
+                        background_color="neutral-100"
+                        if not _theme.is_dark
+                        else "neutral-800",
+                        height=18,
+                        justify="center",
+                        gap=0.5,
+                    ):
+                        hd.text(
+                            "Stroke-level data for this session is not yet available.",
+                            font_color="neutral-500",
+                            text_align="center",
+                        )
+                        hd.text(
+                            "It appears after the owner opens this session.",
+                            font_color="neutral-400",
+                            font_size="small",
+                            text_align="center",
+                        )
+                elif stroke_status == "loading":
                     with hd.box(padding=2, align="center", height=18, justify="center"):
                         hd.spinner()
                         hd.text("Loading…", font_color="neutral-500", font_size="small")
-                elif stroke_task.error:
+                elif stroke_status == "error":
                     hd.alert(
-                        f"Could not load stroke data: {stroke_task.error}",
+                        f"Could not load stroke data: {stroke_error}",
                         variant="warning",
                         opened=True,
                     )
@@ -1232,7 +1246,7 @@ def workout_page(session_id: int, client, user_id: str) -> None:
                     compare_series = (
                         _build_compare_series(
                             state.compared_workouts,
-                            compare_tasks,
+                            compare_results,
                             _workouts_dict,
                             show_watts=(state.metric == "watts"),
                         )

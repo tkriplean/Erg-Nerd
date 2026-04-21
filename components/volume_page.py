@@ -26,7 +26,8 @@ import hyperdiv as hd
 
 import json
 
-from components.concept2_sync import concept2_sync
+from components.concept2_sync import sync_from_context
+from components.view_context import your
 from services.formatters import machine_label
 from services.rowing_utils import get_season, profile_complete
 
@@ -47,7 +48,7 @@ from services.heartrate_utils import (
     HR_Z3_BINS,
     is_valid_hr,
 )
-from components.profile_page import get_profile
+from components.profile_page import get_profile_from_context
 from components.volume_chart_builder import build_volume_chart_config, get_period_rows
 from components.volume_chart_plugin import VolumeChart
 from components.hyperdiv_extensions import grid_box
@@ -236,7 +237,7 @@ def _distribution_table(
 # ---------------------------------------------------------------------------
 
 
-def _hr_callout(all_workouts: list, profile: dict) -> tuple:
+def _hr_callout(all_workouts: list, profile: dict, is_owner: bool = True) -> tuple:
     """
     Render the HR mode info bar.  Returns (max_hr, ok) where ok=False means
     there is no usable max HR and the chart should be suppressed.
@@ -262,30 +263,37 @@ def _hr_callout(all_workouts: list, profile: dict) -> tuple:
         # ── Max HR label + source note ─────────────────────────────────────
         hd.text("Max HR:", font_size="small", font_color="neutral-600")
 
-        # ── Inline edit ────────────────────────────────────────────────────
-        with hd.scope("hr_edit"):
-            hr_input = hd.text_input(
-                placeholder="e.g. 185",
-                value=str(max_hr) if max_hr else "",
-                size="small",
-                width=6,
+        # ── Inline edit (owner only) ────────────────────────────────────────
+        if is_owner:
+            with hd.scope("hr_edit"):
+                hr_input = hd.text_input(
+                    placeholder="e.g. 185",
+                    value=str(max_hr) if max_hr else "",
+                    size="small",
+                    width=6,
+                )
+                # Save button only when the field value differs from what's stored
+                stored_str = str(max_hr) if max_hr else ""
+                if hr_input.value != stored_str:
+                    save_btn = hd.button("Save", size="small", variant="primary")
+                    if save_btn.clicked and hr_input.value:
+                        try:
+                            new_val = int(hr_input.value)
+                            if is_valid_hr(new_val):
+                                hd.local_storage.set_item(
+                                    "profile",
+                                    json.dumps({**profile, "max_heart_rate": new_val}),
+                                )
+                                max_hr = new_val
+                                is_estimated = False
+                        except ValueError:
+                            pass
+        else:
+            hd.text(
+                str(max_hr) if max_hr else "—",
+                font_size="small",
+                font_weight="semibold",
             )
-            # Save button only when the field value differs from what's stored
-            stored_str = str(max_hr) if max_hr else ""
-            if hr_input.value != stored_str:
-                save_btn = hd.button("Save", size="small", variant="primary")
-                if save_btn.clicked and hr_input.value:
-                    try:
-                        new_val = int(hr_input.value)
-                        if is_valid_hr(new_val):
-                            hd.local_storage.set_item(
-                                "profile",
-                                json.dumps({**profile, "max_heart_rate": new_val}),
-                            )
-                            max_hr = new_val
-                            is_estimated = False
-                    except ValueError:
-                        pass
 
         # ── Coverage ──────────────────────────────────────────────────────
         hd.text(
@@ -295,7 +303,13 @@ def _hr_callout(all_workouts: list, profile: dict) -> tuple:
         )
 
 
-def _volume_section(all_workouts: list, profile: dict, machine: str = "All") -> None:
+def _volume_section(
+    all_workouts: list,
+    profile: dict,
+    machine: str = "All",
+    is_owner: bool = True,
+    ctx=None,
+) -> None:
     """Render the volume controls + stacked bar chart."""
 
     state = hd.state(
@@ -306,7 +320,7 @@ def _volume_section(all_workouts: list, profile: dict, machine: str = "All") -> 
     machine_filter = None if machine == "All" else {machine}
 
     with hd.box(gap=1, align="center"):
-        hd.h1("How Does Your Work Stack Up?")
+        hd.h1(f"How Does {your(ctx)} Work Stack Up?")
 
         # ── HR callout (only in HR mode) — must come before chart to resolve max_hr ──
         max_hr, is_estimated = resolve_max_hr(profile, all_workouts)
@@ -393,7 +407,7 @@ def _volume_section(all_workouts: list, profile: dict, machine: str = "All") -> 
                 print(state.zone_mode)
 
         if state.zone_mode == "hr":
-            _hr_callout(all_workouts, profile)
+            _hr_callout(all_workouts, profile, is_owner=is_owner)
 
         # ── Distribution table ───────────────────────────────────────────────────
         if rows:
@@ -405,11 +419,11 @@ def _volume_section(all_workouts: list, profile: dict, machine: str = "All") -> 
 # ---------------------------------------------------------------------------
 
 
-def volume_page(client, user_id: str, excluded_seasons=(), machine="All") -> None:
+def volume_page(ctx, excluded_seasons=(), machine="All") -> None:
     """Top-level component for the Volume tab."""
 
-    result = concept2_sync(client)
-    profile = get_profile()
+    result = sync_from_context(ctx)
+    profile = get_profile_from_context(ctx)
 
     if result is None or not profile:
         hd.box(padding=2, min_height="80vh")
@@ -432,4 +446,10 @@ def volume_page(client, user_id: str, excluded_seasons=(), machine="All") -> Non
         return
 
     with hd.box(padding=2, min_height="80vh"):
-        _volume_section(all_workouts, profile, machine=machine)
+        _volume_section(
+            all_workouts,
+            profile,
+            machine=machine,
+            is_owner=ctx.is_owner,
+            ctx=ctx,
+        )

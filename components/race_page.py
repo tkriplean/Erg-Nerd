@@ -32,11 +32,11 @@ STATE VARIABLES
   show_wr_boat    bool   whether the WR ghost boat is enabled
   wr_records      dict   cached {(etype,evalue): result} from concept2_records
   wr_records_key  str    "gender|age|weight_kg" — invalidation key for wr_records
-  strokes_cache_loaded  bool
-  strokes_by_id         dict  {str(id): [{t,d}]}
-  fetch_queue           tuple[int]
-  fetch_total / fetch_done  int
-  last_batch_key        str
+
+Stroke data is fetched uniformly via ``components.concept2_sync.strokes_batch``
+(owner: one-at-a-time API fetch with a progress bar; public: synchronous disk
+reads from the cache-on-owner-view directory).  The cache stores raw Concept2
+strokes; ``normalize_strokes`` converts at the boundary for ``build_races_data``.
 """
 
 from __future__ import annotations
@@ -57,19 +57,20 @@ from services.rowing_utils import (
     age_from_dob,
 )
 from services.formatters import format_time, fmt_split
-from services.stroke_utils import build_races_data, fetch_one_stroke, build_wr_boat
+from services.stroke_utils import (
+    build_races_data,
+    build_wr_boat,
+    normalize_strokes,
+)
 from services.concept2_records import get_age_group_records
-from components.profile_page import get_profile
+from components.profile_page import get_profile_from_context
 from services.rowing_utils import (
     apply_quality_filters,
     is_rankable_noninterval,
     profile_complete,
 )
-from services.local_storage_compression import (
-    compress_strokes_cache,
-    decompress_strokes_cache,
-)
-from components.concept2_sync import concept2_sync
+from components.concept2_sync import sync_from_context, strokes_batch
+from components.view_context import your
 from components.race_chart_plugin import RaceChart
 from components.hyperdiv_extensions import radio_group
 from components.workout_table import (
@@ -85,7 +86,6 @@ from components.workout_table import (
     COL_LINK,
 )
 
-_STROKES_LS_KEY = "strokes_cache"
 _DEFAULT_EVENT_TYPE = "dist"
 _DEFAULT_EVENT_VALUE = 2000
 
@@ -194,8 +194,7 @@ def _results_table(workouts: list, etype: str, pb_id: int | None) -> None:
 
 
 def race_page(
-    client,
-    user_id: str,
+    ctx,
     excluded_seasons: tuple = (),
     machine: str = "All",
 ) -> None:
@@ -223,34 +222,14 @@ def race_page(
         show_wr_boat=False,
         wr_records={},  # {(etype, evalue): result} — cached from concept2_records
         wr_records_key="",  # "gender|age|weight_kg" — invalidation key
-        strokes_cache_loaded=False,
-        strokes_by_id={},
-        fetch_queue=(),  # tuple of int workout IDs still to fetch
-        fetch_total=0,  # size of the current fetch batch
-        fetch_done=0,  # completed fetches in current batch
-        last_batch_key="",  # changes when qualifying set changes
     )
 
     is_dark = hd.theme().is_dark
 
-    # ── Phase 1: load profile + stroke cache from localStorage (once) ────────
+    profile = get_profile_from_context(ctx)
+    sync_result = sync_from_context(ctx)
 
-    profile = get_profile()
-
-    # ── Fetch workouts ─────────────────────────────────────────────────────────
-    sync_result = concept2_sync(client)
-
-    if not state.strokes_cache_loaded:
-        ls_strokes = hd.local_storage.get_item(_STROKES_LS_KEY)
-        if not ls_strokes.done:
-            with hd.box(align="center", padding=4):
-                hd.spinner()
-        else:
-            if ls_strokes.result:
-                state.strokes_by_id = decompress_strokes_cache(ls_strokes.result)
-            state.strokes_cache_loaded = True
-
-    if sync_result is None or profile is None or not state.strokes_cache_loaded:
+    if sync_result is None or profile is None:
         hd.box(padding=2, min_height="80vh")
         return
 
@@ -332,50 +311,20 @@ def race_page(
             )
         pb_id = pb.get("id") if pb else None
 
-    # ── Phase 2: one-at-a-time stroke fetch with real progress bar ────────────
-    _all_race_ids = tuple(sorted(w.get("id") for w in racing_workouts if w.get("id")))
-    _batch_key = f"{state.event_type}_{state.event_value}_{_all_race_ids}"
+    # ── Stroke fetch via unified concept2_sync.strokes_batch ─────────────────
+    # Owner mode: one API fetch per render; public mode: synchronous disk
+    # reads of the cache-on-owner-view directory.  Strokes are stored as raw
+    # Concept2 format in the unified cache — normalize at the boundary.
+    batch = strokes_batch(ctx, racing_workouts)
+    raw_by_id = batch["by_id"]
+    strokes_by_id = {k: normalize_strokes(v) for k, v in raw_by_id.items()}
+    uncached_public_count = batch["uncached_count"]
+    is_public = ctx.mode == "public"
 
-    if _batch_key != state.last_batch_key:
-        missing_ids = tuple(
-            w.get("id")
-            for w in racing_workouts
-            if w.get("id") and str(w.get("id")) not in state.strokes_by_id
-        )
-        state.fetch_queue = missing_ids
-        state.fetch_total = len(missing_ids)
-        state.fetch_done = 0
-        state.last_batch_key = _batch_key
-
-    is_loading = bool(state.fetch_queue)
-
-    if state.fetch_queue:
-        next_id = state.fetch_queue[0]
-        with hd.scope(f"fetch_{next_id}"):
-            stroke_task = hd.task()
-            next_wkt = next(
-                (w for w in racing_workouts if w.get("id") == next_id), None
-            )
-            if not stroke_task.running and not stroke_task.done and next_wkt:
-                stroke_task.run(fetch_one_stroke, client, int(user_id), next_wkt)
-
-            if stroke_task.done and not stroke_task.error:
-                wid_str, strokes = stroke_task.result
-                if wid_str == str(next_id):
-                    merged = dict(state.strokes_by_id)
-                    merged[wid_str] = strokes
-                    state.strokes_by_id = merged
-                    state.fetch_queue = state.fetch_queue[1:]
-                    state.fetch_done += 1
-                    hd.local_storage.set_item(
-                        _STROKES_LS_KEY, compress_strokes_cache(merged)
-                    )
-
-    fetch_pct = (
-        round(100 * state.fetch_done / state.fetch_total)
-        if state.fetch_total > 0
-        else 0
-    )
+    is_loading = batch["is_loading"]
+    fetch_done = batch["done"]
+    fetch_total = batch["total"]
+    fetch_pct = round(100 * fetch_done / fetch_total) if fetch_total > 0 else 0
 
     # ── Sort race workouts for lane assignment ─────────────────────────────────
     if state.sort_mode == "result":
@@ -394,7 +343,7 @@ def race_page(
 
     # ── Build races payload ────────────────────────────────────────────────────
     races_data = (
-        build_races_data(sorted_racing_workouts, state.strokes_by_id, wkt_seasons)
+        build_races_data(sorted_racing_workouts, strokes_by_id, wkt_seasons)
         if sorted_racing_workouts
         else []
     )
@@ -454,7 +403,7 @@ def race_page(
         with hd.box(align="center", gap=1, width="100%"):
             with hd.h1():
                 with hd.hbox(gap=0.6, align="center", wrap="wrap"):
-                    hd.text("A Race Between Your")
+                    hd.text(f"A Race Between {your(ctx)}")
 
                     # ── Include filter dropdown ─────────────────────────────────────
                     with hd.scope("include_dd"):
@@ -547,7 +496,6 @@ def race_page(
                                         if _ev_item.clicked:
                                             state.event_type = etype
                                             state.event_value = evalue
-                                            state.last_batch_key = ""
                                             _ev_dd.opened = False
 
                     hd.text("!")
@@ -558,9 +506,29 @@ def race_page(
                     with hd.box(width=32):
                         hd.progress_bar(value=fetch_pct)
                     hd.text(
-                        f"Fetching stroke data… {state.fetch_done} / {state.fetch_total}",
+                        f"Fetching stroke data… {fetch_done} / {fetch_total}",
                         font_color="neutral-500",
                         font_size="small",
+                    )
+
+            # ── Public-mode: notice for workouts whose strokes aren't cached yet ──
+            if is_public and uncached_public_count > 0:
+                with hd.hbox(
+                    gap=0.5,
+                    align="center",
+                    padding=(0.5, 1),
+                    background_color="neutral-50",
+                    border="1px solid neutral-200",
+                    border_radius="medium",
+                    margin_bottom=0.5,
+                ):
+                    hd.icon("info-circle", font_color="neutral-500")
+                    hd.text(
+                        f"{uncached_public_count} workout"
+                        f"{'s' if uncached_public_count != 1 else ''} not yet available "
+                        f"— appears after the owner views them.",
+                        font_size="small",
+                        font_color="neutral-600",
                     )
 
             # ── Race canvas ───────────────────────────────────────────────────────────
@@ -619,12 +587,13 @@ def race_page(
 
         with hd.box(gap=1, align="center"):
             with hd.h2():
+                _poss = your(ctx)
                 if state.include_filter == "All":
-                    hd.text(f"Your Quality {_cur_event_lbl} Efforts")
+                    hd.text(f"{_poss} Quality {_cur_event_lbl} Efforts")
                 elif state.include_filter == "SBs":
-                    hd.text(f"Your {_cur_event_lbl} Season Bests")
+                    hd.text(f"{_poss} {_cur_event_lbl} Season Bests")
                 elif state.include_filter == "top":
-                    hd.text(f"Your Top 10 {_cur_event_lbl} Efforts")
+                    hd.text(f"{_poss} Top 10 {_cur_event_lbl} Efforts")
 
             # ── Results table ─────────────────────────────────────────────────────────
             if racing_workouts:

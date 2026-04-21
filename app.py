@@ -48,6 +48,12 @@ from components.workout_page import workout_page
 from components.sessions_page import sessions_page
 from components.volume_page import volume_page
 from components.concept2_sync import concept2_sync
+from components.view_context import (
+    build_owner_context,
+    build_public_context,
+)
+from components.public_banner import public_banner
+from services import public_profiles
 
 
 # ---------------------------------------------------------------------------
@@ -405,18 +411,36 @@ def _global_filter_ui(gstate, all_seasons: list, machine_types: list) -> None:
                 gstate.machine = machine_sel.value
 
 
-def _dashboard_view(client, user_id: str, app_state) -> None:
+def _dashboard_view(ctx, app_state, path_suffix: str | None = None) -> None:
     _ScrollToTop()
 
-    user_task = hd.task()
+    is_public = ctx.mode == "public"
 
-    def fetch_user():
-        return client.get_user().get("data", {})
+    # Owner mode: fetch user profile for the display-name link. Public mode:
+    # ctx.display_name is pre-populated from the scrubbed public profile.
+    user_task = hd.task() if not is_public else None
+    if user_task is not None:
+        def fetch_user():
+            return ctx.client.get_user().get("data", {})
 
-    user_task.run(fetch_user)
+        user_task.run(fetch_user)
 
     _theme = hd.theme()
     loc = hd.location()
+
+    # Active path used to dispatch pages. In owner mode we read ``loc.path``
+    # directly; in public mode we get the suffix (e.g. "/sessions") stripped
+    # from "/u/{uid}/sessions" by the caller.
+    active_path = path_suffix if path_suffix is not None else loc.path
+
+    # Public-mode navigation links prepend "/u/{uid}" so SPA nav stays within
+    # the public dashboard.
+    def nav_href(path: str) -> str:
+        if is_public:
+            # "/" default page has no suffix under /u/{uid}
+            suffix = "" if path == "/" else path
+            return f"/u/{ctx.user_id}{suffix}"
+        return path
 
     # ── Global filter state ────────────────────────────────────────────────
     # Shared across all pages; lives here so it persists across tab switches.
@@ -456,21 +480,30 @@ def _dashboard_view(client, user_id: str, app_state) -> None:
             pass
 
     # Derive active page from URL; unknown/session paths fall back to default.
-    in_session = loc.path.startswith("/session/")
-    current_page = _ROUTES_PAGES.get(loc.path, None if in_session else _DEFAULT_PAGE)
+    in_session = active_path.startswith("/session/")
+    current_page = _ROUTES_PAGES.get(
+        active_path, None if in_session else _DEFAULT_PAGE
+    )
+
+    # Public mode: hide Profile tab (no public settings page) AND Race tab is
+    # kept — strokes gracefully degrade when uncached. Profile is the only
+    # route that 404s in public mode.
+    _hidden_nav_pages = {"Profile"}
+
+    public_banner(ctx)
 
     with hd.box(padding=2, gap=1, padding_top=0):
         with hd.hbox(gap=2, align="center"):
             ergnerd_animation(width=10, theme="dark" if _theme.is_dark else "light")
             with hd.nav(direction="horizontal", gap=0, align="end"):
                 for page_name, path in _PAGES_ROUTES.items():
-                    if page_name in ["Profile"]:
+                    if page_name in _hidden_nav_pages:
                         continue
-                    with hd.scope(f"{page_name, loc.path}"):
+                    with hd.scope(f"{page_name, active_path}"):
                         is_active = page_name == current_page
                         hd.link(
                             page_name,
-                            href=path,
+                            href=nav_href(path),
                             target="_self",
                             underline=False,
                             font_size="medium",
@@ -499,77 +532,127 @@ def _dashboard_view(client, user_id: str, app_state) -> None:
                 if SYNTHETIC_MODE:
                     hd.badge("SYNTHETIC DATA", variant="warning")
 
-                if user_task.done and user_task.result:
-                    user = user_task.result
-                    display_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or user.get(
-                        "username", ""
-                    )
-                    hd.link(
-                        display_name,
-                        href="profile",
+                if is_public:
+                    hd.text(
+                        ctx.display_name,
                         font_color="primary",
                         font_size="small",
+                        font_weight="semibold",
                     )
+                else:
+                    if user_task.done and user_task.result:
+                        user = user_task.result
+                        display_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or user.get(
+                            "username", ""
+                        )
+                        hd.link(
+                            display_name,
+                            href="profile",
+                            font_color="primary",
+                            font_size="small",
+                        )
 
-                if hd.button("Disconnect", variant="neutral", size="small").clicked:
-                    clear_token(user_id)
-                    hd.local_storage.remove_item("c2_user_id")
-                    hd.local_storage.remove_item("workouts")
-                    hd.local_storage.remove_item("profile")
-                    loc.go(path="/")
+                    if hd.button("Disconnect", variant="neutral", size="small").clicked:
+                        # Also tear down any published public data — single
+                        # source of truth is the token file.
+                        try:
+                            public_profiles.unpublish(ctx.user_id)
+                        except Exception as _exc:
+                            print(f"[disconnect] unpublish failed: {_exc}")
+                        clear_token(ctx.user_id)
+                        hd.local_storage.remove_item("c2_user_id")
+                        hd.local_storage.remove_item("workouts")
+                        hd.local_storage.remove_item("profile")
+                        loc.go(path="/")
 
         # ── Session detail overlay ─────────────────────────────────────────
         if in_session:
             try:
-                session_id = int(loc.path.split("/")[2])
+                session_id = int(active_path.split("/")[2])
             except (IndexError, ValueError):
                 session_id = None
             if session_id is not None:
                 with hd.scope(session_id):
-                    workout_page(
-                        session_id,
-                        client,
-                        user_id,
-                    )
+                    workout_page(session_id, ctx)
         elif current_page == "Volume":
             volume_page(
-                client,
-                user_id,
+                ctx,
                 excluded_seasons=gfilter.excluded_seasons,
                 machine=gfilter.machine,
             )
         elif current_page == "Sessions":
             sessions_page(
-                client,
-                user_id,
+                ctx,
                 excluded_seasons=gfilter.excluded_seasons,
                 machine=gfilter.machine,
             )
         elif current_page == "Intervals":
             intervals_page(
-                client,
-                user_id,
+                ctx,
                 excluded_seasons=gfilter.excluded_seasons,
                 machine=gfilter.machine,
             )
         elif current_page == "Power Curve":
             power_curve_page(
-                client,
-                user_id,
+                ctx,
                 excluded_seasons=gfilter.excluded_seasons,
                 machine=gfilter.machine,
             )
         elif current_page == "Race":
             race_page(
-                client,
-                user_id,
+                ctx,
                 excluded_seasons=gfilter.excluded_seasons,
                 machine=gfilter.machine,
             )
         else:
-            profile_page()
+            # Profile page is owner-only; public-mode requests render 404.
+            if is_public:
+                _public_404_view(ctx.user_id)
+            else:
+                profile_page(ctx)
 
     _app_footer()
+
+
+def _public_404_view(user_id: str | None = None) -> None:
+    """Friendly card shown when ``/u/{uid}`` has no published data, or
+    when an owner-only route is hit in public mode."""
+    with hd.box(
+        height="80vh",
+        align="center",
+        justify="center",
+        gap=2,
+        padding=4,
+    ):
+        with hd.box(
+            gap=2,
+            padding=4,
+            align="center",
+            border="1px solid neutral-200",
+            border_radius="large",
+            background_color="neutral-50",
+            max_width=30,
+        ):
+            hd.icon("question-circle", font_size=3, font_color="neutral-400")
+            hd.h3("Nothing to see here")
+            if user_id:
+                hd.text(
+                    f"No public profile is published for user {user_id}.",
+                    font_color="neutral-600",
+                    text_align="center",
+                )
+            else:
+                hd.text(
+                    "This page isn't available on public profiles.",
+                    font_color="neutral-600",
+                    text_align="center",
+                )
+            hd.link(
+                "Go to Erg Nerd",
+                href="/",
+                target="_self",
+                font_color="primary",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -584,6 +667,23 @@ def main() -> None:
     # OAuth callback — handled before localStorage gate
     if loc.path == "/oauth/callback":
         _oauth_callback_view(loc.query_args or "", app_state)
+        return
+
+    # Public profile dispatch — `/u/{uid}/...` bypasses the login gate. The
+    # segment after `{uid}` (if any) becomes the page path used internally
+    # by _dashboard_view.
+    if loc.path.startswith("/u/"):
+        parts = loc.path.split("/", 3)  # ["", "u", "{uid}", "rest"]
+        public_uid = parts[2] if len(parts) > 2 else ""
+        suffix = "/" + parts[3] if len(parts) > 3 and parts[3] else "/"
+        if not public_uid:
+            _public_404_view()
+            return
+        ctx = build_public_context(public_uid)
+        if ctx is None:
+            _public_404_view(public_uid)
+            return
+        _dashboard_view(ctx, app_state, path_suffix=suffix)
         return
 
     # Flush any user_id set by the OAuth callback into browser localStorage
@@ -624,7 +724,8 @@ def main() -> None:
         _login_view()
         return
 
-    _dashboard_view(client, user_id, app_state)
+    ctx = build_owner_context(client, user_id)
+    _dashboard_view(ctx, app_state)
 
 
 _BASE_URL = get_server_url()
