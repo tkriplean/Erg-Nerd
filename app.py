@@ -629,6 +629,18 @@ def main() -> None:
 
 _BASE_URL = get_server_url()
 
+
+plausible = (
+    """<!-- Privacy-friendly analytics by Plausible -->
+              <script async src="https://plausible.io/js/pa-qqiXIjSXpsHb8fbWbYtHz.js"></script>
+              <script>
+                window.plausible=window.plausible||function(){(plausible.q=plausible.q||[]).push(arguments)},plausible.init=plausible.init||function(i){plausible.o=i||{}};
+                plausible.init()
+              </script>"""
+    if "https" in _BASE_URL
+    else ""
+)
+
 hd.run(
     main,
     index_page=hd.index_page(
@@ -638,5 +650,12 @@ hd.run(
         url=_BASE_URL,
         image=f"{_BASE_URL}/assets/static_logo.png",
         favicon="/assets/nerdemoji.png",
+        raw_head_content=(
+            f"""
+                {plausible}
+
+              <script data-name="BMC-Widget" data-cfasync="false" src="https://cdnjs.buymeacoffee.com/1.0.0/widget.prod.min.js" data-id="ergnerd" data-description="Support me on Buy me a coffee!" data-message="Help cover Erg Nerd's server and development costs!" data-color="#5F7FFF" data-position="Right" data-x_margin="18" data-y_margin="18"></script>
+            """
+        ),
     ),
 )
