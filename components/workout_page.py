@@ -1091,6 +1091,7 @@ def workout_page(session_id: int, client, user_id: str) -> None:
     # ── Pre-fetch workout list (task-cached; free on repeat renders) ────────
     sync_result = concept2_sync(client)
     if sync_result is None:
+        hd.box(padding=2, min_height="80vh")
         return
 
     _workouts_dict, all_workouts = sync_result
@@ -1158,7 +1159,7 @@ def workout_page(session_id: int, client, user_id: str) -> None:
         and (total_dist > 0 or (is_time_based and total_time_tenths > 0))
     )
 
-    with hd.box(padding=(1, 2, 0, 4), gap=3, align="center"):
+    with hd.box(padding=(1, 2, 0, 4), gap=3, align="center", min_height="80vh"):
         with hd.hbox(gap=4, align="center", justify="end"):
             # ── Header ───────────────────────────────────────────────────────
 

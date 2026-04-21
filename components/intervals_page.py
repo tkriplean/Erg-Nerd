@@ -754,6 +754,7 @@ def intervals_page(client, user_id: str, excluded_seasons=(), machine="All") -> 
 
     result = concept2_sync(client)
     if result is None:
+        hd.box(padding=2, min_height="80vh")
         return
     _workouts_dict, all_workouts = result
 
@@ -888,7 +889,7 @@ def intervals_page(client, user_id: str, excluded_seasons=(), machine="All") -> 
         COL_LINK,
     ]
 
-    with hd.box(align="center", gap=1, padding=(2, 2, 2, 2)):
+    with hd.box(align="center", gap=1, padding=2, min_height="80vh"):
         hd.h1("Review Your Fondest Interval Sessions")
 
         with hd.box(width="100%"):

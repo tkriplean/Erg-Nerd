@@ -409,7 +409,10 @@ def volume_page(client, user_id: str, excluded_seasons=(), machine="All") -> Non
     """Top-level component for the Volume tab."""
 
     result = concept2_sync(client)
-    if result is None:
+    profile = get_profile()
+
+    if result is None or not profile:
+        hd.box(padding=2, min_height="80vh")
         return
     _workouts_dict, all_workouts = result
 
@@ -423,14 +426,10 @@ def volume_page(client, user_id: str, excluded_seasons=(), machine="All") -> Non
     if machine != "All":
         all_workouts = [w for w in all_workouts if w.get("type") == machine]
 
-    profile = get_profile()
-    if not profile:
-        return
-
     if not all_workouts:
         with hd.box(padding=4, align="center"):
             hd.text("No workouts found.", font_color="neutral-500")
         return
 
-    with hd.box(padding=(2, 2, 2, 2)):
+    with hd.box(padding=2, min_height="80vh"):
         _volume_section(all_workouts, profile, machine=machine)

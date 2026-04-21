@@ -19,13 +19,15 @@ def sessions_page(client, user_id: str, excluded_seasons=(), machine="All") -> N
 
     result = concept2_sync(client)
     if result is None:
+        hd.box(padding=2, min_height="80vh")
         return
     _workouts_dict, all_workouts = result
 
     # Apply global filters
     if excluded_seasons:
         all_workouts = [
-            w for w in all_workouts
+            w
+            for w in all_workouts
             if get_season(w.get("date", "")) not in set(excluded_seasons)
         ]
     if machine != "All":
@@ -37,5 +39,5 @@ def sessions_page(client, user_id: str, excluded_seasons=(), machine="All") -> N
         return
 
     # ── Pace-vs-date scatter + windowed workouts table ────────────────────────
-    with hd.box(padding=(2, 2, 2, 2), gap=2):
+    with hd.box(padding=2, min_height="80vh", gap=2):
         sessions_chart(all_workouts)

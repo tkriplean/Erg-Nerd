@@ -57,7 +57,9 @@ def concept2_sync(client) -> tuple | None:
     when ready, or None while the component is still loading.
     """
     # ── Step 1: one-time localStorage read ───────────────────────────────────
-    sync_state = hd.state(written=False, initial_workouts=None, initial_loaded=False, synth_cache=None)
+    sync_state = hd.state(
+        written=False, initial_workouts=None, initial_loaded=False, synth_cache=None
+    )
 
     if not sync_state.initial_loaded:
         ls_wkts = hd.local_storage.get_item("workouts")
@@ -95,6 +97,7 @@ def concept2_sync(client) -> tuple | None:
         if SYNTHETIC_MODE:
             if sync_state.synth_cache is None:
                 from services.synthetic_data import augment_with_synthetic
+
                 sync_state.synth_cache = augment_with_synthetic(workouts_dict)
             return sync_state.synth_cache
         return workouts_dict, sorted_workouts

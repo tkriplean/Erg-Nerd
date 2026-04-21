@@ -236,22 +236,22 @@ def race_page(
     # ── Phase 1: load profile + stroke cache from localStorage (once) ────────
 
     profile = get_profile()
-    if profile is None:
-        return
+
+    # ── Fetch workouts ─────────────────────────────────────────────────────────
+    sync_result = concept2_sync(client)
 
     if not state.strokes_cache_loaded:
         ls_strokes = hd.local_storage.get_item(_STROKES_LS_KEY)
         if not ls_strokes.done:
             with hd.box(align="center", padding=4):
                 hd.spinner()
-            return
-        if ls_strokes.result:
-            state.strokes_by_id = decompress_strokes_cache(ls_strokes.result)
-        state.strokes_cache_loaded = True
+        else:
+            if ls_strokes.result:
+                state.strokes_by_id = decompress_strokes_cache(ls_strokes.result)
+            state.strokes_cache_loaded = True
 
-    # ── Fetch workouts ─────────────────────────────────────────────────────────
-    sync_result = concept2_sync(client)
-    if sync_result is None:
+    if sync_result is None or profile is None or not state.strokes_cache_loaded:
+        hd.box(padding=2, min_height="80vh")
         return
 
     _workouts_dict, sorted_workouts = sync_result
@@ -450,7 +450,7 @@ def race_page(
     _cur_event_lbl = _fmt_event_long(state.event_type, state.event_value)
     _cur_include_lbl = _include_long.get(state.include_filter, state.include_filter)
 
-    with hd.box(align="center", gap=3, padding=2):
+    with hd.box(align="center", gap=3, padding=2, min_height="80vh"):
         with hd.box(align="center", gap=1, width="100%"):
             with hd.h1():
                 with hd.hbox(gap=0.6, align="center", wrap="wrap"):

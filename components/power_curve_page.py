@@ -1175,6 +1175,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
     sync_result = concept2_sync(client)
 
     if sync_result is None or profile is None:
+        hd.box(padding=2, min_height="80vh")
         return
 
     # Build the workout view — one traversal through all 4 pipeline stages.
@@ -1302,7 +1303,7 @@ def power_curve_page(client, user_id: str, excluded_seasons=(), machine="All") -
     rl_available = profile_complete(profile)
 
     # ── Render ────────────────────────────────────────────────────────────────
-    with hd.box(gap=5, align="center", padding=(2, 2, 2, 2)):
+    with hd.box(gap=5, align="center", padding=2, min_height="80vh"):
         with hd.box(width="100%", align="center"):
             _page_header(
                 state,
