@@ -196,6 +196,110 @@ _DEFAULT_PAGE = "Power Curve"
 
 
 # ---------------------------------------------------------------------------
+# Scroll-to-top on SPA navigation
+# ---------------------------------------------------------------------------
+
+_SCROLL_TO_TOP_JS = """
+(function () {
+    if (window.__scrollToTopInstalled) return;
+    window.__scrollToTopInstalled = true;
+    var _orig = history.pushState;
+    history.pushState = function () {
+        _orig.apply(this, arguments);
+        window.scrollTo({ top: 0, behavior: "instant" });
+    };
+    window.addEventListener("popstate", function () {
+        window.scrollTo({ top: 0, behavior: "instant" });
+    });
+})();
+"""
+
+
+class _ScrollToTop(hd.Plugin):
+    _name = "ScrollToTop"
+    _assets = [hd.Plugin.js(_SCROLL_TO_TOP_JS)]
+
+
+# ---------------------------------------------------------------------------
+# Footer
+# ---------------------------------------------------------------------------
+
+
+def _app_footer() -> None:
+    import datetime
+
+    year = datetime.date.today().year
+
+    with hd.box(
+        padding=2, background_color="neutral-700", margin_top=2, align="center", gap=4
+    ):
+        with hd.hbox(gap=2, align="start", justify="space-between", max_width="750px"):
+            with hd.box(gap=0.5, grow=True):
+                ergnerd_animation(
+                    width=15, theme="light" if hd.theme().is_dark else "dark"
+                )
+
+                hd.link(
+                    "Support this project ♥",
+                    href="",
+                    font_color="neutral-300",
+                    font_size="small",
+                    underline=False,
+                )
+
+            with hd.box(
+                gap=0.5,
+                grow=True,
+                border_left="1px solid neutral-500",
+                margin_top=1,
+                padding_left=0.5,
+            ):
+                for page_name, path in _PAGES_ROUTES.items():
+                    with hd.scope(f"footer_{page_name}"):
+                        hd.link(
+                            page_name,
+                            href=path,
+                            target="_self",
+                            font_color="neutral-300",
+                            font_size="small",
+                            underline=False,
+                        )
+
+        with hd.box(gap=0.3, align="center"):
+            with hd.hbox(align="center", gap=1):
+                with hd.hbox(gap=0.2):
+                    hd.text(
+                        "Built by ",
+                        font_color="neutral-300",
+                        font_size="small",
+                    )
+                    hd.link(
+                        "Travis Kriplean",
+                        href="https://traviskriplean.com",
+                        font_size="small",
+                        font_color="primary-300",
+                    )
+
+                hd.text("|", font_color="neutral-500")
+
+                hd.icon_link(
+                    "github",
+                    "Open source code",
+                    href="https://github.com/tkriplean/Erg-Nerd",
+                    background_color="neutral-700",
+                    font_color="neutral-200",
+                    hover_background_color="neutral-700",
+                )
+
+            with hd.hbox(align="center"):
+                hd.text(
+                    f"© {year} Travis Kriplean. All rights reserved.",
+                    font_color="neutral-400",
+                    font_size="small",
+                )
+
+
+# ---------------------------------------------------------------------------
 # Dashboard view
 # ---------------------------------------------------------------------------
 
@@ -302,6 +406,8 @@ def _global_filter_ui(gstate, all_seasons: list, machine_types: list) -> None:
 
 
 def _dashboard_view(client, user_id: str, app_state) -> None:
+    _ScrollToTop()
+
     user_task = hd.task()
 
     def fetch_user():
@@ -462,6 +568,8 @@ def _dashboard_view(client, user_id: str, app_state) -> None:
             )
         else:
             profile_page()
+
+    _app_footer()
 
 
 # ---------------------------------------------------------------------------
