@@ -121,6 +121,22 @@ def age_from_dob(dob: str) -> int:
         return 0
 
 
+def age_on_date(dob: str, on_date: date) -> int:
+    """
+    Compute whole-year age on a specific date from a 'YYYY-MM-DD' dob string.
+    Returns 0 if the dob is absent, malformed, or after on_date.
+    """
+    if not dob:
+        return 0
+    try:
+        bd = date.fromisoformat(dob)
+        if on_date < bd:
+            return 0
+        return on_date.year - bd.year - ((on_date.month, on_date.day) < (bd.month, bd.day))
+    except (ValueError, TypeError):
+        return 0
+
+
 def profile_complete(profile: dict) -> bool:
     """Return True only if all fields required for RowingLevel / WR lookup are filled."""
     return (

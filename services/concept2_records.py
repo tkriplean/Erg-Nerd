@@ -337,6 +337,35 @@ def get_age_group_records(gender: str, age: int, weight_kg: float) -> dict:
     return filtered
 
 
+def get_records_for_age(gender: str, age: int, weight_kg: float) -> dict:
+    """
+    Return {(etype, evalue): value} for the WR age_category that contains
+    ``age`` — like ``get_age_group_records`` but optimised for callers that
+    iterate over many ages and would otherwise re-filter the cached raw
+    payload repeatedly.
+
+    Reuses the in-memory cached ``_raw`` payload without re-fetching. Falls
+    back to ``get_age_group_records`` if the raw payload is missing or stale
+    (so the first call still triggers one network round-trip).
+    """
+    age_cat = age_category(age)
+    wt_class = weight_class_str(weight_kg, gender, age)
+
+    cache = _load_cache()
+    now = time.time()
+    raw_entry = cache.get("_raw", {})
+    raw = raw_entry.get("data") if now - raw_entry.get("_ts", 0) < _CACHE_TTL else None
+    if raw is None:
+        # Trigger a normal fetch + cache via get_age_group_records, then re-read.
+        get_age_group_records(gender, age, weight_kg)
+        cache = _load_cache()
+        raw_entry = cache.get("_raw", {})
+        raw = raw_entry.get("data")
+        if not raw:
+            return {}
+    return _filter_records(raw, gender, age_cat, wt_class)
+
+
 def records_to_cp_input(records: dict) -> list[dict]:
     """
     Convert a records dict (from get_age_group_records) to a list of

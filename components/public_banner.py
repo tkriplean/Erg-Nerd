@@ -47,7 +47,7 @@ def public_banner(ctx) -> None:
         with hd.box(grow=True):
             pass
         hd.link(
-            "Log in with your Concept2 account",
+            "Switch to your Concept2 account",
             href="/",
             target="_self",
             font_size="small",

@@ -43,6 +43,7 @@ from components.intervals_page import intervals_page
 from components.profile_page import profile_page
 from components.power_curve_page import power_curve_page
 from components.race_page import race_page
+from components.rank_page import rank_page
 from components.ergnerd_animation import ergnerd_animation
 from components.workout_page import workout_page
 from components.sessions_page import sessions_page
@@ -195,6 +196,7 @@ _PAGES_ROUTES: dict[str, str] = {
     "Intervals": "/intervals",
     "Power Curve": "/power_curve",
     "Race": "/race",
+    "Rank": "/rank",
     "Profile": "/profile",
 }
 _ROUTES_PAGES: dict[str, str] = {v: k for k, v in _PAGES_ROUTES.items()}
@@ -627,6 +629,12 @@ def _dashboard_view(ctx, app_state, path_suffix: str | None = None) -> None:
             )
         elif current_page == "Race":
             race_page(
+                ctx,
+                excluded_seasons=gfilter.excluded_seasons,
+                machine=gfilter.machine,
+            )
+        elif current_page == "Rank":
+            rank_page(
                 ctx,
                 excluded_seasons=gfilter.excluded_seasons,
                 machine=gfilter.machine,

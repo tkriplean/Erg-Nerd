@@ -883,6 +883,204 @@ def scrape_all(
 
 
 # ---------------------------------------------------------------------------
+# Query helpers (used by the Rank Page)
+# ---------------------------------------------------------------------------
+
+# C2 rankings weight classes ("H" / "L") vs WR API ("Hwt" / "Lwt"). The Rank
+# Page normalises both to the C2 rankings style at the call site.
+
+# Canonical adult age-band bucketing used by the C2 rankings pages. Must stay
+# in sync with the URL path values in ``AGE_BANDS``.
+_RANKINGS_AGE_BANDS_ADULT: list[tuple[int, int, str]] = [
+    (19, 29, "19-29"),
+    (30, 39, "30-39"),
+    (40, 49, "40-49"),
+    (50, 54, "50-54"),
+    (55, 59, "55-59"),
+    (60, 64, "60-64"),
+    (65, 69, "65-69"),
+    (70, 74, "70-74"),
+    (75, 79, "75-79"),
+    (80, 84, "80-84"),
+    (85, 89, "85-89"),
+    (90, 94, "90-94"),
+    (95, 99, "95-99"),
+    (100, 200, "100"),
+]
+
+
+def rankings_age_band(age: int) -> str:
+    """Return the C2-rankings URL age_band for a given whole-year age.
+
+    Youth band splits: 0-12 and 13-18.
+    """
+    if age <= 12:
+        return "0-12"
+    if age <= 18:
+        return "13-18"
+    for lo, hi, label in _RANKINGS_AGE_BANDS_ADULT:
+        if lo <= age <= hi:
+            return label
+    return "100"
+
+
+@dataclass(frozen=True)
+class RankingModifiers:
+    """Optional pool-restriction filters used by the Rank Page."""
+
+    must_have_event_kinds: frozenset = frozenset()
+    exclude_unverified: bool = False
+    min_ranked_performances: int = 1
+    # Optional precomputed {name: count} from a cross-event sweep. If None,
+    # ``min_ranked_performances`` and ``must_have_event_kinds`` are skipped.
+    name_counts: Optional[dict] = None
+    name_event_sets: Optional[dict] = None
+
+
+def _apply_modifiers(entries: list[dict], modifiers: Optional[RankingModifiers]) -> list[dict]:
+    if modifiers is None:
+        return entries
+    out = entries
+    if modifiers.exclude_unverified:
+        out = [e for e in out if e.get("verified") == "Y"]
+    if modifiers.min_ranked_performances > 1 and modifiers.name_counts is not None:
+        nc = modifiers.name_counts
+        mn = modifiers.min_ranked_performances
+        out = [e for e in out if nc.get(e.get("name", ""), 0) >= mn]
+    if modifiers.must_have_event_kinds and modifiers.name_event_sets is not None:
+        nes = modifiers.name_event_sets
+        required = modifiers.must_have_event_kinds
+        out = [e for e in out if required.issubset(nes.get(e.get("name", ""), frozenset()))]
+    return out
+
+
+def filter_matched_rankings(
+    entries: list[dict],
+    *,
+    target_age: int,
+    k: int = 0,
+    gender: str,
+    weight_class: Optional[str],
+    modifiers: Optional[RankingModifiers] = None,
+) -> list[dict]:
+    """Age-matched pool: rows within ``target_age ± k`` of the given age.
+
+    ``gender`` is ``"M"`` / ``"F"``; ``weight_class`` is ``"H"`` / ``"L"`` /
+    ``None`` (youth). Entries must have the expected fields from the index
+    (``gender``, ``weight``, ``age``).
+    """
+    lo, hi = target_age - k, target_age + k
+    out: list[dict] = []
+    for e in entries:
+        if e.get("gender") != gender:
+            continue
+        if e.get("weight") != weight_class:
+            continue
+        a = e.get("age", -1)
+        if a < lo or a > hi:
+            continue
+        out.append(e)
+    return _apply_modifiers(out, modifiers)
+
+
+def age_group_matched_rankings(
+    entries: list[dict],
+    *,
+    age_band: str,
+    gender: str,
+    weight_class: Optional[str],
+    modifiers: Optional[RankingModifiers] = None,
+) -> list[dict]:
+    """Age-group pool: rows whose cached ``age_band`` matches exactly."""
+    out: list[dict] = []
+    for e in entries:
+        if e.get("gender") != gender:
+            continue
+        if e.get("weight") != weight_class:
+            continue
+        if e.get("age_band") != age_band:
+            continue
+        out.append(e)
+    return _apply_modifiers(out, modifiers)
+
+
+def rank_in_pool(
+    pool: list[dict], user_value_tenths: int, event_kind: str
+) -> tuple[int, int, float]:
+    """Return (rank, total, percentile) for a user's value against ``pool``.
+
+    * Distance events: lower ``value_tenths`` (time) = better.
+    * Time events: higher ``value_tenths`` (meters) = better.
+    * percentile = 100 * (total - rank + 1) / total  (100 ≈ top).
+    * rank counts the number of pool entries strictly better than the user
+      plus 1. If the pool is empty, returns (0, 0, 0.0).
+    """
+    total = len(pool)
+    if total == 0:
+        return 0, 0, 0.0
+    if event_kind == "dist":
+        better = sum(1 for e in pool if e.get("value_tenths", 0) < user_value_tenths)
+    else:
+        better = sum(1 for e in pool if e.get("value_tenths", 0) > user_value_tenths)
+    rank = better + 1
+    pct = 100.0 * (total - rank + 1) / total
+    return rank, total, pct
+
+
+def histogram_watts(
+    pool: list[dict], event_kind: str, event_value: int, bins: int = 30
+) -> tuple[list[int], float, float]:
+    """Bin ``pool`` values as watts. Returns (counts, min_watts, max_watts).
+
+    Converts each entry's ``value_tenths`` → pace → watts via
+    ``services.rowing_utils.compute_watts``. Returns zeros + (0,0) on empty.
+    """
+    from services.rowing_utils import compute_watts
+
+    watts_list: list[float] = []
+    for e in pool:
+        v = e.get("value_tenths")
+        if v is None or v <= 0:
+            continue
+        if event_kind == "dist":
+            # v = tenths of a second for event_value meters
+            t_sec = v / 10.0
+            dist_m = event_value
+        else:
+            # v = meters covered in event_value tenths
+            t_sec = event_value / 10.0
+            dist_m = v
+        if dist_m <= 0 or t_sec <= 0:
+            continue
+        pace = t_sec / (dist_m / 500.0)
+        w = compute_watts(pace)
+        if w is None:
+            continue
+        try:
+            if not (w > 0):
+                continue
+        except TypeError:
+            continue
+        watts_list.append(float(w))
+
+    if not watts_list:
+        return [0] * bins, 0.0, 0.0
+    wmin, wmax = min(watts_list), max(watts_list)
+    if wmax <= wmin:
+        counts = [0] * bins
+        counts[0] = len(watts_list)
+        return counts, wmin, wmax
+    width = (wmax - wmin) / bins
+    counts = [0] * bins
+    for w in watts_list:
+        idx = int((w - wmin) / width)
+        if idx >= bins:
+            idx = bins - 1
+        counts[idx] += 1
+    return counts, wmin, wmax
+
+
+# ---------------------------------------------------------------------------
 # Self-test (run with ``python -m services.concept2_rankings``)
 # ---------------------------------------------------------------------------
 

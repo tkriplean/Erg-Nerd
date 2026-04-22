@@ -190,7 +190,8 @@ workouts_example.json
 .public_profiles/
 
 # Public Concept2 rankings cache (public data but large; regenerable via bin/sync_c2_rankings.py)
-.c2_rankings/
+.c2_rankings*
+
 
 .cache/
 .claude/
