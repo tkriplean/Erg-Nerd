@@ -486,7 +486,15 @@ def strokes_batch(ctx, workouts: list) -> dict:
     Public: synchronous disk reads; uncached workouts go in ``uncached_count``
     and are absent from ``by_id`` so the caller can exclude them.
     """
-    batch_state = hd.state(batch_key="", queue=(), total=0, done=0)
+    # ``by_id_snapshot`` lets us serve the last-known view while
+    # ``hd.local_storage`` is mid-reload.  Every ``set_item`` invalidates the
+    # LS cache, so the render immediately after a fetch completes sees
+    # ``ls.done == False`` for one tick and ``_load_strokes_cache`` reports
+    # "not ready" — without the snapshot the progress bar would flicker to
+    # 0/0 between every completed fetch.
+    batch_state = hd.state(
+        batch_key="", queue=(), total=0, done=0, by_id_snapshot={}
+    )
 
     ids = tuple(
         w.get("id") for w in workouts if w.get("id") and w.get("stroke_data", False)
@@ -522,10 +530,13 @@ def strokes_batch(ctx, workouts: list) -> dict:
     # Owner mode
     cache, ready = _load_strokes_cache()
     if not ready:
+        # LS is mid-reload (set_item invalidates the entry for one tick).
+        # Serve the last snapshot + progress so callers see monotonic
+        # advancement instead of a flicker to 0/0 between every fetch.
         return {
-            "by_id": {},
-            "done": 0,
-            "total": 0,
+            "by_id": dict(batch_state.by_id_snapshot),
+            "done": batch_state.done,
+            "total": batch_state.total,
             "is_loading": True,
             "uncached_count": 0,
         }
@@ -565,6 +576,9 @@ def strokes_batch(ctx, workouts: list) -> dict:
                     batch_state.done += 1
 
     by_id = {str(wid): cache[str(wid)] for wid in ids if str(wid) in cache}
+    # Snapshot so the next render can serve the same view if LS is mid-reload
+    # (every set_item invalidates hd.local_storage's cache for one tick).
+    batch_state.by_id_snapshot = by_id
     # Cache-hit mirror: ensure every workout visible on this page is also
     # present in the public directory when the owner is opted in.  The
     # mirror helper short-circuits on existing files so this is cheap and
