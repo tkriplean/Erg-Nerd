@@ -83,14 +83,15 @@ from components.view_context import your
 from components.rank_chart_plugin import RankChart
 from components.rank_distribution import distribution_svg
 from components.rank_ranking_modal import render_rankings_modal
+from components.shared_ui import global_filter_ui, header_dropdown
 
 from services.volume_bins import swatch_svg
 
 
 _INCLUDE_LABELS = {"SBs": "Season Bests", "PBs": "Personal Bests"}
 _FOCUS_LABELS = {
-    "c2_age_matched": "C2 Age-Matched Rankings",
-    "c2_age_group": "C2 Age-Group Rankings",
+    "c2_age_matched": "C2 Age-Matched Peers",
+    "c2_age_group": "C2 Age-Group Peers",
     "world_record": "World Record",
 }
 
@@ -144,50 +145,6 @@ def _weight_kg_from_profile(profile: dict) -> float:
     w = float(profile.get("weight") or 0)
     unit = profile.get("weight_unit", "kg")
     return w * 0.453592 if unit == "lbs" else w
-
-
-def _header_dropdown(
-    state,
-    *,
-    key: str,
-    labels: dict[str, str],
-    current_value: str,
-    field: str,
-) -> None:
-    """Render a single h1-sized dropdown for header state fields."""
-    cur_label = labels.get(current_value, current_value)
-    with hd.scope(key):
-        with hd.dropdown() as dd:
-            btn = hd.button(
-                cur_label,
-                caret=True,
-                size="large",
-                font_color="neutral-800",
-                font_size=2,
-                font_weight="bold",
-                slot=dd.trigger,
-            )
-            if btn.clicked:
-                dd.opened = not dd.opened
-            with hd.box(gap=0.1, background_color="neutral-0", min_width=20):
-                for val, lbl in labels.items():
-                    with hd.scope(f"{key}_{val}"):
-                        item = hd.button(
-                            lbl,
-                            size="small",
-                            variant="primary" if current_value == val else "text",
-                            width="100%",
-                            border_radius="small",
-                            font_size="medium",
-                            font_color="neutral-0"
-                            if current_value == val
-                            else "neutral-800",
-                            label_style=hd.style(padding_top=0.5, padding_bottom=0.5),
-                            hover_background_color="neutral-100",
-                        )
-                        if item.clicked:
-                            setattr(state, field, val)
-                            dd.opened = False
 
 
 def _qualifying_performances(
@@ -522,12 +479,15 @@ def _build_wr_series(rows: list[dict], state) -> list:
 # ──────────────────────────────────────────────────────────────────────────
 
 
-def rank_page(ctx, excluded_seasons: tuple = (), machine: str = "All") -> None:
+def rank_page(
+    ctx, global_state, excluded_seasons: tuple = (), machine: str = "All"
+) -> None:
     """Top-level Rank Page component. Called from app.py."""
     sync = sync_from_context(ctx)
     profile = get_profile_from_context(ctx)
 
     if sync is None or profile is None:
+        hd.box(padding=2, min_height="80vh")
         return
 
     workouts_dict, sorted_workouts = sync
@@ -560,24 +520,26 @@ def rank_page(ctx, excluded_seasons: tuple = (), machine: str = "All") -> None:
 
     with hd.box(align="center", gap=2, padding=2, min_height="80vh"):
         # ── Heading ─────────────────────────────────────────────────────────
-        with hd.h1():
-            with hd.hbox(gap=0.6, align="center", wrap="wrap"):
-                hd.text(f"{your(ctx)}")
-                _header_dropdown(
-                    state,
-                    key="inc_dd",
-                    labels=_INCLUDE_LABELS,
-                    current_value=state.include_filter,
-                    field="include_filter",
-                )
-                hd.text("Against")
-                _header_dropdown(
-                    state,
-                    key="focus_dd",
-                    labels=_FOCUS_LABELS,
-                    current_value=state.ranking_focus,
-                    field="ranking_focus",
-                )
+        with hd.box(gap=0.2, align="center"):
+            with hd.h1(font_weight="normal"):
+                with hd.hbox(gap=0.2, align="center", wrap="wrap"):
+                    hd.text(f"{your(ctx)}")
+                    header_dropdown(
+                        state,
+                        key="inc_dd",
+                        labels=_INCLUDE_LABELS,
+                        current_value=state.include_filter,
+                        field="include_filter",
+                    )
+                    hd.text("vs.")
+                    header_dropdown(
+                        state,
+                        key="focus_dd",
+                        labels=_FOCUS_LABELS,
+                        current_value=state.ranking_focus,
+                        field="ranking_focus",
+                    )
+            global_filter_ui(global_state, ctx)
 
         # ── Chart ──────────────────────────────────────────────────────────
         y_label = (

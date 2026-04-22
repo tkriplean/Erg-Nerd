@@ -48,6 +48,7 @@ from components.workout_table import (
     COL_HR,
     COL_LINK,
 )
+from components.shared_ui import global_filter_ui
 
 
 # ---------------------------------------------------------------------------
@@ -410,7 +411,7 @@ def step_ms(all_ms: list, window_size: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def sessions_chart(workouts: list, ctx=None) -> None:
+def sessions_chart(workouts: list, global_state, ctx=None) -> None:
     """
     Render the pace-vs-date focus+context chart with brush navigator,
     session filters, and an in-window workouts table.
@@ -465,32 +466,35 @@ def sessions_chart(workouts: list, ctx=None) -> None:
 
 
     with hd.box(gap=1, justify="center", align="center"):
-        with hd.h1():
-            with hd.hbox(gap=.6, align="center"):
-                hd.text("Take a Gander at ")
-                with hd.dropdown() as _sessions_dd:
-                    from components.view_context import your as _your
+        with hd.box(gap=0.2, align="center"):
 
-                    _poss = _your(ctx)
-                    _sessions_label = f"All {_poss}{" Long " if state.filter_10k else " "} {" " if state.filter_ivl == "All" else state.filter_ivl} Work"
-                    _sessions_btn = hd.button(
-                        _sessions_label, caret=True, size="medium", font_color="neutral-800", font_size=2, font_weight="bold", slot=_sessions_dd.trigger
-                    )
-                    if _sessions_btn.clicked:
-                        _sessions_dd.opened = not _sessions_dd.opened
+            with hd.h1(font_weight="normal"):
+                with hd.hbox(gap=.6, align="center"):
+                    hd.text("Take a Gander at ")
+                    with hd.dropdown() as _sessions_dd:
+                        from components.view_context import your as _your
 
-                    with hd.hbox(gap=1, padding=1,background_color="neutral-50", align="center"):  
-                        with hd.scope("ivl_filter"):
-                            with hd.radio_group(value=state.filter_ivl) as ivl_rg:
-                                hd.radio_button("All", size="small")
-                                hd.radio_button("Intervals", size="small")
-                                hd.radio_button("Continuous", size="small")
-                            if ivl_rg.changed:
-                                state.filter_ivl = ivl_rg.value
-                        with hd.scope("filter_10k"):
-                            cb_10k = hd.checkbox("10k+", checked=state.filter_10k)
-                            if cb_10k.changed:
-                                state.filter_10k = cb_10k.checked
+                        _poss = _your(ctx)
+                        _sessions_label = f"All {_poss}{" Long " if state.filter_10k else " "} {" " if state.filter_ivl == "All" else state.filter_ivl} Work"
+                        _sessions_btn = hd.button(
+                            _sessions_label, caret=True, size="medium", font_color="neutral-800", font_size=2, font_weight="bold", slot=_sessions_dd.trigger
+                        )
+                        if _sessions_btn.clicked:
+                            _sessions_dd.opened = not _sessions_dd.opened
+
+                        with hd.hbox(gap=1, padding=1,background_color="neutral-50", align="center"):  
+                            with hd.scope("ivl_filter"):
+                                with hd.radio_group(value=state.filter_ivl) as ivl_rg:
+                                    hd.radio_button("All", size="small")
+                                    hd.radio_button("Intervals", size="small")
+                                    hd.radio_button("Continuous", size="small")
+                                if ivl_rg.changed:
+                                    state.filter_ivl = ivl_rg.value
+                            with hd.scope("filter_10k"):
+                                cb_10k = hd.checkbox("10k+", checked=state.filter_10k)
+                                if cb_10k.changed:
+                                    state.filter_10k = cb_10k.checked
+            global_filter_ui(global_state, ctx)
 
 
         # with hd.hbox(gap=2, align="center", wrap="wrap", padding_bottom=1):

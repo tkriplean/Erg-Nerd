@@ -1069,7 +1069,7 @@ def _chart_controls(
 # ---------------------------------------------------------------------------
 
 
-def workout_page(session_id: int, ctx) -> None:
+def workout_page(session_id: int, ctx, global_state) -> None:
     """Render the full-screen workout detail overlay."""
     _theme = hd.theme()
 

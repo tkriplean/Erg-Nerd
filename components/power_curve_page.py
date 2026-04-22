@@ -163,6 +163,7 @@ from components.power_curve_animation import (
 )
 from components.concept2_sync import load_world_record_data
 from components.hyperdiv_extensions import radio_group, grid_box
+from components.shared_ui import global_filter_ui
 
 
 # ---------------------------------------------------------------------------
@@ -981,6 +982,8 @@ def compute_axis_bounds(
 
 def _page_header(
     state,
+    global_state,
+    ctx,
     *,
     timeline_date: date,
 ) -> None:
@@ -994,138 +997,148 @@ def _page_header(
         "SBs": "Season Bests",
     }
     _cur_best_lbl = _best_long.get(state.best_filter, state.best_filter)
-    with hd.h1():
-        with hd.hbox(
-            gap=0.6,
-            align="center",
-            padding_bottom=0,
-            justify="center",
-            wrap="wrap",
-        ):
-            with hd.scope("best_filter_dd"):
-                with hd.dropdown() as _bf_dd:
-                    _bf_btn = hd.button(
-                        _cur_best_lbl,
-                        caret=True,
-                        size="large",
+
+    with hd.box(gap=0.2, align="center"):
+        with hd.h1(font_weight="normal"):
+            with hd.hbox(
+                gap=0.6,
+                align="center",
+                padding_bottom=0,
+                justify="center",
+                wrap="wrap",
+            ):
+                with hd.scope("best_filter_dd"):
+                    with hd.dropdown() as _bf_dd:
+                        _bf_btn = hd.button(
+                            _cur_best_lbl,
+                            caret=True,
+                            size="large",
+                            font_color="neutral-800",
+                            font_size=2,
+                            font_weight="bold",
+                            slot=_bf_dd.trigger,
+                        )
+                        if _bf_btn.clicked:
+                            _bf_dd.opened = not _bf_dd.opened
+                        with hd.box(
+                            padding=1,
+                            gap=1,
+                            background_color="neutral-0",
+                            min_width=24,
+                        ):
+                            # ── Plot in graph ─────────────────────────────
+                            hd.text(
+                                "Plot in graph",
+                                font_size="small",
+                                font_weight="semibold",
+                                font_color="neutral-500",
+                            )
+                            with hd.scope("best_filter_rg"):
+                                with radio_group(
+                                    value=state.best_filter, size="small"
+                                ) as _bf_rg:
+                                    hd.radio_button("All Great Efforts", value="All")
+                                    hd.radio_button("PBs only", value="PBs")
+                                    hd.radio_button("SBs only", value="SBs")
+                                if _bf_rg.changed:
+                                    state.best_filter = _bf_rg.value
+
+                            hd.divider()
+
+                            # ── Draw a Power Curve for ────────────────────
+                            hd.text(
+                                "Draw a Power Curve for",
+                                font_size="small",
+                                font_weight="semibold",
+                                font_color="neutral-500",
+                            )
+                            with hd.scope("draw_curves_rg"):
+                                with radio_group(
+                                    value=state.overlay_bests, size="small"
+                                ) as _dpc_rg:
+                                    hd.radio_button("SBs", value="SBs")
+                                    hd.radio_button("PBs", value="PBs")
+                                    hd.radio_button("None", value="None")
+                                if _dpc_rg.changed:
+                                    state.overlay_bests = _dpc_rg.value
+
+                # ---- Events dropdown ----
+                _n_ev_sel = sum(state.dist_enabled) + sum(state.time_enabled)
+                _n_ev_tot = len(RANKED_DISTANCES) + len(RANKED_TIMES)
+                _ev_lbl = "All Events" if _n_ev_sel == _n_ev_tot else "Some Events"
+
+                hd.text("for", font_size="medium")
+
+                with hd.dropdown() as _ev_dd:
+                    _ev_btn = hd.button(
+                        _ev_lbl,
                         font_color="neutral-800",
                         font_size=2,
                         font_weight="bold",
-                        slot=_bf_dd.trigger,
+                        caret=True,
+                        size="large",
+                        slot=_ev_dd.trigger,
                     )
-                    if _bf_btn.clicked:
-                        _bf_dd.opened = not _bf_dd.opened
-                    with hd.box(
-                        padding=1,
-                        gap=1,
-                        background_color="neutral-0",
-                        min_width=24,
-                    ):
-                        # ── Plot in graph ─────────────────────────────
+                    if _ev_btn.clicked:
+                        _ev_dd.opened = not _ev_dd.opened
+                    with hd.box(padding=1, gap=0.5, background_color="neutral-50"):
+                        with hd.hbox(gap=0.5, padding_bottom=0.5):
+                            if hd.button(
+                                "Select all", size="small", variant="text"
+                            ).clicked:
+                                state.dist_enabled = tuple(
+                                    True for _ in RANKED_DISTANCES
+                                )
+                                state.time_enabled = tuple(True for _ in RANKED_TIMES)
+                            if hd.button(
+                                "Clear all", size="small", variant="text"
+                            ).clicked:
+                                state.dist_enabled = tuple(
+                                    False for _ in RANKED_DISTANCES
+                                )
+                                state.time_enabled = tuple(False for _ in RANKED_TIMES)
+                        with hd.scope(str(state.dist_enabled)):
+                            with hd.hbox(gap=0.5, wrap="wrap"):
+                                for i, (dist, label) in enumerate(RANKED_DISTANCES):
+                                    with hd.scope(f"dist_{dist}"):
+                                        cb = hd.checkbox(
+                                            label, checked=state.dist_enabled[i]
+                                        )
+                                        if cb.changed:
+                                            flags = list(state.dist_enabled)
+                                            flags[i] = cb.checked
+                                            state.dist_enabled = tuple(flags)
+                                        if cb.checked != state.dist_enabled[i]:
+                                            cb.checked = state.dist_enabled[i]
                         hd.text(
-                            "Plot in graph",
-                            font_size="small",
-                            font_weight="semibold",
-                            font_color="neutral-500",
+                            "— timed —",
+                            font_color="neutral-300",
+                            font_size="x-small",
+                            padding_top=0.25,
                         )
-                        with hd.scope("best_filter_rg"):
-                            with radio_group(
-                                value=state.best_filter, size="small"
-                            ) as _bf_rg:
-                                hd.radio_button("All Great Efforts", value="All")
-                                hd.radio_button("PBs only", value="PBs")
-                                hd.radio_button("SBs only", value="SBs")
-                            if _bf_rg.changed:
-                                state.best_filter = _bf_rg.value
+                        with hd.scope(str(state.time_enabled)):
+                            with hd.hbox(gap=0.5, wrap="wrap"):
+                                for i, (tenths, label) in enumerate(RANKED_TIMES):
+                                    with hd.scope(f"time_{tenths}"):
+                                        cb = hd.checkbox(
+                                            label, checked=state.time_enabled[i]
+                                        )
+                                        if cb.changed:
+                                            flags = list(state.time_enabled)
+                                            flags[i] = cb.checked
+                                            state.time_enabled = tuple(flags)
+                                        if cb.checked != state.time_enabled[i]:
+                                            cb.checked = state.time_enabled[i]
 
-                        hd.divider()
-
-                        # ── Draw a Power Curve for ────────────────────
-                        hd.text(
-                            "Draw a Power Curve for",
-                            font_size="small",
-                            font_weight="semibold",
-                            font_color="neutral-500",
-                        )
-                        with hd.scope("draw_curves_rg"):
-                            with radio_group(
-                                value=state.overlay_bests, size="small"
-                            ) as _dpc_rg:
-                                hd.radio_button("SBs", value="SBs")
-                                hd.radio_button("PBs", value="PBs")
-                                hd.radio_button("None", value="None")
-                            if _dpc_rg.changed:
-                                state.overlay_bests = _dpc_rg.value
-
-            # ---- Events dropdown ----
-            _n_ev_sel = sum(state.dist_enabled) + sum(state.time_enabled)
-            _n_ev_tot = len(RANKED_DISTANCES) + len(RANKED_TIMES)
-            _ev_lbl = "All Events" if _n_ev_sel == _n_ev_tot else "Some Events"
-
-            hd.text("for", font_size="medium")
-
-            with hd.dropdown() as _ev_dd:
-                _ev_btn = hd.button(
-                    _ev_lbl,
-                    font_color="neutral-800",
-                    font_size=2,
-                    font_weight="bold",
-                    caret=True,
-                    size="large",
-                    slot=_ev_dd.trigger,
+                hd.text("through", font_size="medium")
+                hd.text(
+                    _date_label,
+                    font_size="2x-large",
+                    font_weight="normal",
+                    min_width="225px",
                 )
-                if _ev_btn.clicked:
-                    _ev_dd.opened = not _ev_dd.opened
-                with hd.box(padding=1, gap=0.5, background_color="neutral-50"):
-                    with hd.hbox(gap=0.5, padding_bottom=0.5):
-                        if hd.button(
-                            "Select all", size="small", variant="text"
-                        ).clicked:
-                            state.dist_enabled = tuple(True for _ in RANKED_DISTANCES)
-                            state.time_enabled = tuple(True for _ in RANKED_TIMES)
-                        if hd.button("Clear all", size="small", variant="text").clicked:
-                            state.dist_enabled = tuple(False for _ in RANKED_DISTANCES)
-                            state.time_enabled = tuple(False for _ in RANKED_TIMES)
-                    with hd.scope(str(state.dist_enabled)):
-                        with hd.hbox(gap=0.5, wrap="wrap"):
-                            for i, (dist, label) in enumerate(RANKED_DISTANCES):
-                                with hd.scope(f"dist_{dist}"):
-                                    cb = hd.checkbox(
-                                        label, checked=state.dist_enabled[i]
-                                    )
-                                    if cb.changed:
-                                        flags = list(state.dist_enabled)
-                                        flags[i] = cb.checked
-                                        state.dist_enabled = tuple(flags)
-                                    if cb.checked != state.dist_enabled[i]:
-                                        cb.checked = state.dist_enabled[i]
-                    hd.text(
-                        "— timed —",
-                        font_color="neutral-300",
-                        font_size="x-small",
-                        padding_top=0.25,
-                    )
-                    with hd.scope(str(state.time_enabled)):
-                        with hd.hbox(gap=0.5, wrap="wrap"):
-                            for i, (tenths, label) in enumerate(RANKED_TIMES):
-                                with hd.scope(f"time_{tenths}"):
-                                    cb = hd.checkbox(
-                                        label, checked=state.time_enabled[i]
-                                    )
-                                    if cb.changed:
-                                        flags = list(state.time_enabled)
-                                        flags[i] = cb.checked
-                                        state.time_enabled = tuple(flags)
-                                    if cb.checked != state.time_enabled[i]:
-                                        cb.checked = state.time_enabled[i]
 
-            hd.text("through", font_size="medium")
-            hd.text(
-                _date_label,
-                font_size="2x-large",
-                font_weight="normal",
-                min_width="225px",
-            )
+        global_filter_ui(global_state, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -1133,7 +1146,7 @@ def _page_header(
 # ---------------------------------------------------------------------------
 
 
-def power_curve_page(ctx, excluded_seasons=(), machine="All") -> None:
+def power_curve_page(ctx, global_state, excluded_seasons=(), machine="All") -> None:
     """
     Top-level entry point for the Performance tab.
     Fetches data, computes all derived state, then calls sub-components.
@@ -1312,6 +1325,8 @@ def power_curve_page(ctx, excluded_seasons=(), machine="All") -> None:
         with hd.box(width="100%", align="center"):
             _page_header(
                 state,
+                global_state,
+                ctx,
                 timeline_date=timeline_date,
             )
 

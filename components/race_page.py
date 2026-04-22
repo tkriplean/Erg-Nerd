@@ -85,6 +85,7 @@ from components.workout_table import (
     COL_HR,
     COL_LINK,
 )
+from components.shared_ui import global_filter_ui, header_dropdown
 
 _DEFAULT_EVENT_TYPE = "dist"
 _DEFAULT_EVENT_VALUE = 2000
@@ -147,7 +148,7 @@ def _include_filtered(state, workouts: list, include_filter: str) -> list:
     if include_filter == "All":
         return workouts
     elif include_filter == "top":
-        if state.event_type == "dist":
+        if event_type == "dist":
             workouts = sorted(workouts, key=lambda w: w.get("time") or float("inf"))
         else:
             workouts = sorted(
@@ -195,6 +196,7 @@ def _results_table(workouts: list, etype: str, pb_id: int | None) -> None:
 
 def race_page(
     ctx,
+    global_state,
     excluded_seasons: tuple = (),
     machine: str = "All",
 ) -> None:
@@ -215,6 +217,7 @@ def race_page(
     """
 
     state = hd.state(
+        event=(_DEFAULT_EVENT_TYPE, _DEFAULT_EVENT_VALUE),
         event_type=_DEFAULT_EVENT_TYPE,
         event_value=_DEFAULT_EVENT_VALUE,
         include_filter="All",
@@ -223,6 +226,8 @@ def race_page(
         wr_records={},  # {(etype, evalue): result} — cached from concept2_records
         wr_records_key="",  # "gender|age|weight_kg" — invalidation key
     )
+
+    (event_type, event_value) = state.event
 
     is_dark = hd.theme().is_dark
 
@@ -270,17 +275,12 @@ def race_page(
             available_events.append(("time", tenths))
 
     # Default to first available if current selection has no data
-    if (
-        available_events
-        and (state.event_type, state.event_value) not in available_events
-    ):
-        state.event_type, state.event_value = available_events[0]
+    if available_events and (event_type, event_value) not in available_events:
+        event_type, event_value = available_events[0]
 
     # ── Derived workout sets ───────────────────────────────────────────────────
     # Table scope: event + global filters (include_filter ignored for table)
-    racing_workouts = _event_workouts(
-        rankable_efforts, state.event_type, state.event_value, "All"
-    )
+    racing_workouts = _event_workouts(rankable_efforts, event_type, event_value, "All")
 
     # Race scope: additionally apply include_filter
     racing_workouts = _include_filtered(state, racing_workouts, state.include_filter)
@@ -297,7 +297,7 @@ def race_page(
     # PB identification
     pb_id: int | None = None
     if racing_workouts:
-        if state.event_type == "dist":
+        if event_type == "dist":
             pb = min(
                 (w for w in racing_workouts if w.get("time")),
                 key=lambda w: w["time"],
@@ -328,7 +328,7 @@ def race_page(
 
     # ── Sort race workouts for lane assignment ─────────────────────────────────
     if state.sort_mode == "result":
-        if state.event_type == "dist":
+        if event_type == "dist":
             sorted_racing_workouts = sorted(
                 racing_workouts, key=lambda w: w.get("time") or float("inf")
             )
@@ -381,9 +381,9 @@ def race_page(
 
         # Build the WR boat if we have a record for the selected event.
         if state.wr_records_key == _wr_key:
-            _rec = state.wr_records.get((state.event_type, state.event_value))
+            _rec = state.wr_records.get((event_type, event_value))
             if _rec is not None:
-                _wr_boat = build_wr_boat(state.event_type, state.event_value, _rec)
+                _wr_boat = build_wr_boat(event_type, event_value, _rec)
 
     # Prepend the WR boat so it occupies the first lane and is always visible.
     if _wr_boat is not None:
@@ -396,109 +396,38 @@ def race_page(
         "SBs": "Season Bests",
         "top": "Top 10 Efforts",
     }
-    _cur_event_lbl = _fmt_event_long(state.event_type, state.event_value)
+    _cur_event_lbl = _fmt_event_long(event_type, event_value)
     _cur_include_lbl = _include_long.get(state.include_filter, state.include_filter)
 
     with hd.box(align="center", gap=3, padding=2, min_height="80vh"):
         with hd.box(align="center", gap=1, width="100%"):
-            with hd.h1():
-                with hd.hbox(gap=0.6, align="center", wrap="wrap"):
-                    hd.text(f"A Race Between {your(ctx)}")
+            with hd.box(gap=0.2, align="center"):
+                with hd.h1(font_weight="normal"):
+                    with hd.hbox(gap=0.2, align="center", wrap="wrap"):
+                        hd.text(f"A Race Between {your(ctx)}")
 
-                    # ── Include filter dropdown ─────────────────────────────────────
-                    with hd.scope("include_dd"):
-                        with hd.dropdown() as _inc_dd:
-                            _inc_btn = hd.button(
-                                _cur_include_lbl,
-                                caret=True,
-                                size="large",
-                                font_color="neutral-800",
-                                font_size=2,
-                                font_weight="bold",
-                                slot=_inc_dd.trigger,
-                            )
-                            if _inc_btn.clicked:
-                                _inc_dd.opened = not _inc_dd.opened
-                            with hd.box(
-                                gap=0.1,
-                                background_color="neutral-0",
-                                min_width=20,
-                            ):
-                                for val, lbl in _include_long.items():
-                                    with hd.scope(f"inc_{val}"):
-                                        _inc_item = hd.button(
-                                            lbl,
-                                            size="small",
-                                            variant="primary"
-                                            if state.include_filter == val
-                                            else "text",
-                                            width="100%",
-                                            border_radius="small",
-                                            font_size="medium",
-                                            font_color="neutral-0"
-                                            if state.include_filter == val
-                                            else "neutral-800",
-                                            label_style=hd.style(
-                                                padding_top=0.5, padding_bottom=0.5
-                                            ),
-                                            hover_background_color="neutral-100",
-                                        )
-                                        if _inc_item.clicked:
-                                            state.include_filter = val
-                                            _inc_dd.opened = False
+                        header_dropdown(
+                            state,
+                            key="include_dd",
+                            labels=_include_long,
+                            current_value=state.include_filter,
+                            field="include_filter",
+                        )
 
-                    hd.text("at")
+                        hd.text("at")
 
-                    # ── Event selector dropdown ─────────────────────────────────────
-                    with hd.scope("event_dd"):
-                        with hd.dropdown() as _ev_dd:
-                            _ev_btn = hd.button(
-                                _cur_event_lbl,
-                                caret=True,
-                                size="large",
-                                font_color="neutral-800",
-                                font_size=2,
-                                font_weight="bold",
-                                slot=_ev_dd.trigger,
-                            )
-                            if _ev_btn.clicked:
-                                _ev_dd.opened = not _ev_dd.opened
-                            with hd.box(
-                                gap=0.1,
-                                min_width=17,
-                                background_color="neutral-0",
-                            ):
-                                for etype, evalue in available_events:
-                                    count = event_counts.get((etype, evalue), 0)
-                                    row_lbl = (
-                                        f"{_fmt_event_long(etype, evalue)}  ({count})"
-                                    )
-                                    is_sel = (
-                                        state.event_type == etype
-                                        and state.event_value == evalue
-                                    )
-                                    with hd.scope(f"ev_{etype}_{evalue}"):
-                                        _ev_item = hd.button(
-                                            row_lbl,
-                                            size="small",
-                                            variant="primary" if is_sel else "text",
-                                            width="100%",
-                                            border_radius="small",
-                                            font_size="medium",
-                                            font_color="neutral-0"
-                                            if is_sel
-                                            else "neutral-800",
-                                            label_style=hd.style(
-                                                padding_top=0.5, padding_bottom=0.5
-                                            ),
-                                            hover_background_color="neutral-100",
-                                        )
-                                        if _ev_item.clicked:
-                                            state.event_type = etype
-                                            state.event_value = evalue
-                                            _ev_dd.opened = False
+                        header_dropdown(
+                            state,
+                            key="event_dd",
+                            labels={
+                                v: f"{_fmt_event_long(v[0], v[1])}"
+                                for v in available_events
+                            },
+                            current_value=state.event,
+                            field="event",
+                        )
 
-                    hd.text("!")
+                global_filter_ui(global_state, ctx)
 
             # ── Loading progress bar ──────────────────────────────────────────────────
             if is_loading:
@@ -534,8 +463,8 @@ def race_page(
             # ── Race canvas ───────────────────────────────────────────────────────────
             RaceChart(
                 races=races_data,
-                event_type=state.event_type,
-                event_value=state.event_value,
+                event_type=event_type,
+                event_value=event_value,
                 is_dark=is_dark,
             )
 
@@ -597,10 +526,10 @@ def race_page(
 
             # ── Results table ─────────────────────────────────────────────────────────
             if racing_workouts:
-                _results_table(racing_workouts, state.event_type, pb_id)
+                _results_table(racing_workouts, event_type, pb_id)
             elif not is_loading:
                 with hd.box(padding=3, align="center"):
                     hd.text(
-                        f"No {_fmt_event_long(state.event_type, state.event_value)} results in the selected scope.",
+                        f"No {_fmt_event_long(event_type, event_value)} results in the selected scope.",
                         font_color="neutral-500",
                     )

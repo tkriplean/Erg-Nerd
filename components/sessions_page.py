@@ -7,6 +7,7 @@ import hyperdiv as hd
 from components.sessions_chart_builder import sessions_chart
 from components.concept2_sync import sync_from_context
 from services.rowing_utils import get_season
+from components.shared_ui import global_filter_ui
 
 
 # ---------------------------------------------------------------------------
@@ -14,7 +15,7 @@ from services.rowing_utils import get_season
 # ---------------------------------------------------------------------------
 
 
-def sessions_page(ctx, excluded_seasons=(), machine="All") -> None:
+def sessions_page(ctx, global_state, excluded_seasons=(), machine="All") -> None:
     """Top-level component for the Sessions tab."""
 
     result = sync_from_context(ctx)
@@ -40,4 +41,4 @@ def sessions_page(ctx, excluded_seasons=(), machine="All") -> None:
 
     # ── Pace-vs-date scatter + windowed workouts table ────────────────────────
     with hd.box(padding=2, min_height="80vh", gap=2):
-        sessions_chart(all_workouts, ctx=ctx)
+        sessions_chart(all_workouts, global_state, ctx=ctx)

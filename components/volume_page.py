@@ -52,6 +52,7 @@ from components.profile_page import get_profile_from_context
 from components.volume_chart_builder import build_volume_chart_config, get_period_rows
 from components.volume_chart_plugin import VolumeChart
 from components.hyperdiv_extensions import grid_box
+from components.shared_ui import global_filter_ui
 
 # HR Z3 sub-zones: bin 2 = Z4 Threshold (80–90 %), bin 1 = Z5 Max (> 90 %)
 _HR_Z3A_BINS = frozenset({2})  # Threshold
@@ -306,6 +307,7 @@ def _hr_callout(all_workouts: list, profile: dict, is_owner: bool = True) -> tup
 def _volume_section(
     all_workouts: list,
     profile: dict,
+    global_state,
     machine: str = "All",
     is_owner: bool = True,
     ctx=None,
@@ -320,7 +322,9 @@ def _volume_section(
     machine_filter = None if machine == "All" else {machine}
 
     with hd.box(gap=1, align="center"):
-        hd.h1(f"How Does {your(ctx)} Work Stack Up?")
+        with hd.box(gap=0.2, align="center"):
+            hd.h1(f"How Does {your(ctx)} Work Stack Up?")
+            global_filter_ui(global_state, ctx)
 
         # ── HR callout (only in HR mode) — must come before chart to resolve max_hr ──
         max_hr, is_estimated = resolve_max_hr(profile, all_workouts)
@@ -419,7 +423,7 @@ def _volume_section(
 # ---------------------------------------------------------------------------
 
 
-def volume_page(ctx, excluded_seasons=(), machine="All") -> None:
+def volume_page(ctx, global_state, excluded_seasons=(), machine="All") -> None:
     """Top-level component for the Volume tab."""
 
     result = sync_from_context(ctx)
@@ -449,6 +453,7 @@ def volume_page(ctx, excluded_seasons=(), machine="All") -> None:
         _volume_section(
             all_workouts,
             profile,
+            global_state,
             machine=machine,
             is_owner=ctx.is_owner,
             ctx=ctx,

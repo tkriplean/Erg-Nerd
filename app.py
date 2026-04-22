@@ -38,7 +38,6 @@ from services.concept2 import (
     parse_callback_query,
     save_token,
 )
-from services.local_storage_compression import compress_workouts, decompress_workouts
 from components.intervals_page import intervals_page
 from components.profile_page import profile_page
 from components.power_curve_page import power_curve_page
@@ -309,107 +308,6 @@ def _app_footer() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _global_filter_ui(gstate, all_seasons: list, machine_types: list) -> None:
-    """
-    Render the global Season and Machine filter controls.
-    Called from the nav-bar row in _dashboard_view.
-
-    gstate.excluded_seasons  tuple[str]  — seasons hidden globally
-    gstate.machine           str         — "All" or a machine type string
-    all_seasons              list[str]   — sorted newest-first
-    machine_types            list[str]   — unique machine types across all workouts
-    """
-    # ── Season dropdown ────────────────────────────────────────────────────
-    if all_seasons:
-        _excl = set(gstate.excluded_seasons) & set(all_seasons)
-        if not _excl:
-            _seas_btn_lbl = "All Seasons"
-        elif len(all_seasons) - len(_excl) == 1:
-            _seas_btn_lbl = next(s for s in all_seasons if s not in _excl)
-        else:
-            _seas_btn_lbl = (
-                f"{len(all_seasons) - len(_excl)} of {len(all_seasons)} seasons"
-            )
-
-        with hd.scope("global_season_dd"):
-            with hd.dropdown() as _se_dd:
-                _se_btn = hd.button(
-                    _seas_btn_lbl,
-                    caret=True,
-                    size="small",
-                    variant="neutral",
-                    slot=_se_dd.trigger,
-                )
-                if _se_btn.clicked:
-                    _se_dd.opened = not _se_dd.opened
-
-                with hd.box(
-                    padding=1, gap=0.5, background_color="neutral-50", min_width=14
-                ):
-                    # Convenience shortcuts
-                    _shortcuts = [
-                        ("All Seasons", 0),
-                        ("Last Season", 1),
-                        ("Last 2 Seasons", 2),
-                        ("Last 5 Seasons", 5),
-                    ]
-                    with hd.box(gap=0.25, padding_bottom=0.5):
-                        for _lbl, _n in _shortcuts:
-                            if _n == 0 or len(all_seasons) >= _n:
-                                with hd.scope(f"shortcut_{_n}"):
-                                    _active = (_n == 0 and not _excl) or (
-                                        _n > 0
-                                        and len(_excl) == max(0, len(all_seasons) - _n)
-                                        and all(s in _excl for s in all_seasons[_n:])
-                                    )
-                                    if hd.button(
-                                        _lbl,
-                                        size="small",
-                                        variant="primary" if _active else "text",
-                                        width="100%",
-                                    ).clicked:
-                                        if _n == 0:
-                                            gstate.excluded_seasons = ()
-                                        else:
-                                            gstate.excluded_seasons = tuple(
-                                                sorted(all_seasons[_n:])
-                                            )
-                                        _se_dd.opened = False
-
-                    hd.divider()
-
-                    # Per-season checkboxes
-                    with hd.box(gap=0.25, padding_top=0.5):
-                        with hd.scope(str(gstate.excluded_seasons)):
-                            for season in all_seasons:
-                                with hd.scope(f"gs_{season}"):
-                                    _is_sel = season not in gstate.excluded_seasons
-                                    cb = hd.checkbox(season, checked=_is_sel)
-                                    if cb.changed:
-                                        _e = set(gstate.excluded_seasons)
-                                        if cb.checked:
-                                            _e.discard(season)
-                                        else:
-                                            _e.add(season)
-                                        gstate.excluded_seasons = tuple(sorted(_e))
-                                    if cb.checked != _is_sel:
-                                        cb.checked = _is_sel
-
-    # ── Machine selector (only when >1 type) ───────────────────────────────
-    if len(machine_types) > 1:
-        with hd.scope("global_machine_sel"):
-            from services.formatters import machine_label
-
-            machine_sel = hd.select(value=gstate.machine, size="small")
-            with machine_sel:
-                hd.option("All Machines", value="All")
-                for mt in machine_types:
-                    with hd.scope(mt):
-                        hd.option(machine_label(mt), value=mt)
-            if machine_sel.changed:
-                gstate.machine = machine_sel.value
-
-
 def _dashboard_view(ctx, app_state, path_suffix: str | None = None) -> None:
     _ScrollToTop()
 
@@ -442,43 +340,6 @@ def _dashboard_view(ctx, app_state, path_suffix: str | None = None) -> None:
             return f"/u/{ctx.user_id}{suffix}"
         return path
 
-    # ── Global filter state ────────────────────────────────────────────────
-    # Shared across all pages; lives here so it persists across tab switches.
-    gfilter = hd.state(
-        excluded_seasons=(),  # tuple[str] of "YYYY-YY" seasons to hide
-        machine="All",  # "All" or a machine-type string
-    )
-
-    # Determine the full season list and machine types from localStorage workouts
-    # so the filter UI can render even before any page has fetched data.
-    # We do a lightweight read here; concept2_sync() on the active page handles
-    # the full data load.
-    _ls_wkts_meta = hd.local_storage.get_item("workouts")
-    _all_seasons_for_filter: list = []
-    _machine_types_for_filter: list = []
-    if _ls_wkts_meta.done and _ls_wkts_meta.result:
-        try:
-            from services.rowing_utils import get_season
-
-            _wkts = decompress_workouts(_ls_wkts_meta.result)
-            _season_set: set = set()
-            _mtype_set: set = set()
-            for _w in _wkts.values():
-                _s = get_season(_w.get("date", ""))
-                if _s != "Unknown":
-                    _season_set.add(_s)
-                _mt = _w.get("type", "rower")
-                if _mt:
-                    _mtype_set.add(_mt)
-            _all_seasons_for_filter = sorted(_season_set, reverse=True)
-            # In synthetic mode the augmented machines (skierg, bike) are never
-            # written to localStorage, so inject them manually here.
-            if SYNTHETIC_MODE:
-                _mtype_set.update({"skierg", "bike"})
-            _machine_types_for_filter = sorted(_mtype_set)
-        except Exception:
-            pass
-
     # Derive active page from URL; unknown/session paths fall back to default.
     in_session = active_path.startswith("/session/")
     current_page = _ROUTES_PAGES.get(active_path, None if in_session else _DEFAULT_PAGE)
@@ -487,6 +348,13 @@ def _dashboard_view(ctx, app_state, path_suffix: str | None = None) -> None:
     # kept — strokes gracefully degrade when uncached. Profile is the only
     # route that 404s in public mode.
     _hidden_nav_pages = {"Profile"}
+
+    # ── Global state ────────────────────────────────────────────────
+    # Shared across all pages; lives here so it persists.
+    gstate = hd.state(
+        excluded_seasons=(),  # tuple[str] of "YYYY-YY" seasons to hide
+        machine="All",  # "All" or a machine-type string
+    )
 
     public_banner(ctx)
 
@@ -517,14 +385,6 @@ def _dashboard_view(ctx, app_state, path_suffix: str | None = None) -> None:
 
             with hd.box(grow=True):
                 pass
-
-            # ── Global filters (season + machine) ──────────────────────────
-            with hd.hbox(gap=1, align="center", padding_bottom=1):
-                _global_filter_ui(
-                    gfilter,
-                    _all_seasons_for_filter,
-                    _machine_types_for_filter,
-                )
 
             with hd.hbox(gap=1, align="center", padding_bottom=1):
                 if SYNTHETIC_MODE:
@@ -602,42 +462,48 @@ def _dashboard_view(ctx, app_state, path_suffix: str | None = None) -> None:
                 session_id = None
             if session_id is not None:
                 with hd.scope(session_id):
-                    workout_page(session_id, ctx)
+                    workout_page(session_id, ctx, global_state=gstate)
         elif current_page == "Volume":
             volume_page(
                 ctx,
-                excluded_seasons=gfilter.excluded_seasons,
-                machine=gfilter.machine,
+                global_state=gstate,
+                excluded_seasons=gstate.excluded_seasons,
+                machine=gstate.machine,
             )
         elif current_page == "Sessions":
             sessions_page(
                 ctx,
-                excluded_seasons=gfilter.excluded_seasons,
-                machine=gfilter.machine,
+                global_state=gstate,
+                excluded_seasons=gstate.excluded_seasons,
+                machine=gstate.machine,
             )
         elif current_page == "Intervals":
             intervals_page(
                 ctx,
-                excluded_seasons=gfilter.excluded_seasons,
-                machine=gfilter.machine,
+                global_state=gstate,
+                excluded_seasons=gstate.excluded_seasons,
+                machine=gstate.machine,
             )
         elif current_page == "Power Curve":
             power_curve_page(
                 ctx,
-                excluded_seasons=gfilter.excluded_seasons,
-                machine=gfilter.machine,
+                global_state=gstate,
+                excluded_seasons=gstate.excluded_seasons,
+                machine=gstate.machine,
             )
         elif current_page == "Race":
             race_page(
                 ctx,
-                excluded_seasons=gfilter.excluded_seasons,
-                machine=gfilter.machine,
+                global_state=gstate,
+                excluded_seasons=gstate.excluded_seasons,
+                machine=gstate.machine,
             )
         elif current_page == "Rank":
             rank_page(
                 ctx,
-                excluded_seasons=gfilter.excluded_seasons,
-                machine=gfilter.machine,
+                global_state=gstate,
+                excluded_seasons=gstate.excluded_seasons,
+                machine=gstate.machine,
             )
         else:
             # Profile page is owner-only; public-mode requests render 404.
