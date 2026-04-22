@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Offline sync of Concept2 public RowErg rankings into ``c2_rankings/``.
+Offline sync of Concept2 public RowErg rankings into ``.c2_rankings/``.
 
 This is a thin CLI wrapper over ``services.concept2_rankings.scrape_all``. The
 heavy lifting — URL building, HTTP, parsing, atomic writes, resumability —
@@ -20,7 +20,7 @@ Typical use::
     python bin/sync_c2_rankings.py
 
 Status output goes to stdout. Failures are appended to
-``c2_rankings/_failures.log``.
+``.c2_rankings/_failures.log``.
 """
 
 from __future__ import annotations
@@ -96,7 +96,7 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         set(EVENT_IDS_DIST.values()) | set(EVENT_IDS_TIME.values())
     )
     p = argparse.ArgumentParser(
-        description="Scrape Concept2 public rankings into c2_rankings/.",
+        description="Scrape Concept2 public rankings into .c2_rankings/.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(

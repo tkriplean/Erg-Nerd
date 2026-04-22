@@ -8,7 +8,7 @@ CLI in ``bin/sync_c2_rankings.py``.
 
 Cache layout — one JSON per fetched HTML page, plain directory at repo root:
 
-    c2_rankings/
+    .c2_rankings/
       2025_rower_2000_age=40-49_weight=H_gender=M_page_1.json
       2025_rower_2000_age=40-49_weight=H_gender=M_page_2.json
       ...
@@ -68,7 +68,7 @@ from services.rowing_utils import RANKED_DISTANCES, RANKED_TIMES
 # ---------------------------------------------------------------------------
 
 BASE_URL = "https://log.concept2.com/rankings"
-CACHE_DIR = Path("c2_rankings")
+CACHE_DIR = Path(".c2_rankings")
 FAILURES_LOG = CACHE_DIR / "_failures.log"
 SCHEMA_VERSION = 1
 
@@ -285,7 +285,7 @@ def build_url(cat: Category, page: int) -> str:
 def page_filename(cat: Category, page: int) -> Path:
     """Return the on-disk JSON path for a (category, page) tuple.
 
-    Filename mirrors the URL query string so ``ls c2_rankings/ | sort`` groups
+    Filename mirrors the URL query string so ``ls .c2_rankings/ | sort`` groups
     pages by category naturally.
     """
     bits = [
