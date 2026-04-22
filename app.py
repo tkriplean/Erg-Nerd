@@ -237,39 +237,36 @@ def _app_footer() -> None:
     year = datetime.date.today().year
 
     with hd.box(
-        padding=2, background_color="neutral-700", margin_top=2, align="center", gap=4
+        padding=2, background_color="neutral-700", margin_top=2, align="center", gap=2
     ):
         with hd.hbox(gap=2, align="start", justify="space-between", max_width="750px"):
-            with hd.box(gap=0.5, grow=True):
+            with hd.box(gap=1.5, grow=True):
                 ergnerd_animation(
                     width=15, theme="light" if hd.theme().is_dark else "dark"
                 )
 
-                hd.link(
-                    "Support this project ♥",
-                    href="",
-                    font_color="neutral-300",
-                    font_size="small",
-                    underline=False,
-                )
+                with hd.link(href="https://www.buymeacoffee.com/ergnerd") as bmc:
+                    hd.image(
+                        src="https://img.buymeacoffee.com/button-api/?text=Support Erg Nerd&emoji=☕&slug=ergnerd&button_colour=5F7FFF&font_colour=ffffff&font_family=Lato&outline_colour=000000&coffee_colour=FFDD00"
+                    )
 
-            with hd.box(
-                gap=0.5,
-                grow=True,
-                border_left="1px solid neutral-500",
-                margin_top=1,
-                padding_left=0.5,
-            ):
-                for page_name, path in _PAGES_ROUTES.items():
-                    with hd.scope(f"footer_{page_name}"):
-                        hd.link(
-                            page_name,
-                            href=path,
-                            target="_self",
-                            font_color="neutral-300",
-                            font_size="small",
-                            underline=False,
-                        )
+            # with hd.box(
+            #     gap=0.5,
+            #     grow=True,
+            #     border_left="1px solid neutral-500",
+            #     margin_top=1,
+            #     padding_left=0.5,
+            # ):
+            #     for page_name, path in _PAGES_ROUTES.items():
+            #         with hd.scope(f"footer_{page_name}"):
+            #             hd.link(
+            #                 page_name,
+            #                 href=path,
+            #                 target="_self",
+            #                 font_color="neutral-300",
+            #                 font_size="small",
+            #                 underline=False,
+            #             )
 
         with hd.box(gap=0.3, align="center"):
             with hd.hbox(align="center", gap=1):
@@ -420,6 +417,7 @@ def _dashboard_view(ctx, app_state, path_suffix: str | None = None) -> None:
     # ctx.display_name is pre-populated from the scrubbed public profile.
     user_task = hd.task() if not is_public else None
     if user_task is not None:
+
         def fetch_user():
             return ctx.client.get_user().get("data", {})
 
@@ -481,9 +479,7 @@ def _dashboard_view(ctx, app_state, path_suffix: str | None = None) -> None:
 
     # Derive active page from URL; unknown/session paths fall back to default.
     in_session = active_path.startswith("/session/")
-    current_page = _ROUTES_PAGES.get(
-        active_path, None if in_session else _DEFAULT_PAGE
-    )
+    current_page = _ROUTES_PAGES.get(active_path, None if in_session else _DEFAULT_PAGE)
 
     # Public mode: hide Profile tab (no public settings page) AND Race tab is
     # kept — strokes gracefully degrade when uncached. Profile is the only

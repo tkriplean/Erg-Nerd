@@ -516,7 +516,8 @@ def race_page(
                 with hd.hbox(
                     gap=0.5,
                     align="center",
-                    padding=(0.5, 1),
+                    justify="center",
+                    padding=1,
                     background_color="neutral-50",
                     border="1px solid neutral-200",
                     border_radius="medium",
@@ -525,8 +526,7 @@ def race_page(
                     hd.icon("info-circle", font_color="neutral-500")
                     hd.text(
                         f"{uncached_public_count} workout"
-                        f"{'s' if uncached_public_count != 1 else ''} not yet available "
-                        f"— appears after the owner views them.",
+                        f"{'s' if uncached_public_count != 1 else ''} stroke data not available.",
                         font_size="small",
                         font_color="neutral-600",
                     )

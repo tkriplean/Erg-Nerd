@@ -261,12 +261,6 @@ def profile_page(ctx=None) -> None:
 
     # ── Render form ──────────────────────────────────────────────────────────
     with hd.box(gap=1.5, padding=3):
-        hd.text(
-            "Used for RowingLevel predictions and heart-rate analysis.",
-            font_color="neutral-500",
-            font_size="small",
-        )
-
         with hd.box():
             # Gender — radio group; saves immediately (no keyboard focus to lose)
             hd.text("Gender", font_weight="semibold", font_size="small")

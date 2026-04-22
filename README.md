@@ -35,7 +35,7 @@ The app opens at **http://localhost:8888**. On first launch it will redirect you
 
 | Tab | What it shows |
 |---|---|
-| **Profile** | Your age, weight, gender, and max heart rate — used for RowingLevel predictions and HR zone analysis |
+| **Profile** | Your age, weight, gender, and max heart rate. Settings for switching to public profile. |
 | **Volume** | Weekly / monthly training volume broken down by pace zone and HR zone |
 | **Sessions** | Individual session explorer with HR, split, and stroke-rate overlays |
 | **Intervals** | 2D grid of interval work by duration × work:rest ratio, with zone intensity |

@@ -187,6 +187,7 @@ references/
 .concept2*
 .rowinglevel_cache.json
 workouts_example.json
+.public_profiles/
 
 .cache/
 .claude/
