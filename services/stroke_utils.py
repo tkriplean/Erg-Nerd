@@ -54,8 +54,18 @@ from services.rowing_utils import SEASON_PALETTE, compute_pace
 # ---------------------------------------------------------------------------
 
 _MONTH_ABBR_LONG = [
-    "Jan.", "Feb.", "Mar.", "Apr.", "May", "Jun.",
-    "Jul.", "Aug.", "Sep.", "Oct.", "Nov.", "Dec.",
+    "Jan.",
+    "Feb.",
+    "Mar.",
+    "Apr.",
+    "May",
+    "Jun.",
+    "Jul.",
+    "Aug.",
+    "Sep.",
+    "Oct.",
+    "Nov.",
+    "Dec.",
 ]
 
 
@@ -274,9 +284,7 @@ def season_color_hex(season: str, sorted_seasons: list[str]) -> str:
     s_frac = s / 100.0
     l_frac = l / 100.0
     r, g, b = colorsys.hls_to_rgb(h_frac, l_frac, s_frac)
-    return "#{:02x}{:02x}{:02x}".format(
-        round(r * 255), round(g * 255), round(b * 255)
-    )
+    return "#{:02x}{:02x}{:02x}".format(round(r * 255), round(g * 255), round(b * 255))
 
 
 # ---------------------------------------------------------------------------
@@ -293,14 +301,14 @@ WR_BOAT_ID = -999999
 def _wr_spm(duration_s: float) -> int:
     """Return a realistic average SPM for a world-class effort of given duration."""
     if duration_s < 120:
-        return 40       # sub-2-min sprint (100m, 500m)
+        return 40  # sub-2-min sprint (100m, 500m)
     if duration_s < 300:
-        return 36       # 2–5 min (1k, 2k)
+        return 36  # 2–5 min (1k, 2k)
     if duration_s < 900:
-        return 30       # 5–15 min (5k, 4-min piece)
+        return 30  # 5–15 min (5k, 4-min piece)
     if duration_s < 2400:
-        return 26       # 15–40 min (6k, 10k, 30-min)
-    return 22           # ultra-endurance (½ marathon, marathon, 60-min)
+        return 26  # 15–40 min (6k, 10k, 30-min)
+    return 22  # ultra-endurance (½ marathon, marathon, 60-min)
 
 
 def build_wr_boat(
@@ -318,7 +326,7 @@ def build_wr_boat(
     event_type    "dist" | "time"
     event_value   meters for dist events; tenths-of-sec for time events
     record_result For dist events: elapsed seconds (float).
-                  For time events: metres covered (float).
+                  For time events: meters covered (float).
     label         Lane label shown in the race canvas header.
     color         CSS hex color for the lane; defaults to gold.
 
@@ -328,11 +336,11 @@ def build_wr_boat(
     prepended to the races list.  id is WR_BOAT_ID; season is "WR".
     """
     if event_type == "dist":
-        finish_t = float(record_result)   # total elapsed seconds
-        finish_d = float(event_value)     # target distance in metres
+        finish_t = float(record_result)  # total elapsed seconds
+        finish_d = float(event_value)  # target distance in meters
     else:  # "time"
         finish_t = float(event_value) / 10.0  # event duration in seconds
-        finish_d = float(record_result)        # metres covered
+        finish_d = float(record_result)  # meters covered
 
     spm = _wr_spm(finish_t)
     stroke_interval_s = 60.0 / spm
@@ -367,7 +375,9 @@ def build_wr_boat(
 # ---------------------------------------------------------------------------
 
 
-def _ensure_finish_point(strokes: list[dict], finish_t: float, finish_d: float) -> list[dict]:
+def _ensure_finish_point(
+    strokes: list[dict], finish_t: float, finish_d: float
+) -> list[dict]:
     """
     Guarantee that the stroke list ends at exactly (finish_t, finish_d).
 
@@ -415,7 +425,7 @@ def build_races_data(
             "is_pb":            bool,
             "season":           "2025-26",
             "finish_time_s":    float | None,  # official finish time (dist events only)
-            "finish_dist_m":    float | None,  # official final metres (time events)
+            "finish_dist_m":    float | None,  # official final meters (time events)
             "avg_spm":          int,            # piece average stroke rate (0 if unknown)
             "has_real_strokes": bool,           # False → strokes are synthesised from splits
         },
@@ -432,6 +442,7 @@ def build_races_data(
     # Timed workouts (e.g. 30-min) always carry a non-zero distance (meters rowed),
     # so we MUST check against RANKED_DIST_SET rather than truthiness of distance.
     from services.rowing_utils import RANKED_DIST_SET
+
     first = workouts[0]
     is_time_event = first.get("distance") not in RANKED_DIST_SET
 
@@ -461,7 +472,7 @@ def build_races_data(
         # For distance events this guarantees every boat crosses the finish line at
         # exactly the right moment even when stroke data falls short.
         # For time events it ensures the final distance is the authoritative one —
-        # stroke data sometimes under-counts by a few metres.
+        # stroke data sometimes under-counts by a few meters.
         finish_time_s: Optional[float] = None
         finish_dist_m: Optional[float] = None
         raw_t = w.get("time")
@@ -496,9 +507,9 @@ def build_races_data(
                 "strokes": strokes,
                 "is_pb": wid == pb_workout_id,
                 "season": season,
-                "finish_time_s": finish_time_s,   # dist events: official finish time (s)
-                "finish_dist_m": finish_dist_m,   # time events: official final metres
-                "avg_spm": avg_spm,               # piece average stroke rate (SPM)
+                "finish_time_s": finish_time_s,  # dist events: official finish time (s)
+                "finish_dist_m": finish_dist_m,  # time events: official final meters
+                "avg_spm": avg_spm,  # piece average stroke rate (SPM)
                 "has_real_strokes": has_real_strokes,  # False → use avg_spm for cadence
             }
         )

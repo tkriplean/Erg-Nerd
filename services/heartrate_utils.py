@@ -23,7 +23,7 @@ Exported:
     hr_coverage(workouts)           → (int, int)  # (with_hr, total)
 
 Bin layout (matches pace zone index convention):
-    0  Rest          interval rest metres (grey)
+    0  Rest          interval rest meters (grey)
     1  Z5 Max        > 90 % HRmax         (red)
     2  Z4 Threshold  80–90 %              (orange)
     3  Z3 Tempo      70–80 %              (yellow-green)
@@ -221,20 +221,20 @@ def workout_hr_meters(workout: dict, max_hr: int) -> list[float]:
     Resolution priority:
 
     1. Per-split HR (workout.splits[].heart_rate.average):
-       Each split's metres are classified by that split's average HR.
-       A split without valid HR contributes its metres to bin 6 (No HR).
+       Each split's meters are classified by that split's average HR.
+       A split without valid HR contributes its meters to bin 6 (No HR).
 
     2. Per-interval HR (workout.intervals[].heart_rate.average):
-       Each work-interval's metres are classified by its own average HR.
+       Each work-interval's meters are classified by its own average HR.
        Explicit rest intervals (type == "rest") → bin 0 (Rest).
        Intervals without valid HR → bin 6 (No HR).
 
     3. Top-level HR (workout.heart_rate.average):
-       All work metres → one HR zone bin.
+       All work meters → one HR zone bin.
 
-    4. No HR anywhere → all metres to bin 6 (No HR).
+    4. No HR anywhere → all meters to bin 6 (No HR).
 
-    Interval rest metres always go to bin 0 (Rest) regardless of HR data.
+    Interval rest meters always go to bin 0 (Rest) regardless of HR data.
     """
     bins = _empty_bins()
     workout_data = workout.get("workout") or {}
@@ -275,7 +275,7 @@ def workout_hr_meters(workout: dict, max_hr: int) -> list[float]:
     # ── Case 3: top-level HR ─────────────────────────────────────────────────
     top_hr = _extract_hr(workout.get("heart_rate"))
     if top_hr and is_valid_hr(top_hr, max_hr):
-        # For interval workouts, put rest metres in bin 0 and work in HR zone.
+        # For interval workouts, put rest meters in bin 0 and work in HR zone.
         # For steady-state, total_dist is already work-only (no rest).
         rest_dist = 0.0
         if intervals:
@@ -295,7 +295,7 @@ def workout_hr_meters(workout: dict, max_hr: int) -> list[float]:
         return bins
 
     # ── Case 4: no HR data ───────────────────────────────────────────────────
-    # Keep interval rest in bin 0; work metres → No HR (bin 6).
+    # Keep interval rest in bin 0; work meters → No HR (bin 6).
     rest_dist = 0.0
     if intervals:
         rest_ivs = [iv for iv in intervals if (iv.get("type") or "").lower() == "rest"]

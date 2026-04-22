@@ -240,7 +240,7 @@ def build_volume_chart_config(
     if not datasets:
         return {}
 
-    # ── Colours driven by theme ──────────────────────────────────────────────
+    # ── colors driven by theme ──────────────────────────────────────────────
     grid_color = "rgba(180,180,180,0.2)" if is_dark else "rgba(80,80,80,0.15)"
     tick_color = "rgba(200,200,200,0.85)" if is_dark else "rgba(50,50,50,0.85)"
     title_color = "rgba(210,210,210,0.9)" if is_dark else "rgba(35,35,35,0.9)"
@@ -310,7 +310,7 @@ def _classify_distribution(
     """
     Classify a period's training distribution using precomputed zone percentages.
 
-    Expects z1/z2/z3 as 0–100 floats (percentage of work metres).
+    Expects z1/z2/z3 as 0–100 floats (percentage of work meters).
 
     Reference literature thresholds (generous for real-world data):
       Polarized     : Z1 ≥ 65 %, Z3 ≥ 15 %, Z3 > Z2
@@ -374,7 +374,7 @@ def get_period_rows(
     no_data_bins:
         frozenset of bin indices to exclude from the work denominator when computing
         zone percentages for the distribution classification.  Use frozenset({6}) in
-        HR mode so "No HR" metres don't dilute the classification fractions.
+        HR mode so "No HR" meters don't dilute the classification fractions.
 
     Each returned dict has:
         label        — human-readable period (e.g. "Jan 6", "Jan '25", "2025-26")
@@ -427,7 +427,7 @@ def get_period_rows(
         z3_m = sum(b[i] for i in _z3)
 
         # For classification: exclude no_data bins (e.g. "No HR") from denominator
-        # so the zone fractions reflect only classified metres.
+        # so the zone fractions reflect only classified meters.
         classified_work = sum(b[i] for i in range(1, len(b)) if i not in _no_data)
         denom = classified_work if classified_work >= 1 else 1.0
         z1_pct_f = z1_m / denom * 100.0
@@ -450,7 +450,7 @@ def get_period_rows(
             "z2_pct": _pct(z2_m, work),
             "z3_pct": _pct(z3_m, work),
             "distribution": dist,
-            # Raw numeric values for sort (metres, integers)
+            # Raw numeric values for sort (meters, integers)
             "total_raw": total,
             "rest_raw": rest,
             "z1_raw": z1_m,

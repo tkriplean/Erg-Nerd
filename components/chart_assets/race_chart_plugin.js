@@ -666,21 +666,21 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     const BASE_HW = BOAT_R;
     const BASE_HL = BASE_HW * 3.2;
     // TRACK_INNER_BASE: the distance the BASE hull centre travels (stern→bow span)
-    // Used to map "metres into race" → canvas X for split lines, consistent with
+    // Used to map "meters into race" → canvas X for split lines, consistent with
     // the per-boat position formula below.
     const TRACK_INNER_BASE = TRACK_W - 2 * BASE_HL;
 
     // ── Distance normalizer (how far "right edge" represents) ──
     const normDist = eventType === "dist" ? eventValue : maxDistForTimeEvent;
 
-    // ── Helper: metres → canvas X (BOW position of BASE hull) ──
+    // ── Helper: meters → canvas X (BOW position of BASE hull) ──
     // Consistent with the corrected per-boat boatCx formula:
     //   centre = TRACK_L + BASE_HL + frac * TRACK_INNER_BASE
     //   bow    = centre + BASE_HL = TRACK_L + 2*BASE_HL + frac * TRACK_INNER_BASE
-    // At metres=0       → TRACK_L + 2*BASE_HL  (bow starts 2 hull-lengths from track edge)
-    // At metres=normDist → TRACK_R              (bow exactly touches finish/right edge)
-    function distToX(metres) {
-      const frac = Math.min(1, metres / normDist);
+    // At meters=0       → TRACK_L + 2*BASE_HL  (bow starts 2 hull-lengths from track edge)
+    // At meters=normDist → TRACK_R              (bow exactly touches finish/right edge)
+    function distToX(meters) {
+      const frac = Math.min(1, meters / normDist);
       return TRACK_L + 2 * BASE_HL + frac * TRACK_INNER_BASE;
     }
 
@@ -758,15 +758,15 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     // ── Compute per-boat gap labels at each split ──
     // A label appears only after the boat's stern has fully cleared the split line
     // plus a few pixels of padding so it never overlaps the hull in motion.
-    // "Clearance metres" = hull full-length (2 × BASE_HL mapped back to metres) + 8px pad.
+    // "Clearance meters" = hull full-length (2 × BASE_HL mapped back to meters) + 8px pad.
     const splitPositions = [];
     const numSplitLines = Math.floor((normDist - 1) / splitInterval);
     for (let si = 0; si < numSplitLines; si++) {
-      splitPositions.push((si + 1) * splitInterval); // metres, not canvas X
+      splitPositions.push((si + 1) * splitInterval); // meters, not canvas X
     }
 
-    // metres that correspond to one hull-length + 8px padding on canvas
-    const clearanceMetres = (2 * BASE_HL + 8) / TRACK_INNER_BASE * normDist;
+    // meters that correspond to one hull-length + 8px padding on canvas
+    const clearancemeters = (2 * BASE_HL + 8) / TRACK_INNER_BASE * normDist;
 
     const leaderTimes = splitPositions.map(sd => {
       let best = Infinity;
@@ -783,7 +783,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       for (let si = 0; si < splitPositions.length; si++) {
         const sd = splitPositions[si];
         // Show only after stern has cleared: boat's bow must be > sd + hull + padding
-        if (boatDist < sd + clearanceMetres) continue;
+        if (boatDist < sd + clearancemeters) continue;
         const leaderT = leaderTimes[si];
         if (leaderT === null) continue;
         const boatT = timeToReachDist(races[i], sd);
@@ -920,13 +920,13 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
 
     // ── Gap-to-leader labels at split lines ──
     // Render after all boats so they sit on top of the lanes.
-    // Leader shows no label (gap = 0); others show "+X.Xs" in their boat colour.
+    // Leader shows no label (gap = 0); others show "+X.Xs" in their boat color.
     for (const { boatIdx, splitIdx, gapSec } of gapLabels) {
       if (gapSec <= 0.05) continue; // leader — skip
       const boat = races[boatIdx];
       const laneY = HEADER_H + boatIdx * LANE_H;
       const midY  = laneY + LANE_H / 2;
-      const sx    = distToX(splitPositions[splitIdx]); // metres → canvas X
+      const sx    = distToX(splitPositions[splitIdx]); // meters → canvas X
       const label = "+" + gapSec.toFixed(1) + "s";
 
       // Tiny pill background so label is readable over the split line

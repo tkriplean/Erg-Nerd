@@ -332,7 +332,7 @@ value-object construction.
 -   `_included_seasons` is derived as `[s for s in all_seasons if s not in
     excluded_seasons]`.
 
--   Seasons drive both the simulation timeline bounds and the colour palette for
+-   Seasons drive both the simulation timeline bounds and the color palette for
     scatter dots.
 
 5. Simulation / Timeline
@@ -444,7 +444,7 @@ The animation layer has two halves:
 | `static_datasets`                        | Time-invariant datasets (WC scatter +    |
 |                                          | prediction) baked once                   |
 +------------------------------------------+------------------------------------------+
-| `season_meta`                            | Label, colour, border colour per season  |
+| `season_meta`                            | Label, color, border color per season  |
 +------------------------------------------+------------------------------------------+
 | `total_days`                             | Timeline length                          |
 +------------------------------------------+------------------------------------------+
@@ -454,7 +454,7 @@ The animation layer has two halves:
 | `pb_color` / `is_dark` / `show_watts` /  | Display metadata consumed by JS dataset  |
 | `x_mode`                                 | builders                                 |
 +------------------------------------------+------------------------------------------+
-| `grid_color`                             | Gridline colour                          |
+| `grid_color`                             | Gridline color                          |
 |                                          | (`rgba(180,180,180,0.35)`). Kept         |
 |                                          | identical to the static chart's axis     |
 |                                          | grid so toggling between `applyConfig`   |
@@ -858,10 +858,10 @@ not into `bundle_data`).
 -------------------------
 
 Per CLAUDE.md, Python is the single source of truth for constants that both
-sides need (colours, bounds, labels). Recent additions:
+sides need (colors, bounds, labels). Recent additions:
 
 -   `grid_color` — passed through `bundle_data` so `buildSimOptions` in JS uses
-    the exact same gridline colour as the static `applyConfig` path. Without
+    the exact same gridline color as the static `applyConfig` path. Without
     this, the sim-mode axes fell back to Chart.js defaults and gridlines visibly
     snapped on/off when the chart transitioned between the two paths.
 

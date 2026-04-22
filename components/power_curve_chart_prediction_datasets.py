@@ -51,7 +51,7 @@ from services.critical_power_model import (
 
 
 # ---------------------------------------------------------------------------
-# Season colour helpers
+# Season color helpers
 # ---------------------------------------------------------------------------
 
 
@@ -146,7 +146,7 @@ def wr_pred_datasets(
 ) -> list:
     """
     Build WC prediction datasets using the currently selected predictor applied
-    to WC records (lb/lba/cp_params).  WC predictions use the same green colour
+    to WC records (lb/lba/cp_params).  WC predictions use the same green color
     and the same function as the user's prediction, making them the WC 'synthetic
     user'.
 

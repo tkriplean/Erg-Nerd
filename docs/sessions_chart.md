@@ -148,18 +148,18 @@ This keeps circles area-proportional to distance while keeping them visually
 compact. Small sessions (e.g., a 2k at ~16px radius) and marathon rows (large
 radius) span a reasonable range.
 
-### Colour assignment
+### color assignment
 
-Colour is **deterministic and session-stable**: `hashlib.md5(str(id)).hexdigest()`
-mod 12 selects a palette entry.  The same session always gets the same colour
+color is **deterministic and session-stable**: `hashlib.md5(str(id)).hexdigest()`
+mod 12 selects a palette entry.  The same session always gets the same color
 regardless of filter state.
 
 The 12-entry palette uses hand-tuned HSL triples balanced for readability on
 both light and dark themes.
 
-### Colour variants
+### color variants
 
-Each point dict carries multiple pre-computed colour strings so the JS layer
+Each point dict carries multiple pre-computed color strings so the JS layer
 never recomputes opacity maths:
 
 | Field | Opacity | Role |
@@ -168,7 +168,7 @@ never recomputes opacity maths:
 | `c33` | 0.33 | Regular dot fill |
 | `c25` | 0.25 | Hatch tile background (work area tint) |
 | `c60` | 1.00* | Interval circle border (rest annulus ring) |
-| `cHatch` | 0.60 | Hatch stripe colour (independent from border) |
+| `cHatch` | 0.60 | Hatch stripe color (independent from border) |
 | `c70` | 0.70 | Overview in-window dot fill |
 
 \* `c60` was originally 0.60 opacity but a linter pass changed it to 1.00.
@@ -182,7 +182,7 @@ border opacities can be tuned independently in future.
 ### Regular (non-interval) sessions
 
 - Filled circle, radius = `r`.
-- Fill: `c33` (33% opacity of the session colour).
+- Fill: `c33` (33% opacity of the session color).
 - Border: `c` (full opacity, 1px).
 
 ### Season-best halos
@@ -506,7 +506,7 @@ the totals footer.
     "c33":      str,        # HSLA, 0.33 opacity (regular dot fill)
     "c25":      str,        # HSLA, 0.25 opacity (hatch tile background)
     "c60":      str,        # HSLA, 1.00 opacity (interval circle border)
-    "cHatch":   str,        # HSLA, 0.60 opacity (hatch stripe colour)
+    "cHatch":   str,        # HSLA, 0.60 opacity (hatch stripe color)
     "c70":      str,        # HSLA, 0.70 opacity (overview in-window dots)
     "ivl":      bool,       # is interval workout
     "sb":       bool,       # is season best

@@ -33,7 +33,7 @@ Props (Python → JS):
     overlay_bests        — "PBs" | "SBs" | "None" — which connecting best-lines to draw
     selected_dists       — list[int] of enabled ranked distances (meters)
     selected_times       — list[int] of enabled ranked times (tenths of seconds)
-    is_dark              — whether the UI is in dark mode (affects PB/label colours)
+    is_dark              — whether the UI is in dark mode (affects PB/label colors)
     show_watts           — True → Y-axis in watts; False → pace (sec/500m)
     x_mode               — "distance" (meters, default) or "duration" (seconds)
     sim_bundle           — precomputed animation bundle dict (None until task completes)
@@ -77,7 +77,7 @@ class PowerCurveChart(hd.Plugin):
     # + best-line datasets from this using the visibility rules below.
     workouts = hd.Prop(hd.Any, [])
 
-    # Per-season colour metadata; index-aligned with workout.season_idx.
+    # Per-season color metadata; index-aligned with workout.season_idx.
     season_meta = hd.Prop(hd.Any, [])
 
     # Row-filter for scatter visibility: "All" | "PBs" | "SBs".
@@ -91,7 +91,7 @@ class PowerCurveChart(hd.Plugin):
     selected_dists = hd.Prop(hd.Any, [])
     selected_times = hd.Prop(hd.Any, [])
 
-    # Dark-mode flag; affects PB border and label colour defaults.
+    # Dark-mode flag; affects PB border and label color defaults.
     is_dark = hd.Prop(hd.Bool, False)
 
     # Controls Y-axis formatting: True = watts, False = pace (sec/500m).

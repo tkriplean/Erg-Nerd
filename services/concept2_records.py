@@ -23,7 +23,7 @@ Public API
   records_to_lbest(records)
       → (lb, lba) dicts compatible with loglog_fit(), _loglog_dataset(), etc.
         lb  {(etype, evalue): pace_sec_per_500m}
-        lba {(etype, evalue): anchor_distance_metres}
+        lba {(etype, evalue): anchor_distance_meters}
 
   fetch_wr_data(gender_api, age, weight_kg)
       → dict{"records", "cp_params", "lb", "lba", "rl_predictions"} or None
@@ -386,8 +386,8 @@ def records_to_lbest(records: dict) -> tuple[dict, dict]:
          values: pace in sec/500m
 
     lba keys: same tuples
-         values: anchor distance in metres (the canonical event distance for
-                 distance events, or the metres-covered for time events)
+         values: anchor distance in meters (the canonical event distance for
+                 distance events, or the meters-covered for time events)
     """
     lb: dict = {}
     lba: dict = {}
@@ -402,7 +402,7 @@ def records_to_lbest(records: dict) -> tuple[dict, dict]:
             lba[(etype, evalue)] = dist_m
         elif etype == "time":
             tenths = evalue
-            dist_m = value  # value = metres covered in this duration
+            dist_m = value  # value = meters covered in this duration
             duration_s = tenths / 10.0
             if duration_s <= 0 or dist_m <= 0:
                 continue

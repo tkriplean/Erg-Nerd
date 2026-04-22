@@ -270,7 +270,7 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
     // Clone datasets and attach segment callbacks to the *primary* pace
     // and SPM series.  Compare-overlay datasets are flagged isCompare so
     // we leave their borderColor/borderWidth untouched — each compared
-    // workout keeps its own distinct colour.
+    // workout keeps its own distinct color.
     const datasets = (cfg.datasets || []).map(ds => {
       const d = Object.assign({}, ds);
       if (d.isCompare) return d;

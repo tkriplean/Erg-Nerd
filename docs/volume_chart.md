@@ -137,9 +137,9 @@ The thresholds are deliberately generous (65 % Z1 rather than 80 %) to accommoda
 | Z1 Easy      | Easy aerobic meters + % of work                  |
 | Z2 Threshold | Threshold meters + % of work                     |
 | Z3 Hard      | High-intensity meters + % of work                |
-| Distribution | Classification label with colour badge           |
+| Distribution | Classification label with color badge           |
 
-Distribution badge colours:
+Distribution badge colors:
 - 🔵 **Polarized** (blue)
 - 🟢 **Pyramidal** (green)
 - 🟠 **Threshold** (orange)
@@ -195,9 +195,9 @@ Toggle the **Pace / HR** radio buttons in the controls row. The mode is stored i
 
 ### Zone Definitions (% of HRmax)
 
-| Bin | Name          | HRmax %      | Colour         |
+| Bin | Name          | HRmax %      | color         |
 |-----|---------------|--------------|----------------|
-| 0   | Rest          | (rest metres)| Grey           |
+| 0   | Rest          | (rest meters)| Grey           |
 | 1   | Z5 Max        | > 90 %       | Red            |
 | 2   | Z4 Threshold  | 80–90 %      | Orange         |
 | 3   | Z3 Tempo      | 70–80 %      | Yellow/green   |
@@ -211,12 +211,12 @@ Draw order (bottom → top): `[6, 5, 4, 3, 2, 1, 0]` — No HR at the visual bot
 
 For each workout, bin assignment uses the highest-resolution HR data available:
 
-1. **Per-split HR** (`workout.splits[].heart_rate.average`) — each split's metres are classified by its own average HR. Splits without valid HR → bin 6 (No HR).
+1. **Per-split HR** (`workout.splits[].heart_rate.average`) — each split's meters are classified by its own average HR. Splits without valid HR → bin 6 (No HR).
 2. **Per-interval HR** (`workout.intervals[].heart_rate.average`) — each work interval classified by its HR; explicit rest intervals (`type == "rest"`) → bin 0 (Rest). Intervals without valid HR → bin 6.
-3. **Top-level HR** (`workout.heart_rate.average`) — all work metres go into one HR zone bin.
-4. **No HR anywhere** → all metres → bin 6 (No HR).
+3. **Top-level HR** (`workout.heart_rate.average`) — all work meters go into one HR zone bin.
+4. **No HR anywhere** → all meters → bin 6 (No HR).
 
-Interval rest metres always go to bin 0 regardless of HR data.
+Interval rest meters always go to bin 0 regardless of HR data.
 
 ### Max HR
 
@@ -254,7 +254,7 @@ HR mode uses a 5-zone model exposed as 4 data columns (Z3 is split into two):
 | Threshold (80–90%) | bin 2 | Z4 Threshold |
 | Max (90%+) | bin 1 | Z5 Max |
 
-A **Distribution** column is included. Classification uses the same thresholds as pace mode (Polarized, Pyramidal, etc.) but the percentages are computed over HR-classified metres only — the "No HR" bin (bin 6) is excluded from the denominator so that unmonitored sessions don't dilute zone fractions. Periods with fewer than 500 HR-classified metres receive "—".
+A **Distribution** column is included. Classification uses the same thresholds as pace mode (Polarized, Pyramidal, etc.) but the percentages are computed over HR-classified meters only — the "No HR" bin (bin 6) is excluded from the denominator so that unmonitored sessions don't dilute zone fractions. Periods with fewer than 500 HR-classified meters receive "—".
 
 ---
 

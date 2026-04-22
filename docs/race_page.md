@@ -54,7 +54,7 @@ Include filter options and their state values:
 | Name | Type | Description |
 |---|---|---|
 | `event_type` | `str` | `"dist"` or `"time"` |
-| `event_value` | `int` | metres (dist events) or tenths-of-second (time events) |
+| `event_value` | `int` | meters (dist events) or tenths-of-second (time events) |
 | `include_filter` | `str` | `"All"` / `"SBs"` — default `"All"` |
 | `sort_mode` | `str` | `"date"` (newest first) or `"result"` (fastest first) |
 | `show_wr_boat` | `bool` | Whether the age-group WR ghost boat is enabled |
@@ -131,8 +131,8 @@ Python props passed to JS:
 |---|---|---|
 | `races` | `list` | Boat dicts from `stroke_utils.build_races_data()` |
 | `event_type` | `str` | `"dist"` or `"time"` |
-| `event_value` | `int` | metres or tenths-of-second |
-| `is_dark` | `bool` | Dark mode flag for colour scheme |
+| `event_value` | `int` | meters or tenths-of-second |
+| `is_dark` | `bool` | Dark mode flag for color scheme |
 
 JS writes back `change_id` and `current_time_ms` on user seek (not used by Python currently).
 
@@ -142,12 +142,12 @@ JS writes back `change_id` and `current_time_ms` on user seek (not used by Pytho
 |---|---|---|
 | `id` | `int` | Workout ID |
 | `label` | `str` | "Jan. 26th, 2019" |
-| `color` | `str` | CSS hex colour (season-derived) |
-| `strokes` | `list` | `[{t: secs, d: metres}]` sorted by t |
+| `color` | `str` | CSS hex color (season-derived) |
+| `strokes` | `list` | `[{t: secs, d: meters}]` sorted by t |
 | `is_pb` | `bool` | True for the all-time best workout |
 | `season` | `str` | e.g. `"2025-26"` |
 | `finish_time_s` | `float\|None` | Official finish time (dist events) |
-| `finish_dist_m` | `float\|None` | Official final metres (time events) |
+| `finish_dist_m` | `float\|None` | Official final meters (time events) |
 | `avg_spm` | `int` | Piece average stroke rate (0 if unknown) |
 | `has_real_strokes` | `bool` | False → strokes synthesised from splits |
 
@@ -172,7 +172,7 @@ TRACK_INNER = TRACK_W − 2 × hullHL
 boatCx      = TRACK_L + hullHL + (dist / normDist) × TRACK_INNER
 ```
 
-For **distance events**, `normDist = event_value` (metres).  
+For **distance events**, `normDist = event_value` (meters).  
 For **time events**, `normDist = maxDistForTimeEvent` — the furthest official
 `finish_dist_m` across all boats, computed once in `rebuildMaxTime()`.
 

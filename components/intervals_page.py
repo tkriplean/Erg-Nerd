@@ -23,7 +23,7 @@ Button variant encodes average Z3 intensity of sessions in that cell:
     neutral  → mostly aerobic (avg Z3 < 25 %)
     warning  → moderate (25–50 % Z3)
     danger   → hard sessions (≥ 50 % Z3)
-    primary  → selected (overrides intensity colour)
+    primary  → selected (overrides intensity color)
 
 Empty cells show the stimulus label muted — a training coverage map.
 Multi-cell selection = OR union. The pace-zone legend below the grid acts as
@@ -43,7 +43,7 @@ Columns: Date · Reps · Structure (rep-stripped) · Stimulus · Zones bar
          · Work dist · Avg Split · Time · SPM · HR · ↗
 
 Pace-zone filter (legend below grid): conjunctive AND across selected bins.
-A workout appears only when it has > 0 metres in every selected pace zone.
+A workout appears only when it has > 0 meters in every selected pace zone.
 
 Structure filter: clicking any Structure cell in the table sets a filter
 restricting the table to workouts with that same structure key.  Clicking
@@ -80,7 +80,7 @@ from components.workout_table import WorkoutTable, ColumnDef, COL_LINK
 
 
 # ---------------------------------------------------------------------------
-# Colour helpers
+# color helpers
 # ---------------------------------------------------------------------------
 
 
@@ -325,9 +325,9 @@ def _enrich_workouts(workouts: list[dict], thresholds) -> list[dict]:
     Filter to interval workout types (excluding single-rep sessions) and
     attach computed fields:
 
-      _bin_meters    list[float]    Per-bin metre counts (index 0 = Rest)
+      _bin_meters    list[float]    Per-bin meter counts (index 0 = Rest)
       _bar_uri       str            Data-URI SVG stacked pace-zone bar
-      _z3            float          Fraction of work metres in Z3 (bins 1–3)
+      _z3            float          Fraction of work meters in Z3 (bins 1–3)
       _structure_key str            Rep-stripped structure label, e.g. "500m / 2'r"
       _reps          int            Number of work intervals
       _work_pace     float | None   Avg work pace (tenths/500m)
@@ -381,7 +381,7 @@ def _bin_passes(bm: list, bin_idx: int) -> bool:
     Return True if a workout's bin-meter vector passes the threshold for
     the given bin index to count as an active zone in that workout.
 
-    Thresholds (fraction of total work metres, bins 1–6):
+    Thresholds (fraction of total work meters, bins 1–6):
       1 Fast        ≥ 5%  of work
       2 2k          ≥ 10% of work
       3 5k          ≥ 15% of work
@@ -424,12 +424,12 @@ def _filter_by_bins(workouts: list[dict], active_bins: set[int]) -> list[dict]:
 def _zones_tooltip(bm: list) -> str:
     """
     Build a short breakdown string for the zones bar tooltip.
-    Shows each bin's percentage of total work metres; omits bins at 0%.
+    Shows each bin's percentage of total work meters; omits bins at 0%.
     E.g. "Fast 8%  2k 15%  Threshold 22%  Fast Aero 55%"
     """
     work_total = sum(bm[1:])
     if not work_total:
-        return "No work metres recorded"
+        return "No work meters recorded"
     parts = []
     for i, name in enumerate(BIN_NAMES[1:], start=1):
         pct = bm[i] / work_total
@@ -457,7 +457,7 @@ def _cell_variant(avg_z3: float) -> str:
     """
     Return a Shoelace button variant based on Z3 intensity fraction.
     Selection state is communicated via outline=True/False rather than
-    a colour change, so the border always reflects intensity.
+    a color change, so the border always reflects intensity.
     """
     if avg_z3 >= 0.50:
         return "danger"
@@ -472,12 +472,12 @@ def _zone_filter_legend(state) -> None:
 
     Each pace zone (Fast … Slow Aerobic) can be toggled on/off.  With one or
     more zones active the table shows only workouts that have at least some
-    metres in EVERY selected zone simultaneously.
+    meters in EVERY selected zone simultaneously.
 
     Thresholds (see _bin_passes): Fast ≥5%, 2k ≥10%, 5k ≥15%, Threshold ≥25%,
     Fast Aero (fast+slow)≥50%, Slow Aero slow>30% AND combined>50%.
 
-    Active buttons fill with the zone's own colour (via base_style override on
+    Active buttons fill with the zone's own color (via base_style override on
     ::part(base)); inactive buttons show a subtle outline with the swatch inside.
     Active state in state.active_bins (tuple[int]).
     """
@@ -495,7 +495,7 @@ def _zone_filter_legend(state) -> None:
                 is_active = i in active_bins
 
                 if is_active:
-                    # Filled button using the zone colour as background.
+                    # Filled button using the zone color as background.
                     with hd.button(
                         size="small",
                         padding=(0.2, 0.6, 0.2, 0.6),

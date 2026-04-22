@@ -41,7 +41,7 @@ from services.rowing_utils import (
 
 
 # ---------------------------------------------------------------------------
-# Internal colour helper (mirrors the one in simulation.py)
+# Internal color helper (mirrors the one in simulation.py)
 # ---------------------------------------------------------------------------
 
 
@@ -105,7 +105,7 @@ def generate_mp4(
     sorted_seasons = sorted(all_seasons)
     season_idx = {s: i for i, s in enumerate(sorted_seasons)}
 
-    # Colours
+    # colors
     bg = "#1c1c2e" if is_dark else "#ffffff"
     ax_bg = "#12122a" if is_dark else "#f8f9fa"
     fg = "#eeeeee" if is_dark else "#222222"

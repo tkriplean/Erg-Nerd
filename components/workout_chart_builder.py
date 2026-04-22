@@ -229,7 +229,7 @@ def _build_bands(
 
     When `custom_splits` is provided for a non-interval workout, bands are
     derived by interpolating the stroke stream at each cumulative boundary.
-    For distance-unit splits (metres), boundaries map to elapsed time via
+    For distance-unit splits (meters), boundaries map to elapsed time via
     `interp_time`.  For time-unit splits (seconds), boundaries are the
     cumulative time values themselves.
     """
@@ -420,9 +420,7 @@ def _build_stacked_config(
 # ---------------------------------------------------------------------------
 
 
-def _points_from_strokes(
-    strokes: list, *, show_watts: bool
-) -> tuple:
+def _points_from_strokes(strokes: list, *, show_watts: bool) -> tuple:
     """Convert already-stitched strokes into (pace_pts, spm_pts, hr_pts, has_hr).
 
     Pace points carry watts when `show_watts` is True; otherwise pace in
@@ -500,14 +498,14 @@ def build_stroke_chart_config(
 
     show_watts = metric == "watts"
 
-    # ── Series colours ───────────────────────────────────────────────────────
+    # ── Series colors ───────────────────────────────────────────────────────
     # Passed through the config dict so JS reads them in one place — no
     # hardcoded literals in JS segment callbacks.
-    pace_color = "#60a5fa"              # light blue  (pace/watts, thicker)
-    spm_color  = "#1e40af"             # dark blue   (stroke rate)
-    hr_color   = "#ef4444"             # red         (heart rate)
-    pace_faded_color = "rgba(96,165,250,0.25)"   # pace at rest / onset
-    spm_faded_color  = "rgba(30,64,175,0.0)"     # spm at rest (invisible)
+    pace_color = "#60a5fa"  # light blue  (pace/watts, thicker)
+    spm_color = "#1e40af"  # dark blue   (stroke rate)
+    hr_color = "#ef4444"  # red         (heart rate)
+    pace_faded_color = "rgba(96,165,250,0.25)"  # pace at rest / onset
+    spm_faded_color = "rgba(30,64,175,0.0)"  # spm at rest (invisible)
 
     # ── Build point arrays ───────────────────────────────────────────────────
 
@@ -648,13 +646,21 @@ def build_stroke_chart_config(
 
     if wtype in INTERVAL_WORKOUT_TYPES and bands:
         work_ranges = [(b["xMin"], b["xMax"]) for b in bands if b.get("work")]
-        y_pace = [p["y"] for p in pace_pts if any(lo <= p["x"] <= hi for lo, hi in work_ranges)]
-        y_spm  = [p["y"] for p in spm_pts  if any(lo <= p["x"] <= hi for lo, hi in work_ranges)]
-        y_hr   = [p["y"] for p in hr_pts   if any(lo <= p["x"] <= hi for lo, hi in work_ranges)]
+        y_pace = [
+            p["y"]
+            for p in pace_pts
+            if any(lo <= p["x"] <= hi for lo, hi in work_ranges)
+        ]
+        y_spm = [
+            p["y"] for p in spm_pts if any(lo <= p["x"] <= hi for lo, hi in work_ranges)
+        ]
+        y_hr = [
+            p["y"] for p in hr_pts if any(lo <= p["x"] <= hi for lo, hi in work_ranges)
+        ]
     else:
         y_pace = [p["y"] for p in pace_pts]
-        y_spm  = [p["y"] for p in spm_pts]
-        y_hr   = [p["y"] for p in hr_pts]
+        y_spm = [p["y"] for p in spm_pts]
+        y_hr = [p["y"] for p in hr_pts]
 
     # Extend y ranges so compared-workout lines aren't clipped.
     if has_compares:
@@ -669,11 +675,15 @@ def build_stroke_chart_config(
     )
     spm_y_min, spm_y_max = _pad(
         *((min(y_spm), max(y_spm)) if y_spm else (None, None)),
-        min_pad=2, lo_floor=0, round_to_int=True,
+        min_pad=2,
+        lo_floor=0,
+        round_to_int=True,
     )
     hr_y_min, hr_y_max = _pad(
         *((min(y_hr), max(y_hr)) if y_hr else (None, None)),
-        min_pad=5, lo_floor=40, round_to_int=True,
+        min_pad=5,
+        lo_floor=40,
+        round_to_int=True,
     )
 
     # ── Stacked mode ─────────────────────────────────────────────────────────
@@ -715,9 +725,7 @@ def build_stroke_chart_config(
                 x_max = round(session_time_s, 2)
         # With compares, expand x-axis to cover the longest compared workout.
         if has_compares:
-            compare_max = max(
-                (cs.get("total_time_s") or 0) for cs in compare_series
-            )
+            compare_max = max((cs.get("total_time_s") or 0) for cs in compare_series)
             if compare_max > 0:
                 x_max = round(max(x_max or 0, compare_max), 2)
 

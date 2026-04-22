@@ -1059,7 +1059,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
   }
 
   // -----------------------------------------------------------------------
-  // Colour manipulation helper
+  // color manipulation helper
   // -----------------------------------------------------------------------
 
   /**
@@ -1276,7 +1276,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
   //   when show_components is on).
   // -----------------------------------------------------------------------
 
-  // Colours derived in Python are warm amber; mirror here so JS can render
+  // colors derived in Python are warm amber; mirror here so JS can render
   // without a round-trip.  Single source of truth lives in chart_config.py's
   // pred_color — if that changes, update here too.
   function predColor(isDark) {
@@ -1738,8 +1738,8 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     const logY    = bundle.log_y === true;
     // Do NOT set reverse — let Chart.js default to false, matching the static chart.
 
-    // Gridline colour — sourced from the bundle so it matches the static
-    // chart's axis grid (Python is the single source of truth for colours).
+    // Gridline color — sourced from the bundle so it matches the static
+    // chart's axis grid (Python is the single source of truth for colors).
     const gridColor = bundle.grid_color;
 
     const xScaleOpts = {

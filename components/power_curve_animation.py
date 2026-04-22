@@ -694,7 +694,7 @@ def build_keyframes(
         "show_components": show_components,
         "rl_predictions": rl_predictions,
         # Gridline color.  Python is the single source of truth for this
-        # colour (CLAUDE.md) — JS reads it from the bundle.
+        # color (CLAUDE.md) — JS reads it from the bundle.
         "grid_color": "rgba(180,180,180,0.35)",
     }
 

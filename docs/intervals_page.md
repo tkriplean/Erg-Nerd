@@ -131,7 +131,7 @@ State is in `state.active_bins` (tuple of bin indices 1–6).
 
 ### Filter Thresholds (`_bin_passes`)
 
-Selecting a zone does not merely require any metres in that zone. Each zone has a meaningful minimum fraction of total work metres:
+Selecting a zone does not merely require any meters in that zone. Each zone has a meaningful minimum fraction of total work meters:
 
 | Zone | Passes when |
 |---|---|
@@ -159,7 +159,7 @@ Custom row renderer (not `hd.data_table`, which cannot host SVG cells). All colu
 | Structure | `r["_structure_key"]` | Rep-stripped (e.g. `"500m / 2'r"` not `"6 × 500m / 2'r"`) |
 | Stimulus | `r["_stimulus"]` | Grid cell label, italic |
 | Zones | `r["_bar_uri"]` | SVG stacked pace-zone bar; tooltip shows full breakdown (e.g. `"Fast 8%  2k 15%  Threshold 22%  Fast Aero 55%"`) |
-| Work | `r["distance"]` | Work-only metres (C2 API excludes rest from `distance` on interval workouts) |
+| Work | `r["distance"]` | Work-only meters (C2 API excludes rest from `distance` on interval workouts) |
 | Avg Split | `r["_work_pace"]` | `r["time"] * 500 / r["distance"]`; work-only (C2 API also excludes rest from `time`) |
 | Time | `r["time_formatted"]` | Work-only time, pre-formatted by C2 API |
 | SPM | `r["_work_spm"]` | Work-weighted average; top-level `stroke_rate` is not used (it averages rest periods where SPM = 0) |

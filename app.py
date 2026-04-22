@@ -247,7 +247,7 @@ def _app_footer() -> None:
 
                 with hd.link(href="https://www.buymeacoffee.com/ergnerd") as bmc:
                     hd.image(
-                        src="https://img.buymeacoffee.com/button-api/?text=Support Erg Nerd&emoji=☕&slug=ergnerd&button_colour=5F7FFF&font_colour=ffffff&font_family=Lato&outline_colour=000000&coffee_colour=FFDD00"
+                        src="https://img.buymeacoffee.com/button-api/?text=Support Erg Nerd&emoji=☕&slug=ergnerd&button_color=5F7FFF&font_color=ffffff&font_family=Lato&outline_color=000000&coffee_color=FFDD00"
                     )
 
             # with hd.box(

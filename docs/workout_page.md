@@ -124,7 +124,7 @@ even when the last stroke arrives a few tenths before the interval ends.
 |---|---|---|
 | X | Elapsed time (seconds) | Tick labels formatted as M:SS |
 | Primary Y (left) | Pace (sec/500m) or Watts | Inverted when showing pace so faster = higher |
-| Secondary Y (right, dark blue) | SPM | Min 0, integer bounds; matches series colour |
+| Secondary Y (right, dark blue) | SPM | Min 0, integer bounds; matches series color |
 | Secondary Y (right, red) | HR (bpm) | Range 40–220; hidden if no HR data |
 
 ### Controls — normal mode
@@ -138,7 +138,7 @@ even when the last stroke arrives a few tenths before the interval ends.
 ### Controls — stacked mode
 
 Enabled by the **Stack** switch.  Each work interval is overlaid on a shared
-x-axis starting at t = 0, coloured with an HSL palette from blue to orange.
+x-axis starting at t = 0, colored with an HSL palette from blue to orange.
 A Chart.js legend shows one entry per interval.  Entering stack mode clears
 any active zoom.  SPM and HR overlays default to **off** in stacked mode to
 keep the chart readable; toggle them back on via the switches below the chart.
@@ -160,9 +160,9 @@ An additional row of per-series visibility switches appears below the chart:
 Ticking any **Compare** checkbox in the Similar sessions table overlays that
 workout's pace (or watts), SPM, and HR series on the main chart.  Any number
 of rows can be compared at once; each is drawn as a solid line in a distinct
-HSL colour, with a Chart.js legend showing the workout date and label.  The
-primary workout keeps its own colour; compared workouts are distinguished
-by colour alone (no dashing).
+HSL color, with a Chart.js legend showing the workout date and label.  The
+primary workout keeps its own color; compared workouts are distinguished
+by color alone (no dashing).
 
 The legend is interactive — clicking a legend entry toggles that workout's
 visibility without zooming.  Band click-to-zoom is restricted to the plot
@@ -194,7 +194,7 @@ in tenths of a second, accumulated to elapsed seconds on the x-axis).
 For split workouts, bands come from `workout.workout.splits`.
 JustRow workouts with no splits have no bands.
 
-### Series colours
+### Series colors
 
 | Series | Light mode | Dark mode |
 |---|---|---|
@@ -202,7 +202,7 @@ JustRow workouts with no splits have no bands.
 | SPM | `#1e40af` (dark blue, dashed) | `#3b82f6` (lighter blue) |
 | HR | `#ef4444` (red, dotted) | `#f87171` (lighter red) |
 
-Axis tick labels and titles use the same colour as their series.
+Axis tick labels and titles use the same color as their series.
 
 ### Code
 
@@ -241,7 +241,7 @@ The custom split editor appears when **all** of the following are true:
 - Total workout distance (or total time, for time-based workouts) is known
 
 The editor shows a row of editable chips.  For distance-based workouts
-(`FixedDistanceSplits`, `JustRow`) the chips are metres; for time-based
+(`FixedDistanceSplits`, `JustRow`) the chips are meters; for time-based
 workouts (`FixedTimeSplits`) they are elapsed time.  The default is the
 workout divided into **5 as-even-as-possible splits** (e.g. a 5k opens as
 `5 × 1000m`, a 30-minute piece as `5 × 6:00`).  Any remainder is distributed
@@ -259,15 +259,15 @@ side must be exactly two digits and less than 60, so `"1:05"` is valid but
 `"1:5"` is rejected as ambiguous.
 
 **Validation:** The sum of all chip values must equal the workout's total
-distance (metres) or total time (seconds) within ±2.  A warning is shown
+distance (meters) or total time (seconds) within ±2.  A warning is shown
 while the sum is off; the **Recalculate** button is disabled.
 
 **Recalculation:** When recalculate is clicked, `_recalculate_splits()` in
 `workout_page.py` interpolates each cumulative split boundary from the
-stroke data (binary search + linear interpolation on `d` for metre splits
+stroke data (binary search + linear interpolation on `d` for meter splits
 or on `t` for time splits), then computes pace, SPM, and HR for each window.
 
-**Synthetic final stroke:** Stroke data frequently tails a few metres/tenths
+**Synthetic final stroke:** Stroke data frequently tails a few meters/tenths
 short of the workout's reported total distance and time.  During
 interpolation only, `_recalculate_splits()` appends a synthetic stroke at
 `(total_distance_dm, total_time_tenths)` so the final boundary lands exactly

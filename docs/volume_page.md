@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Volume tab provides a stacked bar chart of training meters broken down by physiological intensity zone, with a distribution data table beneath it. It supports two zone modes — **Pace Intensity** and **HR** — that share the same chart widget, aggregation layer, and table structure but differ in how metres are classified.
+The Volume tab provides a stacked bar chart of training meters broken down by physiological intensity zone, with a distribution data table beneath it. It supports two zone modes — **Pace Intensity** and **HR** — that share the same chart widget, aggregation layer, and table structure but differ in how meters are classified.
 
 ### Files Involved
 
@@ -124,11 +124,11 @@ The chart is rendered at `height="42vh"` in an `hd.box`. If `chart_config` is em
 | Column | Contents |
 |---|---|
 | Period | Week / month / season label |
-| Total | Total metres (work + rest) |
-| Rest | Rest metres (intervals only) |
-| Z1 Easy (Fast & Slow Aerobic) | Easy aerobic metres + % of work |
-| Z2 Threshold | Threshold metres + % of work |
-| Z3 Hard (5k + 2k + Fast) | High-intensity metres + % of work |
+| Total | Total meters (work + rest) |
+| Rest | Rest meters (intervals only) |
+| Z1 Easy (Fast & Slow Aerobic) | Easy aerobic meters + % of work |
+| Z2 Threshold | Threshold meters + % of work |
+| Z3 Hard (5k + 2k + Fast) | High-intensity meters + % of work |
 | Distribution | Classification label (Polarized, Pyramidal, etc.) |
 
 ### Column layout — HR mode
@@ -136,15 +136,15 @@ The chart is rendered at `height="42vh"` in an `hd.box`. If `chart_config` is em
 | Column | Contents |
 |---|---|
 | Period | Week / month / season label |
-| Total | Total metres (work + rest) |
-| Rest | Rest metres (intervals only) |
-| Easy (<70%) | Z2 Aerobic + Z1 Recovery metres + % |
-| Tempo (70–80%) | Z3 Tempo metres + % |
-| Threshold (80–90%) | Z4 Threshold metres + % |
-| Max (90%+) | Z5 Max metres + % |
-| Distribution | Classification label (same thresholds as pace; "—" if < 500 HR-classified metres) |
+| Total | Total meters (work + rest) |
+| Rest | Rest meters (intervals only) |
+| Easy (<70%) | Z2 Aerobic + Z1 Recovery meters + % |
+| Tempo (70–80%) | Z3 Tempo meters + % |
+| Threshold (80–90%) | Z4 Threshold meters + % |
+| Max (90%+) | Z5 Max meters + % |
+| Distribution | Classification label (same thresholds as pace; "—" if < 500 HR-classified meters) |
 
-HR mode adds a fourth intensity column (splitting "Hard" into Threshold and Max) and always includes Distribution. The distribution classification excludes "No HR" metres (bin 6) from the work denominator — see `docs/heartrate.md` for details.
+HR mode adds a fourth intensity column (splitting "Hard" into Threshold and Max) and always includes Distribution. The distribution classification excludes "No HR" meters (bin 6) from the work denominator — see `docs/heartrate.md` for details.
 
 ### Distribution classification
 Six possible values: **Easy / LSD**, **Polarized**, **Pyramidal**, **Threshold**, **High Intensity**, **Mixed**, or **—** (insufficient data). See `docs/volume_chart.md` for the threshold rules.

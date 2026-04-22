@@ -181,7 +181,7 @@ def avg_workpace_tenths(r: dict) -> float | None:
     Average WORK pace in tenths-of-a-second per 500 m.
 
     For interval workouts both ``r["time"]`` (tenths) and ``r["distance"]``
-    (metres) are work-only values, so the pace is simply:
+    (meters) are work-only values, so the pace is simply:
         time_tenths * 500 / distance_m
 
     Returns None if either field is unavailable.

@@ -154,7 +154,7 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
 # Persisted shape (localStorage key "custom_splits"):
 #     {str(workout_id): {"unit": "m" | "s", "values": [int, ...]}}
 #
-# Legacy values (bare list of metres) are auto-migrated in memory on load; the
+# Legacy values (bare list of meters) are auto-migrated in memory on load; the
 # migrated shape is written back only when the user next clicks Recalculate on
 # that workout.
 
@@ -251,7 +251,7 @@ def _normalize_saved_entry(saved):
 def _custom_splits_ui(workout: dict, strokes: list, on_splits_change) -> None:
     """Chip-row editor for custom split distances or durations.
 
-    For distance-based workouts, chips are metres.  For FixedTimeSplits,
+    For distance-based workouts, chips are meters.  For FixedTimeSplits,
     chips are integer seconds displayed as M:SS; the text input accepts
     either bare seconds or M:SS.
     """
@@ -504,7 +504,7 @@ def _recalculate_splits(strokes: list, workout: dict, custom_splits) -> list:
     Interpolate stroke data to compute split metrics at custom boundaries.
 
     `custom_splits` is {"unit": "m"|"s", "values": [int,...]}.  For "m" the
-    values are metre-lengths of successive splits; for "s" they are integer
+    values are meter-lengths of successive splits; for "s" they are integer
     seconds.  A synthetic final stroke is appended at the workout's reported
     totals so that sum(distance) == total_distance and sum(time) ==
     total_time within ±1 (see _build_interp).

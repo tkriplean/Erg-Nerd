@@ -65,9 +65,9 @@ Only `average` is currently used for zone classification; `min`, `max`, and `end
 
 The 7-bin layout mirrors `services/volume_bins.BIN_NAMES` so a single aggregation loop serves both modes:
 
-| Bin | Name          | HRmax %  | Colour         |
+| Bin | Name          | HRmax %  | color         |
 |-----|---------------|----------|----------------|
-| 0   | Rest          | (rest metres) | Grey      |
+| 0   | Rest          | (rest meters) | Grey      |
 | 1   | Z5 Max        | > 90 %   | Red            |
 | 2   | Z4 Threshold  | 80–90 %  | Orange         |
 | 3   | Z3 Tempo      | 70–80 %  | Yellow-green   |
@@ -82,7 +82,7 @@ Stacked-bar draw order (bottom → top): `[6, 5, 4, 3, 2, 1, 0]` — same as pac
 | Name | Value | Purpose |
 |---|---|---|
 | `HR_ZONE_NAMES` | 7-element list | Chart legend labels |
-| `HR_ZONE_COLORS` | 7-element list of `(dark, light)` RGBA pairs | Chart colours |
+| `HR_ZONE_COLORS` | 7-element list of `(dark, light)` RGBA pairs | Chart colors |
 | `HR_ZONE_DRAW_ORDER` | `[6, 5, 4, 3, 2, 1, 0]` | Pass to `build_volume_chart_config(draw_order=)` |
 | `HR_Z1_BINS` | `frozenset({4, 5})` | Easy zone (< 70 %) for 3-zone table |
 | `HR_Z2_BINS` | `frozenset({3})` | Tempo zone (70–80 %) |
@@ -148,7 +148,7 @@ Returns a 7-element float list. Resolution is attempted in this priority order:
 
 ### 1. Per-split HR (highest resolution)
 If `workout.workout.splits` exists and at least one split has a valid HR average:
-- Each split's metres go into its own HR zone bin.
+- Each split's meters go into its own HR zone bin.
 - Splits without valid HR → bin 6 (No HR).
 - Returns early; does not fall through to interval or top-level.
 
@@ -161,14 +161,14 @@ If `workout.workout.intervals` exists and at least one interval has a valid HR a
 
 ### 3. Top-level HR
 If `workout.heart_rate.average` is valid:
-- For interval workouts: rest metres (from explicit rest intervals or `rest_distance` fields) → bin 0; remaining work metres → HR zone bin.
-- For steady-state workouts: all `workout.distance` metres → HR zone bin.
+- For interval workouts: rest meters (from explicit rest intervals or `rest_distance` fields) → bin 0; remaining work meters → HR zone bin.
+- For steady-state workouts: all `workout.distance` meters → HR zone bin.
 
 ### 4. No HR data
-- Interval rest metres (if any) → bin 0.
-- All other metres → bin 6 (No HR).
+- Interval rest meters (if any) → bin 0.
+- All other meters → bin 6 (No HR).
 
-**Key design decision**: interval rest metres always go to bin 0 regardless of HR. Even if a rest-period HR reading were available, rest metres are physiologically and analytically different from work metres and should be separated.
+**Key design decision**: interval rest meters always go to bin 0 regardless of HR. Even if a rest-period HR reading were available, rest meters are physiologically and analytically different from work meters and should be separated.
 
 ---
 
@@ -193,9 +193,9 @@ When HR mode is active, `get_period_rows()` in `volume_chart_builder.py` receive
 | `z3b_bins` | `frozenset({1})` | Max sub-zone (> 90 %) |
 | `no_data_bins` | `frozenset({6})` | Exclude "No HR" from classification denominator |
 
-The `no_data_bins` exclusion matters: if a weekly period has 80 % of its metres in the "No HR" bin, the remaining 20 % classified by HR should still receive a meaningful distribution classification — rather than being diluted to near-zero percentages that produce "—".
+The `no_data_bins` exclusion matters: if a weekly period has 80 % of its meters in the "No HR" bin, the remaining 20 % classified by HR should still receive a meaningful distribution classification — rather than being diluted to near-zero percentages that produce "—".
 
-Distribution classification thresholds (Polarized, Pyramidal, etc.) are the same as pace mode. They are applied to the fractions computed over HR-classified metres only. A period with < 500 classified metres → "—".
+Distribution classification thresholds (Polarized, Pyramidal, etc.) are the same as pace mode. They are applied to the fractions computed over HR-classified meters only. A period with < 500 classified meters → "—".
 
 ---
 

@@ -378,7 +378,7 @@ def _sweat_drop_svg(sx, sy, ex, ey, rx, ry, rot, peak, color) -> str:
         f' keyTimes="{_SWEAT_KT}" values="{pos_vals}"/>'
         f'<ellipse cx="0" cy="0" rx="{rx}" ry="{ry}"'
         f' fill="{color}" transform="rotate({rot})"/>'
-        f'</g>'
+        f"</g>"
     )
 
 
@@ -394,7 +394,7 @@ def build_svg(theme: str = "light") -> str:
     Parameters
     ----------
     theme : "light" | "dark"
-        Selects fill colours for elements that differ between light and dark
+        Selects fill colors for elements that differ between light and dark
         backgrounds.
     """
     leg_fill = "#000000" if theme == "light" else "#44BBCA"
