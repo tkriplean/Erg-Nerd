@@ -535,31 +535,62 @@ def _dashboard_view(ctx, app_state, path_suffix: str | None = None) -> None:
                         font_size="small",
                         font_weight="semibold",
                     )
-                else:
-                    if user_task.done and user_task.result:
-                        user = user_task.result
-                        display_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or user.get(
-                            "username", ""
-                        )
-                        hd.link(
-                            display_name,
-                            href="profile",
-                            font_color="primary",
-                            font_size="small",
-                        )
+                elif user_task.done and user_task.result:
+                    user = user_task.result
+                    first = user.get("first_name", "") or ""
+                    last = user.get("last_name", "") or ""
+                    display_name = (
+                        f"{first} {last}".strip() or user.get("username", "") or ""
+                    )
+                    profile_image = user.get("profile_image") or ""
+                    initials = (first[:1] + last[:1]).upper() or (
+                        (user.get("username") or "?")[:1].upper()
+                    )
 
-                    if hd.button("Disconnect", variant="neutral", size="small").clicked:
-                        # Also tear down any published public data — single
-                        # source of truth is the token file.
-                        try:
-                            public_profiles.unpublish(ctx.user_id)
-                        except Exception as _exc:
-                            print(f"[disconnect] unpublish failed: {_exc}")
-                        clear_token(ctx.user_id)
-                        hd.local_storage.remove_item("c2_user_id")
-                        hd.local_storage.remove_item("workouts")
-                        hd.local_storage.remove_item("profile")
-                        loc.go(path="/")
+                    with hd.dropdown(placement="bottom-end") as _user_dd:
+                        with hd.button(
+                            display_name,
+                            caret=True,
+                            variant="text",
+                            size="large",
+                            slot=_user_dd.trigger,
+                            font_color="primary",
+                        ) as _user_btn:
+                            if profile_image:
+                                hd.avatar(
+                                    image=profile_image,
+                                    assistive_label=display_name,
+                                    size=2.5,
+                                    slot=_user_btn.prefix,
+                                )
+                            else:
+                                hd.avatar(
+                                    initials=initials,
+                                    assistive_label=display_name,
+                                    size=2.5,
+                                    slot=_user_btn.prefix,
+                                )
+                        with hd.menu() as _user_menu:
+                            _profile_mi = hd.menu_item("Profile", prefix_icon="person")
+                            _disconnect_mi = hd.menu_item(
+                                "Disconnect", prefix_icon="box-arrow-right"
+                            )
+                        if _user_btn.clicked or _user_menu.selected_item:
+                            _user_dd.opened = not _user_dd.opened
+                        if _profile_mi.clicked:
+                            loc.go(path="/profile")
+                        if _disconnect_mi.clicked:
+                            # Also tear down any published public data — single
+                            # source of truth is the token file.
+                            try:
+                                public_profiles.unpublish(ctx.user_id)
+                            except Exception as _exc:
+                                print(f"[disconnect] unpublish failed: {_exc}")
+                            clear_token(ctx.user_id)
+                            hd.local_storage.remove_item("c2_user_id")
+                            hd.local_storage.remove_item("workouts")
+                            hd.local_storage.remove_item("profile")
+                            loc.go(path="/")
 
         # ── Session detail overlay ─────────────────────────────────────────
         if in_session:
