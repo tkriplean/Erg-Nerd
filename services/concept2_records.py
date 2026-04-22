@@ -64,7 +64,7 @@ _LWT_F_KG = 61.5
 # Concept2 API age_category string lookup, keyed by lower bound of each band.
 # Built once at import time.
 _AGE_BANDS: list[tuple[int, str]] = [
-    (100, "100+"),
+    (100, "100"),
     (95, "95-99"),
     (90, "90-94"),
     (85, "85-89"),
