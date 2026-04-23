@@ -425,13 +425,6 @@ def _dashboard_view(ctx, app_state, path_suffix: str | None = None) -> None:
                                     size=2.5,
                                     slot=_user_btn.prefix,
                                 )
-                            else:
-                                hd.avatar(
-                                    initials=initials,
-                                    assistive_label=display_name,
-                                    size=2.5,
-                                    slot=_user_btn.prefix,
-                                )
                         with hd.menu() as _user_menu:
                             _profile_mi = hd.menu_item("Profile", prefix_icon="person")
                             _disconnect_mi = hd.menu_item(
