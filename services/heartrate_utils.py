@@ -9,17 +9,22 @@ Bins mirror the 7-slot shape used by services/volume_bins.py so that
 aggregate_workouts() can accept workout_hr_meters() as a drop-in bin_fn.
 
 Exported:
-    HR_ZONE_NAMES   — 7-element list matching volume_bins.BIN_NAMES shape
-    HR_ZONE_COLORS  — 7-element list of (dark_rgba, light_rgba) pairs
-    HR_Z1_BINS      — frozenset of bin indices for easy zone (4, 5)
-    HR_Z2_BINS      — frozenset of bin indices for tempo zone (3)
-    HR_Z3_BINS      — frozenset of bin indices for hard zone (1, 2)
+    HR_ZONE_NAMES               — 7-element list matching volume_bins.BIN_NAMES shape
+    HR_ZONE_COLORS              — 7-element list of (dark_rgba, light_rgba) pairs
+    HR_Z1_BINS                  — frozenset of bin indices for easy zone (4, 5)
+    HR_Z2_BINS                  — frozenset of bin indices for tempo zone (3)
+    HR_Z3_BINS                  — frozenset of bin indices for hard zone (1, 2)
+    HR_INTENSITY_WEIGHTS        — 7-element per-bin weights for the 0–100 score
+    HR_ZONE_DEFINITION_TEXT     — one-line human definition per bin index
+    HR_ZONE_FILTER_TEXT         — one-line description of the filter threshold
 
     is_valid_hr(val, max_hr)        → bool
     estimate_max_hr(workouts)       → int | None
     resolve_max_hr(profile, workouts) → (int | None, bool)  # (max_hr, is_estimated)
     hr_zone_idx(avg_hr, max_hr)     → int 1–5
     workout_hr_meters(workout, max_hr) → list[float]  (7 bins, same shape as workout_bin_meters)
+    hr_intensity_score(hr_bin_meters) → float | None  (0–100 weighted average)
+    hr_bin_passes(hr_bin_meters, idx) → bool  (filter-threshold test)
     hr_coverage(workouts)           → (int, int)  # (with_hr, total)
 
 Bin layout (matches pace zone index convention):
@@ -80,6 +85,32 @@ HR_ZONE_DRAW_ORDER: list[int] = [1, 2, 3, 4, 5, 0, 6]
 HR_Z1_BINS: frozenset = frozenset({4, 5})  # Z2 Aerobic + Z1 Recovery  (easy)
 HR_Z2_BINS: frozenset = frozenset({3})  # Z3 Tempo                  (moderate)
 HR_Z3_BINS: frozenset = frozenset({1, 2})  # Z5 Max + Z4 Threshold     (hard)
+
+# Linear weights per bin index for the 0–100 HR-intensity score.
+# Score = Σ (meters_in_bin / meaningful_meters × weight); Rest and No-HR
+# are excluded from both the weights and the denominator.
+HR_INTENSITY_WEIGHTS: list[int] = [0, 100, 75, 50, 25, 0, 0]
+
+# One-line definition per bin index.  Consumed by chip tooltips.
+HR_ZONE_DEFINITION_TEXT: dict[int, str] = {
+    0: "Interval rest — not counted toward intensity.",
+    1: "Above 90% of your max HR.",
+    2: "80–90% of your max HR.",
+    3: "70–80% of your max HR.",
+    4: "60–70% of your max HR.",
+    5: "Below 60% of your max HR.",
+    6: "HR data unavailable for these meters.",
+}
+
+# Filter threshold description for each bin (fraction of HR-classified
+# meters, excluding Rest and No HR).  Used by chip tooltips.
+HR_ZONE_FILTER_TEXT: dict[int, str] = {
+    1: "Selected: workouts with ≥5% of HR-classified meters in Z5 Max.",
+    2: "Selected: workouts with ≥10% of HR-classified meters in Z4 Threshold.",
+    3: "Selected: workouts with ≥20% of HR-classified meters in Z3 Tempo.",
+    4: "Selected: workouts with ≥40% of HR-classified meters in Z2 Aerobic.",
+    5: "Selected: workouts with ≥40% of HR-classified meters in Z1 Recovery.",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +339,56 @@ def workout_hr_meters(workout: dict, max_hr: int) -> list[float]:
     bins[0] += rest_dist
     bins[6] += max(0.0, total_dist - rest_dist)
     return bins
+
+
+# ---------------------------------------------------------------------------
+# Intensity score + filter-threshold helpers
+# ---------------------------------------------------------------------------
+
+
+def hr_intensity_score(hr_bin_meters: Optional[list]) -> Optional[float]:
+    """
+    Return a 0–100 weighted-average HR-intensity score for a workout.
+
+    Bins 0 (Rest) and 6 (No HR) are excluded from both the weights and the
+    denominator so a workout with partial HR coverage is scored on the
+    meters it could classify.  Returns None when no HR-classified meters
+    exist — callers render that as "—" and sort it last.
+    """
+    if hr_bin_meters is None:
+        return None
+    classified = hr_bin_meters[1:6]  # bins 1–5 only
+    total = sum(classified)
+    if total <= 0:
+        return None
+    weights = HR_INTENSITY_WEIGHTS[1:6]
+    return sum((m / total) * w for m, w in zip(classified, weights))
+
+
+def hr_bin_passes(hr_bin_meters: Optional[list], bin_idx: int) -> bool:
+    """
+    Return True if a workout has enough HR-classified meters in ``bin_idx``
+    for the Intervals-page HR filter to consider that zone "present".
+
+    Thresholds mirror the hardness ordering of the pace thresholds.
+    Bin 6 (No HR) is not filterable.
+    """
+    if hr_bin_meters is None:
+        return False
+    classified = sum(hr_bin_meters[1:6])
+    if classified <= 0:
+        return False
+    if bin_idx == 1:
+        return hr_bin_meters[1] / classified >= 0.05
+    if bin_idx == 2:
+        return hr_bin_meters[2] / classified >= 0.10
+    if bin_idx == 3:
+        return hr_bin_meters[3] / classified >= 0.20
+    if bin_idx == 4:
+        return hr_bin_meters[4] / classified >= 0.40
+    if bin_idx == 5:
+        return hr_bin_meters[5] / classified >= 0.40
+    return False
 
 
 # ---------------------------------------------------------------------------

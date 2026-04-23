@@ -6,19 +6,26 @@ at key distances/times within ±365 days of today, with log-log power-law
 fallback for events without recent data.
 
 Exported:
-    BIN_NAMES               — ordered list of bin display names (index 0 = Rest)
-    BIN_COLORS              — list of (dark_rgba, light_rgba) per bin
-    N_BINS                  — number of bins (7)
-    Z1_BINS                 — frozenset of bin indices for the easy zone (5, 6)
-    Z2_BINS                 — frozenset of bin indices for threshold zone (4)
-    Z3_BINS                 — frozenset of bin indices for hard zone (1, 2, 3)
-    get_reference_sbs()     — find recent SBs for key events
-    compute_bin_thresholds()— build pace cutoffs from reference SBs + loglog fallback
-    classify_pace()         — map a pace value → bin index
-    workout_bin_meters()    — per-bin meter counts for a single workout
-    bin_bar_svg()           — data-URI SVG stacked bar from bin meter counts
-    swatch_svg()            — data-URI SVG color swatch for legends
-    aggregate_workouts()    — group all workouts by week / month / season × bin
+    BIN_NAMES                   — ordered list of bin display names (index 0 = Rest)
+    BIN_COLORS                  — list of (dark_rgba, light_rgba) per bin
+    N_BINS                      — number of bins (7)
+    Z1_BINS                     — frozenset of bin indices for easy zone (5, 6)
+    Z2_BINS                     — frozenset of bin indices for threshold zone (4)
+    Z3_BINS                     — frozenset of bin indices for hard zone (1, 2, 3)
+    PACE_INTENSITY_WEIGHTS      — 7-element per-bin weights for the 0–100 score
+    PACE_ZONE_DEFINITION_TEXT   — one-line human definition per bin index
+    PACE_ZONE_FILTER_TEXT       — one-line human description of each bin's
+                                  filter-pass threshold
+    pace_intensity_score()      — compute a workout's 0–100 pace-intensity score
+    pace_bin_passes()           — true if a workout's bin meters pass the zone
+                                  threshold used by the Intervals-page filter
+    get_reference_sbs()         — find recent SBs for key events
+    compute_bin_thresholds()    — build pace cutoffs from reference SBs
+    classify_pace()             — map a pace value → bin index
+    workout_bin_meters()        — per-bin meter counts for a single workout
+    bin_bar_svg()               — data-URI SVG stacked bar from bin meters
+    swatch_svg()                — data-URI SVG color swatch for legends
+    aggregate_workouts()        — group all workouts by week / month / season × bin
 """
 
 from __future__ import annotations
@@ -59,13 +66,13 @@ N_BINS = len(BIN_NAMES)
 
 # (dark_rgba, light_rgba) per bin — indexed identically to BIN_NAMES.
 BIN_COLORS = [
-    ("rgba(120,120,120,0.65)", "rgba(155,155,155,0.65)"),  # 0 Rest
-    ("rgba(215,55,55,0.85)", "rgba(195,35,35,0.85)"),  # 1 Fast
-    ("rgba(225,125,35,0.85)", "rgba(205,95,15,0.85)"),  # 2 2k
-    ("rgba(205,190,50,0.85)", "rgba(180,160,15,0.85)"),  # 3 5k
-    ("rgba(55,180,80,0.85)", "rgba(25,150,50,0.85)"),  # 4 Threshold
-    ("rgba(50,130,220,0.85)", "rgba(20,105,195,0.85)"),  # 5 Fast Aerobic
-    ("rgba(115,170,230,0.75)", "rgba(80,140,205,0.75)"),  # 6 Slow Aerobic
+    ("rgba(120,120,120,1)", "rgba(155,155,155,1)"),  # 0 Rest
+    ("rgba(215,55,55,1)", "rgba(195,35,35,1)"),  # 1 Fast
+    ("rgba(225,125,35,1)", "rgba(205,95,15,1)"),  # 2 2k
+    ("rgba(205,190,50,1)", "rgba(180,160,15,1)"),  # 3 5k
+    ("rgba(55,180,80,1)", "rgba(25,150,50,1)"),  # 4 Threshold
+    ("rgba(50,130,220,1)", "rgba(20,105,195,1)"),  # 5 Fast Aerobic
+    ("rgba(115,170,230,1)", "rgba(80,140,205,1)"),  # 6 Slow Aerobic
 ]
 
 # 3-zone model — maps the 6 pace bins onto the Z1/Z2/Z3 framework used in the
@@ -73,6 +80,38 @@ BIN_COLORS = [
 Z3_BINS: frozenset = frozenset({1, 2, 3})  # Fast + 2k + 5k  (above LT2)
 Z2_BINS: frozenset = frozenset({4})  # Threshold        (LT1–LT2)
 Z1_BINS: frozenset = frozenset({5, 6})  # Fast+Slow Aero   (below LT1)
+
+# Linear weights per bin index for the 0–100 pace-intensity score.
+# Score = Σ (meters_in_bin / work_meters × weight), ignoring bin 0 (Rest).
+# Fastest zone → 100, slowest → 0.
+PACE_INTENSITY_WEIGHTS: list[int] = [0, 100, 80, 60, 40, 20, 0]
+
+# One-line definition per bin, indexed by bin index (0 = Rest).  Thresholds
+# are personalised via compute_bin_thresholds(); these strings describe the
+# midpoint-based rule without quoting the user's current numbers.
+PACE_ZONE_DEFINITION_TEXT: dict[int, str] = {
+    0: "Interval rest distance — not counted toward intensity.",
+    1: "Faster than the midpoint between your 1k and 2k pace.",
+    2: "Between midpoint(1k, 2k) and midpoint(2k, 5k) — near 2k race pace.",
+    3: "Between midpoint(2k, 5k) and midpoint(5k, 60min) — near 5k race pace.",
+    4: "Between midpoint(5k, 60min) and midpoint(60min, marathon) — threshold.",
+    5: "From threshold down to ~3 s/500m slower than marathon pace.",
+    6: "Slower than the fast-aerobic cutoff — base / easy work.",
+}
+
+# Threshold each bin must clear (as a fraction of a workout's total work
+# meters) for the Intervals-page filter legend to consider the zone "present".
+# A value of None means the zone uses a compound rule implemented in
+# pace_bin_passes() below.  Consumed by chip tooltips and the filter.
+PACE_ZONE_FILTER_TEXT: dict[int, str] = {
+    1: "Selected: workouts with ≥5% of work meters in Fast.",
+    2: "Selected: workouts with ≥10% of work meters in 2k.",
+    3: "Selected: workouts with ≥15% of work meters in 5k.",
+    4: "Selected: workouts with ≥25% of work meters in Threshold.",
+    5: "Selected: workouts with ≥50% of work meters in Fast+Slow Aerobic combined.",
+    6: "Selected: workouts with >30% of work meters in Slow Aerobic and >50% "
+    "in Fast+Slow Aerobic combined.",
+}
 
 # ---------------------------------------------------------------------------
 # Key events for reference-SB lookup
@@ -304,6 +343,48 @@ def workout_bin_meters(workout: dict, thresholds: Optional[dict]) -> list:
                 bins[classify_pace(pace, thresholds)] += dist
 
     return bins
+
+
+def pace_intensity_score(bin_meters: list) -> Optional[float]:
+    """
+    Return a 0–100 weighted-average intensity score for a workout's pace bins.
+
+    Bin 0 (Rest) is excluded from both the weights and the denominator.
+    Returns None when a workout has no classifiable work meters — callers
+    render that as "—" and sort it last.
+    """
+    work = bin_meters[1:]
+    total = sum(work)
+    if total <= 0:
+        return None
+    weights = PACE_INTENSITY_WEIGHTS[1:]
+    return sum((m / total) * w for m, w in zip(work, weights))
+
+
+def pace_bin_passes(bm: list, bin_idx: int) -> bool:
+    """
+    Return True if a workout's pace-bin vector has enough meters in
+    ``bin_idx`` for the Intervals-page filter legend to consider that zone
+    "present".  Thresholds are the existing per-zone heuristics from the
+    old intervals-page filter (see PACE_ZONE_FILTER_TEXT for the human
+    form).  Bin 0 (Rest) is not filterable.
+    """
+    work_total = sum(bm[1:])
+    if not work_total:
+        return False
+    if bin_idx == 1:
+        return bm[1] / work_total >= 0.05
+    if bin_idx == 2:
+        return bm[2] / work_total >= 0.10
+    if bin_idx == 3:
+        return bm[3] / work_total >= 0.15
+    if bin_idx == 4:
+        return bm[4] / work_total >= 0.25
+    if bin_idx == 5:
+        return (bm[5] + bm[6]) / work_total >= 0.50
+    if bin_idx == 6:
+        return (bm[6] / work_total > 0.30) and ((bm[5] + bm[6]) / work_total > 0.50)
+    return False
 
 
 def bin_bar_svg(

@@ -492,9 +492,7 @@ def strokes_batch(ctx, workouts: list) -> dict:
     # ``ls.done == False`` for one tick and ``_load_strokes_cache`` reports
     # "not ready" — without the snapshot the progress bar would flicker to
     # 0/0 between every completed fetch.
-    batch_state = hd.state(
-        batch_key="", queue=(), total=0, done=0, by_id_snapshot={}
-    )
+    batch_state = hd.state(batch_key="", queue=(), total=0, done=0, by_id_snapshot={})
 
     ids = tuple(
         w.get("id") for w in workouts if w.get("id") and w.get("stroke_data", False)
