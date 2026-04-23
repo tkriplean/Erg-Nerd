@@ -106,6 +106,22 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       cursor: pointer;
       color: inherit;
     }
+    .race-sort {
+      min-width: 140px;
+    }
+    .wr-overlay {
+      position: absolute;
+      left: 0;
+      right: 0;
+      display: flex;
+      align-items: center;
+      padding-left: 12px;
+      pointer-events: auto;
+      box-sizing: border-box;
+    }
+    .wr-overlay[hidden] {
+      display: none !important;
+    }
   `;
   ctx.domElement.appendChild(style);
 
@@ -118,6 +134,18 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   canvasWrap.className = "canvas-wrap";
   const canvas = document.createElement("canvas");
   canvasWrap.appendChild(canvas);
+
+  // ── WR ghost-lane overlay (Shoelace checkbox inside a phantom bottom lane) ─
+  // Positioned absolutely within canvasWrap.  When `wrAvailable && !raceInProgress`,
+  // it becomes visible; the canvas height grows by one LANE_H to make room.
+  const wrOverlay = document.createElement("div");
+  wrOverlay.className = "wr-overlay";
+  wrOverlay.hidden = true;
+  const wrCheckbox = document.createElement("sl-checkbox");
+  wrCheckbox.size = "small";
+  wrCheckbox.textContent = "Include World Record boat";
+  wrOverlay.appendChild(wrCheckbox);
+  canvasWrap.appendChild(wrOverlay);
 
 
 
@@ -182,18 +210,68 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     speedSelect.appendChild(opt);
   });
 
+  // Sort selector — lanes reorder purely on the client (no Python round-trip).
+  const sortSelect = document.createElement("sl-select");
+  sortSelect.size = "small";
+  sortSelect.value = "date";
+  sortSelect.className = "race-sort";
+  sortSelect.setAttribute("hoist", "");
+  const _sortOptDate = document.createElement("sl-option");
+  _sortOptDate.value = "date";
+  _sortOptDate.textContent = "Sort by date";
+  const _sortOptResult = document.createElement("sl-option");
+  _sortOptResult.value = "result";
+  _sortOptResult.textContent = "Sort by result";
+  sortSelect.appendChild(_sortOptDate);
+  sortSelect.appendChild(_sortOptResult);
+
   controls.appendChild(playBtn);
   // controls.appendChild(timeDisplay);
   controls.appendChild(seekInput);
   // controls.appendChild(totalDisplay);
+  controls.appendChild(sortSelect);
   controls.appendChild(speedSelect);
   
 
   // ── State ──────────────────────────────────────────────────────────────────
-  let races       = ctx.initialProps.races || [];
+  let racesRaw    = ctx.initialProps.races || [];  // Python-provided order
   let eventType   = ctx.initialProps.event_type || "dist";
   let eventValue  = ctx.initialProps.event_value || 2000;
   let isDark      = !!(ctx.initialProps.is_dark);
+  let wrAvailable = !!(ctx.initialProps.wr_available);
+  let wrRequested = !!(ctx.initialProps.wr_requested);
+  let sortMode    = "date";    // "date" | "result" — JS-owned, never echoed back
+
+  wrCheckbox.checked = wrRequested;
+
+  // Sort `racesRaw` into the display order.  Stable WR boat (season "WR") is
+  // always pinned to lane 0 so the ghost boat keeps its visual anchor.
+  function sortedRaces() {
+    const wr = racesRaw.filter(b => b.season === "WR");
+    const rest = racesRaw.filter(b => b.season !== "WR");
+    const sorted = rest.slice();
+    if (sortMode === "result") {
+      if (eventType === "dist") {
+        sorted.sort((a, b) => {
+          const ta = a.finish_time_s != null ? a.finish_time_s : Infinity;
+          const tb = b.finish_time_s != null ? b.finish_time_s : Infinity;
+          return ta - tb;  // lower time = faster = higher lane
+        });
+      } else {
+        sorted.sort((a, b) => {
+          const da = a.finish_dist_m != null ? a.finish_dist_m : 0;
+          const db = b.finish_dist_m != null ? b.finish_dist_m : 0;
+          return db - da;  // more meters = higher lane
+        });
+      }
+    } else {
+      // "date" — newest first
+      sorted.sort((a, b) => (b.date_iso || "").localeCompare(a.date_iso || ""));
+    }
+    return wr.concat(sorted);
+  }
+
+  let races = sortedRaces();
 
   let playing           = false;
   let selectedPreset    = "Normal";   // which SPEED_PRESETS entry is active
@@ -227,12 +305,36 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   const IDEAL_LANE_H   = 44;   // maximum lane height (matches Math.min cap)
   const CANVAS_PAD_B   = 6;    // extra breathing room below last lane border
 
+  // Phantom WR lane is visible only when the control is available and the race
+  // hasn't started yet.  During playback / after seek the ghost lane disappears
+  // and the canvas shrinks back by one LANE_H.
+  function wrPhantomVisible() {
+    return wrAvailable && !playing && currentTimeMs <= 0;
+  }
+
   function updateCanvasHeight() {
     const n = races.length;
+    const extra = wrPhantomVisible() ? IDEAL_LANE_H : 0;
     const h = n > 0
-      ? IDEAL_HEADER_H + n * IDEAL_LANE_H + CANVAS_PAD_B
-      : 120;  // placeholder height when there are no boats
+      ? IDEAL_HEADER_H + n * IDEAL_LANE_H + extra + CANVAS_PAD_B
+      : (extra > 0 ? IDEAL_HEADER_H + extra + CANVAS_PAD_B : 120);
     canvasWrap.style.height = h + "px";
+    updateWrOverlay();
+  }
+
+  // Size and position the WR checkbox overlay to sit inside the phantom bottom
+  // lane (at the LABEL_W start column).  Hide during playback.
+  function updateWrOverlay() {
+    if (!wrPhantomVisible()) {
+      wrOverlay.hidden = true;
+      return;
+    }
+    wrOverlay.hidden = false;
+    const n = races.length;
+    // Lane Y in CSS pixels (canvasWrap height matches CSS pixels, not DPR).
+    const laneY = IDEAL_HEADER_H + n * IDEAL_LANE_H;
+    wrOverlay.style.top    = laneY + "px";
+    wrOverlay.style.height = IDEAL_LANE_H + "px";
   }
 
   // Per-boat wake ring buffers: Map<id, {buf: [{x,y}], head: int}>
@@ -918,6 +1020,28 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     ctx2d.lineTo(W, lastLaneBottom);
     ctx2d.stroke();
 
+    // ── Phantom WR ghost lane ─────────────────────────────────────────────────
+    // Rendered only when the WR checkbox is available and the race is idle.
+    // The HTML checkbox overlay is positioned over this lane (see updateWrOverlay).
+    if (wrPhantomVisible()) {
+      const phantomY = lastLaneBottom;
+      const phantomH = IDEAL_LANE_H;
+      ctx2d.fillStyle = (numBoats % 2 === 0) ? waterColor() : waterColor2();
+      ctx2d.globalAlpha = 0.45;
+      ctx2d.fillRect(LABEL_W, phantomY, TRACK_W, phantomH);
+      ctx2d.globalAlpha = 1;
+
+      // Dashed top border so it reads as "not quite a real lane."
+      ctx2d.save();
+      ctx2d.setLineDash([4, 4]);
+      ctx2d.strokeStyle = laneLineColor();
+      ctx2d.beginPath();
+      ctx2d.moveTo(0, phantomY + phantomH);
+      ctx2d.lineTo(W, phantomY + phantomH);
+      ctx2d.stroke();
+      ctx2d.restore();
+    }
+
     // ── Gap-to-leader labels at split lines ──
     // Render after all boats so they sit on top of the lanes.
     // Leader shows no label (gap = 0); others show "+X.Xs" in their boat color.
@@ -1003,6 +1127,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     wakeBuffers.clear(); phaseAccum.clear();
     updatePlayBtn();
     updateSeekDisplay();
+    updateCanvasHeight();   // phantom lane returns when idle
   }
 
   // ── Controls event listeners ───────────────────────────────────────────────
@@ -1010,6 +1135,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     if (playing) {
       stopRaf();
       updatePlayBtn();
+      updateCanvasHeight();
       renderFrame(currentTimeMs);
     } else {
       // If at end, restart from beginning
@@ -1020,6 +1146,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
       }
       playing = true;
       updatePlayBtn();
+      updateCanvasHeight();   // hide phantom lane (race in progress)
       startRaf();
     }
   });
@@ -1028,6 +1155,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     stopRaf();
     currentTimeMs = parseFloat(seekInput.value);
     wakeBuffers.clear(); phaseAccum.clear();
+    updateCanvasHeight();
     renderFrame(currentTimeMs);
     // timeDisplay.textContent = fmtTime(currentTimeMs);
     // Report back to Python
@@ -1042,10 +1170,23 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     if (playing) lastTs = null; // reset timing so the new speed takes effect cleanly
   });
 
+  sortSelect.addEventListener("sl-change", () => {
+    sortMode = sortSelect.value;
+    races = sortedRaces();
+    wakeBuffers.clear(); phaseAccum.clear();
+    renderFrame(currentTimeMs);
+  });
+
+  wrCheckbox.addEventListener("sl-change", () => {
+    wrRequested = !!wrCheckbox.checked;
+    ctx.updateProp("wr_requested", wrRequested);
+  });
+
   // ── Prop updates from Python ───────────────────────────────────────────────
   ctx.onPropUpdate((propName, propValue) => {
     if (propName === "races") {
-      races = propValue || [];
+      racesRaw = propValue || [];
+      races = sortedRaces();
       wakeBuffers.clear(); phaseAccum.clear();
       rebuildMaxTime();
       resetRace();
@@ -1063,6 +1204,13 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
     } else if (propName === "is_dark") {
       isDark = !!propValue;
       renderFrame(currentTimeMs);
+    } else if (propName === "wr_available") {
+      wrAvailable = !!propValue;
+      updateCanvasHeight();
+      renderFrame(currentTimeMs);
+    } else if (propName === "wr_requested") {
+      wrRequested = !!propValue;
+      wrCheckbox.checked = wrRequested;
     }
   });
 

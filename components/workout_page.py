@@ -59,6 +59,7 @@ from components.workout_table import (
 from components.workout_chart_builder import (
     build_interval_rows_and_bands,
     build_stroke_chart_config,
+    build_compare_series,
     _interval_colors,
     _points_from_strokes,
     _stitch_interval_times,
@@ -909,60 +910,6 @@ def _compare_cell(w: dict, state) -> None:
         state.compared_workouts = tuple(sorted(current))
 
 
-def _build_compare_series(
-    compared_ids: tuple,
-    compare_results: dict,
-    workouts_dict: dict,
-    *,
-    show_watts: bool,
-) -> list:
-    """Turn per-id stroke result dicts into the compare_series list consumed
-    by build_stroke_chart_config.  Skips entries that errored or haven't
-    resolved yet.  ``compare_results`` maps cid → list[stroke] (possibly
-    empty) for resolved entries, or is missing the key while loading.
-    """
-    if not compared_ids:
-        return []
-    colors = _interval_colors(len(compared_ids))
-    out = []
-    for i, cid in enumerate(compared_ids):
-        raw = compare_results.get(cid)
-        if not raw:
-            continue
-        cw = workouts_dict.get(str(cid)) or {}
-        wtype = cw.get("workout_type", "")
-        intervals = (
-            (cw.get("workout") or {}).get("intervals")
-            if wtype in INTERVAL_WORKOUT_TYPES
-            else None
-        )
-        stitched = _stitch_interval_times(raw, intervals=intervals)
-        pace_pts, spm_pts, hr_pts, has_hr = _points_from_strokes(
-            stitched, show_watts=show_watts
-        )
-        date_str = (cw.get("date") or "")[:10]
-        dist = cw.get("distance") or 0
-        if wtype in INTERVAL_WORKOUT_TYPES:
-            suffix = interval_structure_key(cw, compact=True)
-        else:
-            suffix = fmt_distance(dist) if dist else ""
-        label = f"{date_str} · {suffix}".strip(" ·") or f"Workout {cid}"
-        total_t_s = (cw.get("time") or 0) / 10.0
-        out.append(
-            {
-                "id": cid,
-                "label": label,
-                "color": colors[i],
-                "pace_points": pace_pts,
-                "spm_points": spm_pts,
-                "hr_points": hr_pts,
-                "has_hr": has_hr,
-                "total_time_s": total_t_s,
-            }
-        )
-    return out
-
-
 def _find_similar(workout: dict, all_workouts: list, n: int = 8) -> list:
     wtype = workout.get("workout_type", "")
     wid = workout.get("id")
@@ -1244,7 +1191,7 @@ def workout_page(session_id: int, ctx, global_state) -> None:
                     )
                     has_compares = bool(state.compared_workouts)
                     compare_series = (
-                        _build_compare_series(
+                        build_compare_series(
                             state.compared_workouts,
                             compare_results,
                             _workouts_dict,

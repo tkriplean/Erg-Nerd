@@ -26,6 +26,9 @@ import math
 from typing import Optional
 
 from services.rowing_utils import compute_watts, INTERVAL_WORKOUT_TYPES
+from services.stroke_utils import ensure_raw_stroke_origin
+from services.interval_utils import interval_structure_key
+from services.formatters import fmt_distance
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +65,11 @@ def _stitch_interval_times(
     """
     if not strokes:
         return strokes
+
+    # Ensure the first sample sits at (t=0, d=0) so the chart x-axis starts
+    # at the catch rather than at the first recorded stroke (which the PM5
+    # sometimes emits 1-2 seconds into a short piece).
+    strokes = ensure_raw_stroke_origin(strokes)
 
     result = []
     offset = 0
@@ -452,6 +460,76 @@ def _points_from_strokes(strokes: list, *, show_watts: bool) -> tuple:
     return pace_pts, spm_pts, hr_pts, has_hr
 
 
+def build_compare_series(
+    compared_ids: tuple,
+    compare_results: dict,
+    workouts_dict: dict,
+    *,
+    show_watts: bool,
+    colors: Optional[list] = None,
+    labels: Optional[dict] = None,
+) -> list:
+    """Turn per-id stroke result dicts into the compare_series list consumed
+    by build_stroke_chart_config.
+
+    Parameters
+    ----------
+    compared_ids : sequence of workout IDs to overlay.
+    compare_results : {id: raw_strokes_list}.  Missing or empty entries are
+        skipped (still-loading or error).
+    workouts_dict : {str(id): workout_dict} used to derive labels + interval
+        metadata for time stitching.
+    show_watts : whether pace points should carry watts instead of pace.
+    colors : optional per-position color override list.  Defaults to a
+        blue→orange palette via _interval_colors.
+    labels : optional {id: label_str} override.  Defaults to
+        "<yyyy-mm-dd> · <structure>".
+    """
+    if not compared_ids:
+        return []
+    palette = colors if colors is not None else _interval_colors(len(compared_ids))
+    out = []
+    for i, cid in enumerate(compared_ids):
+        raw = compare_results.get(cid)
+        if not raw:
+            continue
+        cw = workouts_dict.get(str(cid)) or {}
+        wtype = cw.get("workout_type", "")
+        intervals = (
+            (cw.get("workout") or {}).get("intervals")
+            if wtype in INTERVAL_WORKOUT_TYPES
+            else None
+        )
+        stitched = _stitch_interval_times(raw, intervals=intervals)
+        pace_pts, spm_pts, hr_pts, has_hr = _points_from_strokes(
+            stitched, show_watts=show_watts
+        )
+        if labels is not None and cid in labels:
+            label = labels[cid]
+        else:
+            date_str = (cw.get("date") or "")[:10]
+            dist = cw.get("distance") or 0
+            if wtype in INTERVAL_WORKOUT_TYPES:
+                suffix = interval_structure_key(cw, compact=True)
+            else:
+                suffix = fmt_distance(dist) if dist else ""
+            label = f"{date_str} · {suffix}".strip(" ·") or f"Workout {cid}"
+        total_t_s = (cw.get("time") or 0) / 10.0
+        out.append(
+            {
+                "id": cid,
+                "label": label,
+                "color": palette[i] if i < len(palette) else "#999",
+                "pace_points": pace_pts,
+                "spm_points": spm_pts,
+                "hr_points": hr_pts,
+                "has_hr": has_hr,
+                "total_time_s": total_t_s,
+            }
+        )
+    return out
+
+
 def build_stroke_chart_config(
     strokes: list,
     workout: dict,
@@ -465,6 +543,8 @@ def build_stroke_chart_config(
     show_hr: bool = True,
     custom_splits: Optional[dict] = None,
     compare_series: Optional[list] = None,
+    primary_color: Optional[str] = None,
+    primary_label: Optional[str] = None,
 ) -> dict:
     """
     Return a Chart.js config dict for the stroke time-series.
@@ -501,7 +581,7 @@ def build_stroke_chart_config(
     # ── Series colors ───────────────────────────────────────────────────────
     # Passed through the config dict so JS reads them in one place — no
     # hardcoded literals in JS segment callbacks.
-    pace_color = "#60a5fa"  # light blue  (pace/watts, thicker)
+    pace_color = primary_color or "#60a5fa"  # light blue  (pace/watts, thicker)
     spm_color = "#1e40af"  # dark blue   (stroke rate)
     hr_color = "#ef4444"  # red         (heart rate)
     pace_faded_color = "rgba(96,165,250,0.25)"  # pace at rest / onset
@@ -514,12 +594,16 @@ def build_stroke_chart_config(
     )
 
     has_compares = bool(compare_series)
-    primary_label = "Watts" if show_watts else "Pace"
-    if has_compares:
-        # Use a meaningful legend label for the primary series when compares
-        # are overlaid.  Falls back to a generic label if no date is present.
-        date_str = (workout.get("date") or "")[:10]
-        primary_label = date_str or ("Watts" if show_watts else "Pace")
+    if primary_label is not None:
+        primary_series_label = primary_label
+    else:
+        primary_series_label = "Watts" if show_watts else "Pace"
+        if has_compares:
+            # Use a meaningful legend label for the primary series when compares
+            # are overlaid.  Falls back to a generic label if no date is present.
+            date_str = (workout.get("date") or "")[:10]
+            primary_series_label = date_str or ("Watts" if show_watts else "Pace")
+    primary_label = primary_series_label
 
     # ── Datasets ─────────────────────────────────────────────────────────────
     #

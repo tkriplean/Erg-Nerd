@@ -95,6 +95,32 @@ def build_boat_label(workout: dict, all_event_workouts: list[dict]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def ensure_raw_stroke_origin(raw_strokes: list[dict]) -> list[dict]:
+    """
+    Guarantee a (t=0, d=0) origin sample in a raw Concept2 stroke list.
+
+    The PM5 sometimes omits the catch sample on short pieces, so the first
+    recorded stroke starts several tenths into the effort (e.g. t=15, d=74
+    on a 100m). Interpolation between race-clock t=0 and that first stroke
+    would snap boats to the first-stroke position. Prepending an origin
+    sample lets time-based interpolation draw a smooth ramp from the
+    start line.
+
+    A no-op when strokes is empty or already starts at (0, 0).
+
+    Works on RAW Concept2 stroke records (t in tenths, d in decimeters).
+    """
+    if not raw_strokes:
+        return raw_strokes
+    first = raw_strokes[0]
+    t0 = first.get("t") or 0
+    d0 = first.get("d") or 0
+    if t0 <= 0 and d0 <= 0:
+        return raw_strokes
+    origin = {"t": 0, "d": 0, "p": 0, "spm": 0, "hr": 0}
+    return [origin] + list(raw_strokes)
+
+
 def normalize_strokes(raw_strokes: list[dict]) -> list[dict]:
     """
     Convert Concept2 API stroke records to internal format.
@@ -106,6 +132,7 @@ def normalize_strokes(raw_strokes: list[dict]) -> list[dict]:
     retained in the raw cache via the full API response stored by
     fetch_strokes_batch).
     """
+    raw_strokes = ensure_raw_stroke_origin(raw_strokes)
     out = []
     for s in raw_strokes:
         t_raw = s.get("t")
@@ -331,6 +358,7 @@ def build_wr_boat(
     return {
         "id": WR_BOAT_ID,
         "label": label,
+        "date_iso": "",
         "color": color,
         "strokes": strokes,
         "is_pb": False,
@@ -473,6 +501,7 @@ def build_races_data(
             {
                 "id": wid,
                 "label": label,
+                "date_iso": (w.get("date") or "")[:10],  # "YYYY-MM-DD" for JS sort
                 "color": color,
                 "strokes": strokes,
                 "is_pb": wid == pb_workout_id,

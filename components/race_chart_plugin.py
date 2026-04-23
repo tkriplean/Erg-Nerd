@@ -23,6 +23,15 @@ Props — Python → JS (Python-owned, never written by JS):
 Props — JS → Python (JS-owned, written by JS on user interaction):
     change_id       Monotonically incremented when the user seeks.
     current_time_ms Current race position in milliseconds (as of last seek).
+    wr_requested    True when the user has ticked the "Include World Record
+                    boat" checkbox in the ghost lane.
+
+Plus two WR-ghost-lane props:
+    wr_available    Python → JS. When True, the plugin renders an extra
+                    "ghost lane" beneath the last real boat with a Shoelace
+                    checkbox labelled "Include World Record boat".  The lane
+                    is only visible while the race is NOT in progress
+                    (``!playing && currentTimeMs === 0``).
 
 All animation is handled internally by the JS plugin using requestAnimationFrame.
 Python does not drive a tick loop for this plugin.
@@ -59,6 +68,10 @@ class RaceChart(hd.Plugin):
 
     is_dark = hd.Prop(hd.Bool, False)
 
+    # When True, the plugin renders a bottom "ghost lane" with a checkbox
+    # labelled "Include World Record boat".  Hidden while a race is running.
+    wr_available = hd.Prop(hd.Bool, False)
+
     # ── JS → Python (never written by Python after initial instantiation) ─────
 
     # Monotonically incremented by JS whenever the user seeks via the slider.
@@ -66,3 +79,7 @@ class RaceChart(hd.Plugin):
 
     # Race clock position at the time of the last user seek (milliseconds).
     current_time_ms = hd.Prop(hd.Int, 0)
+
+    # JS-owned: True when the user has ticked the "Include World Record boat"
+    # checkbox in the ghost lane.  Python reads this into state.show_wr_boat.
+    wr_requested = hd.Prop(hd.Bool, False)
