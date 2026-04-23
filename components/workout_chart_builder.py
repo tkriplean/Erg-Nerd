@@ -742,6 +742,7 @@ def build_stroke_chart_config(
         "datasets": datasets,
         "bands": bands,
         "showWatts": show_watts,
+        "showSpm": show_spm,
         "hasHr": has_hr,
         "paceYMin": pace_y_min,
         "paceYMax": pace_y_max,

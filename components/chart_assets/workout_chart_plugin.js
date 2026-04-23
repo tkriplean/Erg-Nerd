@@ -388,7 +388,7 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
               callback: (v) => cfg.showWatts ? `${Math.round(v)}W` : formatPace(v),
             },
           },
-          ...buildRightScales(cfg, isDark, true, cfg.hasHr || false),
+          ...buildRightScales(cfg, isDark, cfg.showSpm !== false, cfg.hasHr || false),
         },
       },
     };
