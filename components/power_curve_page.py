@@ -1244,7 +1244,6 @@ def power_curve_page(ctx, global_state, excluded_seasons=(), machine="All") -> N
         state._annot_data = build_sb_annotations(
             featured_efforts,
             sim_start,
-            included_seasons,
             best_filter=state.best_filter,
         )
         state._annot_key = _annot_key

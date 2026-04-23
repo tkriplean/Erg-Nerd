@@ -285,15 +285,6 @@ def race_page(
     # Race scope: additionally apply include_filter
     racing_workouts = _include_filtered(state, racing_workouts, state.include_filter)
 
-    # Season color palette
-    wkt_seasons = sorted(
-        {
-            get_season(w.get("date", ""))
-            for w in racing_workouts
-            if get_season(w.get("date", "")) != "Unknown"
-        }
-    )
-
     # PB identification
     pb_id: int | None = None
     if racing_workouts:
@@ -343,7 +334,7 @@ def race_page(
 
     # ── Build races payload ────────────────────────────────────────────────────
     races_data = (
-        build_races_data(sorted_racing_workouts, strokes_by_id, wkt_seasons)
+        build_races_data(sorted_racing_workouts, strokes_by_id)
         if sorted_racing_workouts
         else []
     )

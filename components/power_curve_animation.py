@@ -86,7 +86,6 @@ import hyperdiv as hd
 from services.rowing_utils import (
     RANKED_DISTANCES,
     RANKED_TIMES,
-    SEASON_PALETTE,
     apply_best_only,
     apply_season_best_only,
     compute_duration_s,
@@ -97,6 +96,7 @@ from services.rowing_utils import (
     get_season,
     loglog_fit,
     parse_date,
+    season_color,
     workout_cat_key,
 )
 from services.formatters import fmt_split
@@ -119,11 +119,6 @@ _DIST_LABELS: dict = {d: lbl for d, lbl in RANKED_DISTANCES}
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. Snapshot helpers
 # ═══════════════════════════════════════════════════════════════════════════
-
-
-def _season_hsla(idx: int, lightness_offset: int, alpha: float) -> str:
-    h, s, l = SEASON_PALETTE[idx % len(SEASON_PALETTE)]
-    return f"hsla({h},{s}%,{max(l + lightness_offset, 0)}%,{alpha:.2f})"
 
 
 def ol_event_line(etype, evalue, pace, dist):
@@ -248,7 +243,6 @@ def compute_timeline_snapshot(
 def build_sb_annotations(
     featured_workouts: list,
     sim_start: date,
-    included_seasons: list,
     best_filter: str = "SBs",
 ) -> list:
     """
@@ -259,8 +253,6 @@ def build_sb_annotations(
                         workouts that ever set a new PB or SB at the time
                         performed, sorted newest-first.
     """
-    sorted_seasons = sorted(included_seasons)
-    s_idx = {s: i for i, s in enumerate(sorted_seasons)}
     lbl = "PB" if best_filter == "PBs" else "SB"
     show_season = best_filter != "PBs"
 
@@ -287,7 +279,8 @@ def build_sb_annotations(
             label = f"{mins}min {lbl} — {w.get('distance', 0):,}m"
         if show_season:
             label += f" ({season})"
-        color = _season_hsla(s_idx.get(season, 0), 0, 1.0)
+        color = season_color(season, alpha=1.0)
+
         annotations.append({"day": day, "label": label, "color": color})
 
     return annotations
@@ -428,18 +421,14 @@ def build_keyframes(
     sorted_seasons = sorted(all_seasons)
     season_idx_map = {s: i for i, s in enumerate(sorted_seasons)}
 
-    def _hsla(idx, lightness_offset, alpha):
-        h, s, l = SEASON_PALETTE[idx % len(SEASON_PALETTE)]
-        return f"hsla({h},{s}%,{max(l + lightness_offset, 0)}%,{alpha:.2f})"
-
     season_meta = [
         {
             "label": s,
-            "color": _hsla(i, 0, 0.90),
-            "dim_color": _hsla(i, 0, 0.40),
-            "border_color": _hsla(i, -12, 1.0),
+            "color": season_color(s, alpha=0.90),
+            "dim_color": season_color(s, alpha=0.40),
+            "border_color": season_color(s, lightness_offset=-12, alpha=1.0),
         }
-        for i, s in enumerate(sorted_seasons)
+        for s in sorted_seasons
     ]
 
     # ── X/Y helpers ──────────────────────────────────────────────────────────

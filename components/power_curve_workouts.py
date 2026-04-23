@@ -31,7 +31,6 @@ from dataclasses import dataclass
 from services.rowing_utils import (
     RANKED_DISTANCES,
     RANKED_TIMES,
-    SEASON_PALETTE,
     apply_best_only,
     apply_quality_filters,
     apply_season_best_only,
@@ -41,6 +40,7 @@ from services.rowing_utils import (
     get_season,
     is_rankable_noninterval,
     parse_date,
+    season_color,
     seasons_from,
     workout_cat_key,
 )
@@ -211,18 +211,13 @@ def build_workouts_prop(
 
 
 def build_season_meta(sorted_seasons: list) -> list:
-    """Per-season palette entries aligned with season_idx (oldest=0)."""
-
-    def _hsla(idx: int, lightness_offset: int, alpha: float) -> str:
-        h, s, l = SEASON_PALETTE[idx % len(SEASON_PALETTE)]
-        return f"hsla({h},{s}%,{max(l + lightness_offset, 0)}%,{alpha:.2f})"
-
+    """Per-season palette entries."""
     return [
         {
             "label": s,
-            "color": _hsla(i, 0, 0.90),
-            "dim_color": _hsla(i, 0, 0.40),
-            "border_color": _hsla(i, -12, 1.0),
+            "color": season_color(s, alpha=0.90),
+            "dim_color": season_color(s, alpha=0.40),
+            "border_color": season_color(s, lightness_offset=-12, alpha=1.0),
         }
-        for i, s in enumerate(sorted_seasons)
+        for s in sorted_seasons
     ]

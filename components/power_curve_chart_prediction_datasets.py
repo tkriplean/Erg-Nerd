@@ -9,7 +9,7 @@ power_curve_chart_plugin.js. This module should be able to be eliminated.
 
 This module keeps:
 
-  _season_hsla / _pred_dataset / _with_alpha / wr_scatter_dataset /
+  _pred_dataset / _with_alpha / wr_scatter_dataset /
   wr_pred_datasets / _rowinglevel_datasets / _pauls_law_datasets /
   _loglog_dataset / _cp_datasets / _average_datasets
                            — shared with components/power_curve_animation.py,
@@ -31,7 +31,6 @@ import numpy as np
 
 from services.rowing_utils import (
     RANKED_DIST_VALUES,
-    SEASON_PALETTE,
     PACE_MIN,
     PACE_MAX,
     apply_best_only,
@@ -48,16 +47,6 @@ from services.critical_power_model import (
     critical_power_event_points,
     crossover_point,
 )
-
-
-# ---------------------------------------------------------------------------
-# Season color helpers
-# ---------------------------------------------------------------------------
-
-
-def _season_hsla(idx: int, lightness_offset: int, alpha: float) -> str:
-    h, s, l = SEASON_PALETTE[idx % len(SEASON_PALETTE)]
-    return f"hsla({h},{s}%,{max(l + lightness_offset, 0)}%,{alpha:.2f})"
 
 
 # ---------------------------------------------------------------------------

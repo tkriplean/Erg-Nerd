@@ -7,9 +7,10 @@ no HyperDiv, no external I/O, no matplotlib.
 
 from __future__ import annotations
 
+import colorsys
 import math
 from datetime import date, datetime
-from typing import Optional
+from typing import Iterable, Optional
 
 # ---------------------------------------------------------------------------
 # Ranked event definitions
@@ -64,17 +65,47 @@ INTERVAL_WORKOUT_TYPES = {
     "VariableIntervalUndefinedRest",
 }
 
-# Distinct palette for up to 8 seasons (H, S%, L%).
+# Per-season palette (H, S%, L%). Ordering is tuned so adjacent seasons are
+# maximally distinct — neighbors sit ~130-160° apart on the hue wheel and
+# alternate in lightness. 10 entries raises the cycle point for long histories.
 SEASON_PALETTE = [
-    (217, 85, 55),  # blue
-    (28, 90, 52),  # orange
-    (155, 65, 42),  # teal
-    (280, 62, 58),  # purple
-    (5, 75, 52),  # red
-    (185, 72, 42),  # cyan
-    (45, 88, 48),  # amber
-    (320, 65, 55),  # pink
+    (204.56, 70.62, 41.37),  # blue
+    (28.13, 100, 52.75),  # orange
+    (120, 56.86, 40),  # green
+    (359.66, 69.17, 49.61),  # red
+    (271.4, 39.45, 57.25),  # lavender
+    (10.15, 30.23, 42.16),  # brown
+    (318.33, 65.85, 67.84),  # purple
+    (0, 0, 49.8),  # gray
+    (60.39, 69.51, 43.73),  # yellow-green
+    (185.54, 80, 45.1),  # teal
 ]
+
+
+def season_color(
+    season: str,
+    *,
+    lightness_offset: int = 0,
+    alpha: float = 1.0,
+    fmt: str = "hsla",
+) -> str:
+    """Stable color for a season.
+
+    ``fmt`` is ``"hsla"`` (default) or ``"hex"``. ``lightness_offset`` and
+    ``alpha`` apply to the hsla form; they are ignored for hex.
+    """
+    year = int(season.split("-")[0])
+
+    h, s, l = SEASON_PALETTE[year % len(SEASON_PALETTE)]
+
+    if fmt == "hex":
+        r, g, b = colorsys.hls_to_rgb(h / 360.0, l / 100.0, s / 100.0)
+        return "#{:02x}{:02x}{:02x}".format(
+            round(r * 255), round(g * 255), round(b * 255)
+        )
+    lt = max(l + lightness_offset, 0)
+    return f"hsla({h},{s}%,{lt}%,{alpha:.2f})"
+
 
 # Categories excluded from the log-log power fit (too short / unreliable).
 LOGLOG_EXCLUDED_CATS: frozenset = frozenset({("dist", 100), ("time", 600)})
@@ -132,7 +163,9 @@ def age_on_date(dob: str, on_date: date) -> int:
         bd = date.fromisoformat(dob)
         if on_date < bd:
             return 0
-        return on_date.year - bd.year - ((on_date.month, on_date.day) < (bd.month, bd.day))
+        return (
+            on_date.year - bd.year - ((on_date.month, on_date.day) < (bd.month, bd.day))
+        )
     except (ValueError, TypeError):
         return 0
 

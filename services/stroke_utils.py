@@ -34,19 +34,15 @@ Exported:
         Stroke data is generated at a realistic SPM for the event duration so
         the animation looks natural; the boat always finishes at the exact
         world-record result.
-
-    season_color_hex(season, sorted_seasons) → str
-        Return a CSS hex color for a season, consistent with the SEASON_PALETTE.
 """
 
 from __future__ import annotations
 
-import colorsys
 import math
 from datetime import datetime
 from typing import Optional
 
-from services.rowing_utils import SEASON_PALETTE, compute_pace
+from services.rowing_utils import compute_pace, season_color, get_season
 
 
 # ---------------------------------------------------------------------------
@@ -266,28 +262,6 @@ def fetch_strokes_batch(
 
 
 # ---------------------------------------------------------------------------
-# Season color
-# ---------------------------------------------------------------------------
-
-
-def season_color_hex(season: str, sorted_seasons: list[str]) -> str:
-    """
-    Return a CSS hex color for a season using the SEASON_PALETTE.
-
-    sorted_seasons should be sorted chronologically (which is the same as
-    lexicographic order for the "YYYY-YY" format).
-    """
-    idx = sorted_seasons.index(season) if season in sorted_seasons else 0
-    h, s, l = SEASON_PALETTE[idx % len(SEASON_PALETTE)]
-    # Convert HSL to RGB hex
-    h_frac = h / 360.0
-    s_frac = s / 100.0
-    l_frac = l / 100.0
-    r, g, b = colorsys.hls_to_rgb(h_frac, l_frac, s_frac)
-    return "#{:02x}{:02x}{:02x}".format(round(r * 255), round(g * 255), round(b * 255))
-
-
-# ---------------------------------------------------------------------------
 # World Record synthetic boat
 # ---------------------------------------------------------------------------
 
@@ -400,7 +374,6 @@ def _ensure_finish_point(
 def build_races_data(
     workouts: list[dict],
     strokes_by_id: dict,
-    sorted_seasons: list[str],
 ) -> list[dict]:
     """
     Assemble the races payload for the RaceChart JS plugin.
@@ -411,7 +384,6 @@ def build_races_data(
                    **The order of the returned list mirrors this list exactly.**
                    Sort workouts before calling if lane order matters.
     strokes_by_id  Dict {str(id): [{t, d}]} — complete (no missing IDs).
-    sorted_seasons Seasons sorted chronologically (used for color assignment).
 
     Returns
     -------
@@ -457,8 +429,6 @@ def build_races_data(
         )
     pb_workout_id = pb_wkt.get("id") if pb_wkt else None
 
-    from services.rowing_utils import get_season
-
     boats = []
     for w in workouts:
         wid = w.get("id")
@@ -483,7 +453,7 @@ def build_races_data(
             strokes = _ensure_finish_point(strokes, finish_time_s, finish_dist_m)
 
         season = get_season(w.get("date", ""))
-        color = season_color_hex(season, sorted_seasons)
+        color = season_color(season, fmt="hex")
         label = build_boat_label(w, workouts)
 
         # avg_spm: the piece's recorded average stroke rate (strokes/min).

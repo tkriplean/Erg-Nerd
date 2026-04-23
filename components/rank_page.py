@@ -60,6 +60,7 @@ from services.rowing_utils import (
     is_rankable_noninterval,
     apply_quality_filters,
     SEASON_PALETTE,
+    season_color,
     workout_cat_key,
 )
 from services.formatters import fmt_split, format_time, fmt_distance
@@ -136,9 +137,18 @@ def _fmt_ages(ages: list[int]) -> str:
     return ", ".join(out)
 
 
-def _hsla(idx: int, light_offset: int = 0, alpha: float = 0.9) -> str:
+def _palette_hsla(idx: int, light_offset: int = 0, alpha: float = 0.9) -> str:
+    """Palette slot color for non-season series (PBs, WR pace/watts)."""
     h, s, l = SEASON_PALETTE[idx % len(SEASON_PALETTE)]
     return f"hsla({h},{s}%,{max(l + light_offset, 0)}%,{alpha:.2f})"
+
+
+def _season_color_pair(season: str) -> tuple[str, str]:
+    """(color, border_color) for a season, stable across filter changes."""
+    return (
+        season_color(season, alpha=0.9),
+        season_color(season, lightness_offset=-10, alpha=1.0),
+    )
 
 
 def _weight_kg_from_profile(profile: dict) -> float:
@@ -356,8 +366,8 @@ def _build_series(rows: list[dict], state) -> tuple[list, list]:
         return event_order, [
             {
                 "label": f"Personal Bests · Ages {_fmt_ages(ages)}",
-                "color": _hsla(0, 0, 0.9),
-                "border_color": _hsla(0, -10, 1.0),
+                "color": _palette_hsla(0, 0, 0.9),
+                "border_color": _palette_hsla(0, -10, 1.0),
                 "points": pts,
             }
         ]
@@ -372,7 +382,7 @@ def _build_series(rows: list[dict], state) -> tuple[list, list]:
         season_ages.setdefault(r["season"], []).append(r["age"])
     seasons_sorted = sorted(by_season.keys())
     series = []
-    for idx, s in enumerate(seasons_sorted):
+    for s in seasons_sorted:
         ages = season_ages.get(s, [])
         label = f"{s} · Ages {_fmt_ages(ages)}" if ages else s
         pts = [
@@ -387,11 +397,12 @@ def _build_series(rows: list[dict], state) -> tuple[list, list]:
             }
             for r in by_season[s]
         ]
+        color, border = _season_color_pair(s)
         series.append(
             {
                 "label": label,
-                "color": _hsla(idx, 0, 0.9),
-                "border_color": _hsla(idx, -10, 1.0),
+                "color": color,
+                "border_color": border,
                 "points": pts,
             }
         )
@@ -428,14 +439,14 @@ def _build_wr_series(rows: list[dict], state) -> list:
         return [
             {
                 "label": f"% of WR pace · Ages {_fmt_ages(ages)}",
-                "color": _hsla(0, 0, 0.9),
-                "border_color": _hsla(0, -10, 1.0),
+                "color": _palette_hsla(0, 0, 0.9),
+                "border_color": _palette_hsla(0, -10, 1.0),
                 "points": pts_pace,
             },
             {
                 "label": f"% of WR watts · Ages {_fmt_ages(ages)}",
-                "color": _hsla(1, 0, 0.9),
-                "border_color": _hsla(1, -10, 1.0),
+                "color": _palette_hsla(1, 0, 0.9),
+                "border_color": _palette_hsla(1, -10, 1.0),
                 "points": pts_watts,
             },
         ]
@@ -450,7 +461,7 @@ def _build_wr_series(rows: list[dict], state) -> list:
         season_ages.setdefault(r["season"], []).append(r["age"])
     seasons_sorted = sorted(by_season.keys())
     series = []
-    for idx, s in enumerate(seasons_sorted):
+    for s in seasons_sorted:
         ages = season_ages.get(s, [])
         label = f"{s} · Ages {_fmt_ages(ages)}"
         pts = [
@@ -463,11 +474,12 @@ def _build_wr_series(rows: list[dict], state) -> list:
             }
             for r in by_season[s]
         ]
+        color, border = _season_color_pair(s)
         series.append(
             {
                 "label": label,
-                "color": _hsla(idx, 0, 0.9),
-                "border_color": _hsla(idx, -10, 1.0),
+                "color": color,
+                "border_color": border,
                 "points": pts,
             }
         )
