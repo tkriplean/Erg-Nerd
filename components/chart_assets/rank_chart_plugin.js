@@ -60,13 +60,17 @@ window.hyperdiv.registerPlugin("RankChart", (ctx) => {
           if (x === undefined) return null;
           return { x, y: p.y, tooltip: p.tooltip || "" };
         })
-        .filter(Boolean),
+        .filter(Boolean)
+        .sort((a, b) => a.x - b.x),
       backgroundColor: s.color || "rgba(59,130,246,0.85)",
       borderColor: s.border_color || s.color || "rgba(29,78,216,1.0)",
       borderWidth: 1.5,
       pointRadius: 5,
       pointHoverRadius: 7,
-      showLine: false,
+      showLine: true,
+      tension: 0,
+      fill: false,
+      spanGaps: true,
     }));
   }
 

@@ -16,7 +16,9 @@ import hyperdiv as hd
 from services.formatters import fmt_split, format_time, fmt_distance
 
 
-def _pace_tenths_for(event_kind: str, event_value: int, value_tenths: int) -> Optional[int]:
+def _pace_tenths_for(
+    event_kind: str, event_value: int, value_tenths: int
+) -> Optional[int]:
     """Return pace in tenths-of-a-second per 500m for a ranking entry."""
     if value_tenths is None or value_tenths <= 0:
         return None
@@ -72,7 +74,7 @@ def render_rankings_modal(
         segments = [(0, show_top), (window_lo, window_hi)]
 
     with dialog:
-        with hd.box(gap=0.5, width="min(960px, 92vw)"):
+        with hd.box(gap=0.5, width="92vw"):
             hd.text(
                 f"{total:,} ranked performances",
                 font_color="neutral-500",
@@ -97,11 +99,11 @@ def render_rankings_modal(
 
             with hd.box(
                 max_height="60vh",
-                overflow="auto",
+                # overflow="auto",
                 gap=0,
             ) as scroll_box:
                 prev_hi = 0
-                for (seg_lo, seg_hi) in segments:
+                for seg_lo, seg_hi in segments:
                     if seg_lo > prev_hi:
                         with hd.box(
                             direction="horizontal",

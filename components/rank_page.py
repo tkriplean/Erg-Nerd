@@ -85,6 +85,7 @@ from components.rank_chart_plugin import RankChart
 from components.rank_distribution import distribution_svg
 from components.rank_ranking_modal import render_rankings_modal
 from components.shared_ui import global_filter_ui, header_dropdown
+from components.workout_table import WorkoutTable, ColumnDef
 
 from services.volume_bins import swatch_svg
 
@@ -157,6 +158,15 @@ def _weight_kg_from_profile(profile: dict) -> float:
     return w * 0.453592 if unit == "lbs" else w
 
 
+def _rankings_weight_class(wr_class: str | None) -> str | None:
+    """Translate WR-API weight class (Hwt/Lwt/None) to C2 rankings style (H/L/None)."""
+    if wr_class == "Hwt":
+        return "H"
+    if wr_class == "Lwt":
+        return "L"
+    return None
+
+
 def _qualifying_performances(
     raw_workouts: list, *, machine: str, excluded_seasons: tuple, best_filter: str
 ) -> list:
@@ -204,7 +214,8 @@ def _build_rows(
         age = age_on_date(dob, d) if dob else age_from_dob(dob)
         if age <= 0:
             continue
-        w_class = weight_class_str(weight_kg, gender_api, age)
+        w_class_wr = weight_class_str(weight_kg, gender_api, age)
+        w_class = _rankings_weight_class(w_class_wr)
         # Convert the workout's performance into value_tenths matching the
         # index schema.
         if etype == "dist":
@@ -215,6 +226,7 @@ def _build_rows(
             continue
 
         ev_key = _event_key(etype, evalue)
+        row_id = f"{ev_key}|{w.get('id') or w.get('date', '')}"
         entries = indices_cache.get(ev_key)
         if entries is None:
             try:
@@ -227,6 +239,7 @@ def _build_rows(
         watts = compute_watts(pace) if pace else None
 
         row = {
+            "id": row_id,
             "workout": w,
             "event_kind": etype,
             "event_value": evalue,
@@ -595,122 +608,216 @@ def rank_page(
         _render_table(rows, state)
 
 
+_EVENT_ORDER_IDX = {_event_key(et, ev): i for i, (et, ev, _) in enumerate(_EVENT_ORDER)}
+
+
+def _render_result_cell(r: dict) -> None:
+    vt = r.get("value_tenths") or 0
+    txt = format_time(vt) if r["event_kind"] == "dist" else fmt_distance(vt)
+    hd.text(txt, font_size="small")
+
+
+def _render_rank_cell(r: dict) -> None:
+    if not r.get("rank_total"):
+        hd.text("—", font_size="small", font_color="neutral-400")
+        return
+    btn = hd.button(
+        f"{r['rank']:,} of {r['rank_total']:,}",
+        size="small",
+        variant="text",
+        font_size="small",
+    )
+    dlg = hd.dialog(
+        f"{r['event_label']} · Age {r['age']}"
+        f" · {r['gender']} {r['weight_class'] or ''}"
+    )
+    if btn.clicked:
+        dlg.opened = True
+    if dlg.opened:
+        render_rankings_modal(
+            dlg,
+            pool=r["pool"],
+            event_kind=r["event_kind"],
+            event_value=r["event_value"],
+            user_rank=r["rank"],
+            user_value_tenths=r["value_tenths"],
+            user_row_label=f"You — {r['date_label']}",
+            user_age=r["age"],
+            user_date_label=r["date_label"],
+        )
+
+
+def _render_distribution_cell(r: dict) -> None:
+    if r.get("hist_counts") and r.get("watts"):
+        uri = distribution_svg(
+            r["hist_counts"],
+            float(r["watts"]),
+            r["hist_min"],
+            r["hist_max"],
+            is_dark=hd.theme().is_dark,
+        )
+        hd.image(src=uri, width="140px", height="32px")
+    else:
+        hd.text("—", font_size="small", font_color="neutral-400")
+
+
+def _columns_for(focus: str) -> list[ColumnDef]:
+    col_event = ColumnDef(
+        key="event",
+        header="Event",
+        width="7rem",
+        render_value=lambda r: r["event_label"],
+        sort_value=lambda r: _EVENT_ORDER_IDX.get(r["event_key"], 99),
+        default_asc=True,
+    )
+    col_date = ColumnDef(
+        key="date",
+        header="Date",
+        width="9rem",
+        render_value=lambda r: r["date_label"],
+        sort_value=lambda r: r["date_iso"],
+    )
+    col_age = ColumnDef(
+        key="age",
+        header="Age",
+        width="4rem",
+        render_value=lambda r: str(r["age"]),
+        sort_value=lambda r: r["age"],
+    )
+    col_age_group = ColumnDef(
+        key="age_group",
+        header="Age Group",
+        width="6rem",
+        render_value=lambda r: r["age_band_rankings"],
+        sort_value=lambda r: r["age_band_rankings"],
+    )
+    col_result = ColumnDef(
+        key="result",
+        header="Result",
+        width="7rem",
+        render_cell=_render_result_cell,
+        sort_value=lambda r: r["value_tenths"] or 0,
+        align="end",
+    )
+    col_pace = ColumnDef(
+        key="pace",
+        header="Pace",
+        width="6rem",
+        render_value=lambda r: (
+            fmt_split(r["pace_tenths"]) if r.get("pace_tenths") else "—"
+        ),
+        sort_value=lambda r: r.get("pace_tenths") or float("inf"),
+        default_asc=True,
+    )
+    col_watts = ColumnDef(
+        key="watts",
+        header="Watts",
+        width="5rem",
+        render_value=lambda r: f"{r['watts']:.0f}" if r.get("watts") else "—",
+        sort_value=lambda r: r.get("watts") or 0,
+    )
+
+    if focus == "world_record":
+        col_pct_pace = ColumnDef(
+            key="wr_pct_pace",
+            header="% WR Pace",
+            width="6rem",
+            render_value=lambda r: (
+                f"{r['wr_pct_pace']:.1f}%" if "wr_pct_pace" in r else "—"
+            ),
+            sort_value=lambda r: r.get("wr_pct_pace") or 0,
+        )
+        col_pct_watts = ColumnDef(
+            key="wr_pct_watts",
+            header="% WR Watts",
+            width="6rem",
+            render_value=lambda r: (
+                f"{r['wr_pct_watts']:.1f}%" if "wr_pct_watts" in r else "—"
+            ),
+            sort_value=lambda r: r.get("wr_pct_watts") or 0,
+        )
+        col_wr_pace = ColumnDef(
+            key="wr_pace",
+            header="WR Pace",
+            width="6rem",
+            render_value=lambda r: (
+                fmt_split(int(round(r["wr_pace"] * 10))) if r.get("wr_pace") else "—"
+            ),
+            sort_value=lambda r: r.get("wr_pace") or float("inf"),
+            default_asc=True,
+        )
+        return [
+            col_event,
+            col_date,
+            col_age,
+            col_result,
+            col_pace,
+            col_watts,
+            col_pct_pace,
+            col_pct_watts,
+            col_wr_pace,
+        ]
+
+    col_rank = ColumnDef(
+        key="rank",
+        header="Rank",
+        width="9rem",
+        render_cell=_render_rank_cell,
+        sort_value=lambda r: r.get("rank") or 10**9,
+        default_asc=True,
+    )
+    col_pct = ColumnDef(
+        key="percentile",
+        header="%ile",
+        width="5rem",
+        render_value=lambda r: (
+            f"{r['percentile']:.1f}" if r.get("rank_total") else "—"
+        ),
+        sort_value=lambda r: r.get("percentile") or 0,
+    )
+    col_dist = ColumnDef(
+        key="distribution",
+        header="Distribution",
+        width="10rem",
+        render_cell=_render_distribution_cell,
+        sortable=False,
+    )
+
+    if focus == "c2_age_group":
+        return [
+            col_event,
+            col_date,
+            col_age,
+            col_age_group,
+            col_result,
+            col_pace,
+            col_watts,
+            col_rank,
+            col_pct,
+            col_dist,
+        ]
+    return [
+        col_event,
+        col_date,
+        col_age,
+        col_result,
+        col_pace,
+        col_watts,
+        col_rank,
+        col_pct,
+        col_dist,
+    ]
+
+
 def _render_table(rows: list[dict], state) -> None:
     if not rows:
         return
-    focus = state.ranking_focus
-
-    # Header
-    with hd.box(
-        direction="horizontal",
-        padding=0.3,
-        background_color="neutral-50",
-        font_weight="bold",
-        font_size="small",
-        width="100%",
-    ):
-        hd.text("Event", width="6rem")
-        hd.text("Date", width="8rem")
-        hd.text("Age", width="3rem")
-        if focus == "c2_age_group":
-            hd.text("Age Group", width="6rem")
-        hd.text("Result", width="7rem")
-        hd.text("Pace", width="6rem")
-        hd.text("Watts", width="5rem")
-        if focus == "world_record":
-            hd.text("% WR Pace", width="6rem")
-            hd.text("% WR Watts", width="6rem")
-            hd.text("WR Pace", width="6rem")
-        else:
-            hd.text("Rank", width="9rem")
-            hd.text("%ile", width="5rem")
-            hd.text("Distribution", width="10rem")
-
-    # Sort rows by event_order then date.
-    order_idx = {_event_key(et, ev): i for i, (et, ev, _) in enumerate(_EVENT_ORDER)}
-    rows_sorted = sorted(
-        rows, key=lambda r: (order_idx.get(r["event_key"], 99), r["date_iso"])
-    )
-
-    for i, r in enumerate(rows_sorted):
-        with hd.scope(f"row_{i}"):
-            _render_row(r, state, focus)
-
-
-def _render_row(r: dict, state, focus: str) -> None:
-    etype = r["event_kind"]
-    evalue = r["event_value"]
-    value_tenths = r["value_tenths"]
-    result = (
-        format_time(value_tenths) if etype == "dist" else fmt_distance(value_tenths)
-    )
-    pace = fmt_split(r.get("pace_tenths")) if r.get("pace_tenths") else "—"
-    watts = f"{r['watts']:.0f}" if r.get("watts") else "—"
-
-    with hd.box(
-        direction="horizontal",
-        padding=0.3,
-        font_size="small",
-        width="100%",
-        border_bottom="1px solid neutral-100",
-    ):
-        hd.text(r["event_label"], width="6rem")
-        hd.text(r["date_label"], width="8rem")
-        hd.text(str(r["age"]), width="3rem")
-        if focus == "c2_age_group":
-            hd.text(r["age_band_rankings"], width="6rem")
-        hd.text(result, width="7rem")
-        hd.text(pace, width="6rem")
-        hd.text(watts, width="5rem")
-
-        if focus == "world_record":
-            p_pace = f"{r['wr_pct_pace']:.1f}%" if "wr_pct_pace" in r else "—"
-            p_watts = f"{r['wr_pct_watts']:.1f}%" if "wr_pct_watts" in r else "—"
-            wr_pace_disp = (
-                fmt_split(int(round(r["wr_pace"] * 10))) if r.get("wr_pace") else "—"
-            )
-            hd.text(p_pace, width="6rem")
-            hd.text(p_watts, width="6rem")
-            hd.text(wr_pace_disp, width="6rem")
-        else:
-            if r.get("rank_total"):
-                with hd.box(width="9rem"):
-                    btn = hd.button(
-                        f"{r['rank']:,} of {r['rank_total']:,}",
-                        size="small",
-                        variant="text",
-                        font_size="small",
-                    )
-                    dlg = hd.dialog(
-                        f"{r['event_label']} · Age {r['age']} "
-                        f"· {r['gender']} {r['weight_class'] or ''}"
-                    )
-                    if btn.clicked:
-                        dlg.opened = True
-                    if dlg.opened:
-                        render_rankings_modal(
-                            dlg,
-                            pool=r["pool"],
-                            event_kind=etype,
-                            event_value=evalue,
-                            user_rank=r["rank"],
-                            user_value_tenths=value_tenths,
-                            user_row_label=f"You — {r['date_label']}",
-                            user_age=r["age"],
-                            user_date_label=r["date_label"],
-                        )
-            else:
-                hd.text("—", width="9rem")
-            pct_txt = f"{r['percentile']:.1f}" if r.get("rank_total") else "—"
-            hd.text(pct_txt, width="5rem")
-            if r.get("hist_counts") and r.get("watts"):
-                uri = distribution_svg(
-                    r["hist_counts"],
-                    float(r["watts"]),
-                    r["hist_min"],
-                    r["hist_max"],
-                    is_dark=hd.theme().is_dark,
-                )
-                hd.image(src=uri, width=140, height=32)
-            else:
-                hd.text("—", width="10rem")
+    columns = _columns_for(state.ranking_focus)
+    scope_key = f"rank_tbl_{state.ranking_focus}_{state.include_filter}"
+    with hd.scope(scope_key):
+        WorkoutTable(
+            rows,
+            columns,
+            default_sort_col="event",
+            default_sort_asc=True,
+        )
