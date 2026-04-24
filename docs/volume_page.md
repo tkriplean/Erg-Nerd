@@ -2,7 +2,11 @@
 
 ## Overview
 
-The Volume tab provides a stacked bar chart of training meters broken down by physiological intensity zone, with a distribution data table beneath it. It supports two zone modes — **Pace Intensity** and **HR** — that share the same chart widget, aggregation layer, and table structure but differ in how meters are classified.
+The Volume tab provides a stacked bar chart of training meters broken down by physiological intensity zone, with a distribution data table beneath it. It supports two zone modes — **Power Intensity** and **HR** — that share the same chart widget, aggregation layer, and table structure but differ in how meters are classified.
+
+### Time-aware fitness reference
+
+Power Intensity uses a **time-indexed** fitness reference: each workout is classified against the rower's reference watts **on that workout's own date**, not today's snapshot. A 2010 row is graded against 2010 fitness, so the intensity distribution stays meaningful even over a 20-year history. The quarterly index is built once per unique workout-set (first render shows a progress bar), persisted to `localStorage` under `reference_watts_v1`, and interpolated at render time. See `services/reference_watts.py` for the predictor cascade (CP fit → Paul's Law regression → default k=5.0 → merge with actual PBs) and `components/reference_watts_loader.py` for the loader.
 
 ### Files Involved
 
@@ -12,10 +16,12 @@ The Volume tab provides a stacked bar chart of training meters broken down by ph
 | `components/volume_chart_builder.py` | Pure chart config builder and table row generator |
 | `components/volume_chart_plugin.py` | HyperDiv plugin wrapper for `VolumeChart` (Chart.js) |
 | `components/rowing_chart_assets/volume_chart.js` | JS plugin: Y-axis formatter, Chart.js tooltips |
-| `services/volume_bins.py` | Pace-zone binning, thresholds, aggregation (`aggregate_workouts`) |
+| `components/reference_watts_loader.py` | localStorage + progress-bar shell around the reference-watts service |
+| `services/reference_watts.py` | Quarterly index of reference watts at every ranked event |
+| `services/volume_bins.py` | Watts-based zone binning, thresholds, aggregation (`aggregate_workouts`) |
 | `services/heartrate_utils.py` | HR validation, max HR resolution, zone classification, HR binning |
 
-For chart design and pace zone definitions see `docs/volume_chart.md`.
+For chart design and power zone definitions see `docs/volume_chart.md`.
 For HR data handling details see `docs/heartrate.md`.
 
 ---
@@ -28,8 +34,8 @@ All controls live in a single `hd.hbox` row at the bottom of `_volume_section()`
 ### View (Weekly / Monthly / Seasonal)
 `hd.radio_buttons("Weekly", "Monthly", "Seasonal")` backed by `state.view` (lowercase). Determines which bucket from `aggregate_workouts()` output is used (`weeks` / `months` / `seasons`).
 
-### Zone Mode (Pace Intensity / HR)
-`hd.radio_buttons("Pace Intensity", "HR Intensity")` backed by `state.zone_mode` (`"pace_intensity"` or `"hr"`). Switches between pace-zone binning and HR-zone binning. See the _Aggregation Paths_ section below.
+### Zone Mode (Power Intensity / HR)
+`hd.radio_buttons("Power Intensity", "HR Intensity")` backed by `state.zone_mode` (`"power_intensity"` or `"hr"`). Switches between watts-based zone binning and HR-zone binning. See the _Aggregation Paths_ section below.
 
 **Note:** Season and machine filtering are applied globally (passed in from `app.py`). The volume page itself does not render a scope or machine dropdown — those controls live in the nav bar.
 
@@ -39,8 +45,8 @@ All controls live in a single `hd.hbox` row at the bottom of `_volume_section()`
 
 ```python
 state = hd.state(
-    view="monthly",            # "weekly" | "monthly" | "seasonal"
-    zone_mode="pace_intensity", # "pace_intensity" | "hr"
+    view="monthly",             # "weekly" | "monthly" | "seasonal"
+    zone_mode="power_intensity", # "power_intensity" | "hr"
 )
 ```
 
@@ -83,15 +89,30 @@ The Save button writes directly to `hd.local_storage.set_item("profile", ...)`, 
 
 ## Aggregation Paths
 
-### Pace Intensity mode
+### Power Intensity mode
 
 ```python
-ref_sbs = get_reference_sbs(all_workouts)
-thresholds = compute_bin_thresholds(ref_sbs, all_workouts)
-aggregated = aggregate_workouts(all_workouts, thresholds, machine_filter)
+# Block on the reference-watts loader; first-time build shows a progress bar.
+if not reference_watts_loader(all_workouts):
+    return
+
+# Per-workout, time-aware thresholds.  Cached by date within this render.
+th_cache = {}
+def _thresholds_for(w):
+    d = parse_date(w.get("date", ""))
+    if d not in th_cache:
+        ref = get_reference_watts(d, all_workouts)
+        th_cache[d] = compute_bin_thresholds(ref)
+    return th_cache[d]
+
+aggregated = aggregate_workouts(
+    all_workouts,
+    machine_filter=machine_filter,
+    bin_fn=lambda w: workout_bin_meters(w, _thresholds_for(w)),
+)
 ```
 
-`aggregate_workouts` uses `workout_bin_meters(w, thresholds)` by default to classify each workout.
+`aggregate_workouts`'s `bin_fn` seam lets the classifier run against a fresh thresholds dict per row — the boundary at which the time-aware reference enters the pipeline.
 
 ### HR mode
 
@@ -103,13 +124,13 @@ aggregated = aggregate_workouts(
 )
 ```
 
-`bin_fn` replaces the default pace binning call. No `thresholds` are needed. The 7-bin shape is identical so the rest of the pipeline is unchanged.
+`bin_fn` replaces the default watts binning call. No `thresholds` are needed. The 7-bin shape is identical so the rest of the pipeline is unchanged.
 
 ---
 
 ## Chart
 
-`build_volume_chart_config(aggregated, ...)` in `components/volume_chart_builder.py` returns a Chart.js config dict. In HR mode, `bin_names`, `bin_colors`, and `draw_order` are overridden with their HR equivalents from `heartrate_utils.py`; in pace mode the defaults apply.
+`build_volume_chart_config(aggregated, ...)` in `components/volume_chart_builder.py` returns a Chart.js config dict. In HR mode, `bin_names`, `bin_colors`, and `draw_order` are overridden with their HR equivalents from `heartrate_utils.py`; in power mode the defaults apply.
 
 The chart is rendered at `height="42vh"` in an `hd.box`. If `chart_config` is empty (no data), a "Not enough data" message is shown instead.
 
@@ -119,7 +140,7 @@ The chart is rendered at `height="42vh"` in an `hd.box`. If `chart_config` is em
 
 `get_period_rows(aggregated, view, scope, ...)` returns one row per time period. `_distribution_table(rows, view, zone_mode)` renders it with a custom CSS Grid table.
 
-### Column layout — Pace Intensity mode
+### Column layout — Power Intensity mode
 
 | Column | Contents |
 |---|---|
@@ -142,7 +163,7 @@ The chart is rendered at `height="42vh"` in an `hd.box`. If `chart_config` is em
 | Tempo (70–80%) | Z3 Tempo meters + % |
 | Threshold (80–90%) | Z4 Threshold meters + % |
 | Max (90%+) | Z5 Max meters + % |
-| Distribution | Classification label (same thresholds as pace; "—" if < 500 HR-classified meters) |
+| Distribution | Classification label (same thresholds as power; "—" if < 500 HR-classified meters) |
 
 HR mode adds a fourth intensity column (splitting "Hard" into Threshold and Max) and always includes Distribution. The distribution classification excludes "No HR" meters (bin 6) from the work denominator — see `docs/heartrate.md` for details.
 
@@ -158,7 +179,7 @@ volume_page()
   └── concept2_sync(client, user_id)   # load/sync workouts
         └── _volume_section(all_workouts, profile, machine)
               ├── max_hr = resolve_max_hr()   # computed before chart
-              ├── aggregate_workouts(bin_fn=…) # pace or HR path
+              ├── aggregate_workouts(bin_fn=…) # power or HR path
               ├── build_volume_chart_config()  # Chart.js config dict
               ├── VolumeChart(config=…)        # renders chart
               ├── controls row                 # view + zone mode toggles

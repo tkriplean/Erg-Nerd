@@ -47,7 +47,7 @@ Grid placement rules:
 Legends & filters
 -----------------
 Two labelled legend rows below the info panel:
-  • "Pace Intensity" — 6 chips (Fast · 2k · 5k · Threshold · Fast Aero · Slow Aero)
+  • "Power Intensity" — 6 chips (Fast · 2k · 5k · Threshold · Fast Aero · Slow Aero)
   • "HR Intensity"  — 5 chips (Z5 Max · Z4 Threshold · Z3 Tempo · Z2 Aerobic · Z1 Recovery)
 
 Both legends are **disjunctive (OR)** within themselves: selecting two chips
@@ -64,21 +64,28 @@ WorkoutTable (CSS Grid) with interval-specific ColumnDef objects.
 Sortable headers (▲/▼), default sort: date descending.
 
 Columns: Date · Reps · Structure (rep-stripped) · Stimulus ·
-         Pace Intensity (score + bar) · HR Intensity (score + bar) ·
+         Power Intensity (score + bar) · HR Intensity (score + bar) ·
          Quality (Low/Medium/High pill) ·
          Work dist · Avg Split · Time · SPM · ↗
 
-The Pace/HR Intensity columns each show a 0–100 weighted-average score
+The Power/HR Intensity columns each show a 0–100 weighted-average score
 above a small stacked zone bar; hovering either cell opens a rich
 content-slot tooltip with per-zone swatch + name + percentage.  Weights
-come from services (PACE_INTENSITY_WEIGHTS / HR_INTENSITY_WEIGHTS).  Sort
+come from services (POWER_INTENSITY_WEIGHTS / HR_INTENSITY_WEIGHTS).  Sort
 is descending by score; workouts with no meaningful meters (or no HR)
 render as "—" and sort last.
 
+Time-aware thresholds: each row's Power Intensity score is computed
+against the rower's reference watts **on that row's own date** (via
+services/reference_watts.py), so a 2010 session is graded against 2010
+fitness, not today's.  The Quality column's expected_score comes from a
+fixed rubric in ``_STIMULUS_INFO`` — it is deliberately anchored to
+"today" because the grid is a "what should I be hitting now" view.
+
 The Quality column compares each workout against its cell's own
 ``expected_score`` and ``expected_work_s`` in ``_STIMULUS_INFO``.
-**Low** = pace score below expected (session wasn't hard enough).
-**Medium** = pace score meets/exceeds expected but total work time is
+**Low** = power score below expected (session wasn't hard enough).
+**Medium** = power score meets/exceeds expected but total work time is
 below the cell's dose target.  **High** = both meet/exceed.  Cells
 classified as "Other" (uncommon combinations) show "—".  The cell shows
 a small coloured pill whose tooltip explains the grade with the
@@ -95,25 +102,26 @@ import statistics
 
 import hyperdiv as hd
 
-from services.rowing_utils import INTERVAL_WORKOUT_TYPES, get_season
+from services.rowing_utils import INTERVAL_WORKOUT_TYPES, get_season, parse_date
 from components.concept2_sync import sync_from_context
+from components.reference_watts_loader import reference_watts_loader
 from components.view_context import your
 from services.interval_utils import (
     avg_workpace_tenths,
     avg_work_spm,
     interval_structure_key,
 )
+from services.reference_watts import get_reference_watts
 from services.volume_bins import (
     BIN_NAMES,
     BIN_COLORS,
     Z3_BINS,
-    PACE_ZONE_DEFINITION_TEXT,
-    PACE_ZONE_FILTER_TEXT,
-    get_reference_sbs,
+    POWER_ZONE_DEFINITION_TEXT,
+    POWER_ZONE_FILTER_TEXT,
     compute_bin_thresholds,
     workout_bin_meters,
-    pace_intensity_score,
-    pace_bin_passes,
+    power_intensity_score,
+    power_bin_passes,
     bin_bar_svg,
     swatch_svg,
 )
@@ -257,18 +265,21 @@ def _always_white(is_dark: bool) -> str:
 # Each session is rated Low / Medium / High against the row's quality
 # expectations.  The rule is intentionally lenient:
 #
-#   • Low     — pace intensity is below the row's expected intensity.
+#   • Low     — power intensity is below the row's expected intensity.
 #               (The session wasn't actually hard enough to count as quality
 #                at this work:rest ratio, regardless of volume.)
-#   • Medium  — pace intensity ≥ expected, but total work time is below
+#   • Medium  — power intensity ≥ expected, but total work time is below
 #               the row's expected dose.  (Right intensity, short dose.)
-#   • High    — pace intensity ≥ expected AND total work time ≥ expected.
+#   • High    — power intensity ≥ expected AND total work time ≥ expected.
 #
-# Sessions with no meaningful meters (score is None) return None.
+# The row's score uses the workout's own-date thresholds (time-aware);
+# expected_score comes from a fixed rubric anchored to "today".  The
+# asymmetry is intentional — the grid is a "what should I be hitting now"
+# view.  Sessions with no meaningful meters (score is None) return None.
 
 
 def _compute_quality(r: dict) -> str | None:
-    score = r.get("_pace_score")
+    score = r.get("_power_score")
     if score is None:
         return None
     row = r.get("_grid_row")
@@ -711,19 +722,23 @@ def _compute_grid_placement(r: dict) -> tuple[int, int]:
 
 def _enrich_workouts(
     workouts: list[dict],
-    thresholds,
+    thresholds_for,
     max_hr: int | None,
 ) -> list[dict]:
     """
     Filter to interval workout types (excluding single-rep sessions) and
     attach computed fields used by the grid, info panel, and table.
 
+    ``thresholds_for(workout) -> dict | None`` resolves a workout to its
+    own-date power thresholds — time-aware, so a 2010 row is classified
+    against 2010 fitness (see services/reference_watts.py).
+
     Fields attached:
 
-      _bin_meters       list[float]    Per-pace-bin meter counts (index 0 = Rest)
-      _bar_uri          str            Data-URI SVG stacked pace-zone bar
+      _bin_meters       list[float]    Per-power-bin meter counts (index 0 = Rest)
+      _bar_uri          str            Data-URI SVG stacked power-zone bar
       _z3               float          Fraction of work meters in Z3 (grid colour)
-      _pace_score       float | None   0–100 weighted pace intensity
+      _power_score      float | None   0–100 weighted power intensity
       _hr_bin_meters    list[float] | None  Per-HR-bin meter counts, or None
                                          when max_hr is unknown
       _hr_bar_uri       str | None     Data-URI SVG stacked HR-zone bar, or None
@@ -753,13 +768,13 @@ def _enrich_workouts(
 
         r = dict(r)  # shallow copy
 
-        bm = workout_bin_meters(r, thresholds)
+        bm = workout_bin_meters(r, thresholds_for(r))
         work_total = sum(bm[1:])
 
         r["_bin_meters"] = bm
         r["_bar_uri"] = bin_bar_svg(bm)
         r["_z3"] = sum(bm[i] for i in Z3_BINS) / work_total if work_total else 0.0
-        r["_pace_score"] = pace_intensity_score(bm)
+        r["_power_score"] = power_intensity_score(bm)
 
         if max_hr:
             hrm = workout_hr_meters(r, max_hr)
@@ -808,7 +823,7 @@ def _filter_disjunctive(
     Empty selection → pass through unchanged.
 
     passes_fn(bin_meters, bin_idx) → bool is the services-layer threshold
-    test (pace_bin_passes / hr_bin_passes).  Workouts with meters_key == None
+    test (power_bin_passes / hr_bin_passes).  Workouts with meters_key == None
     (no HR data) never match any HR bin and are dropped from a non-empty HR
     selection.
     """
@@ -933,7 +948,7 @@ def _intensity_chip(
 
 def _zone_filter_legends(state, max_hr: int | None) -> None:
     """
-    Two stacked labelled legends: Pace Intensity (always) + HR Intensity
+    Two stacked labelled legends: Power Intensity (always) + HR Intensity
     (only when max_hr is resolvable).  Both combine **disjunctively** within
     themselves — selecting two chips shows workouts touching EITHER zone.
 
@@ -943,7 +958,7 @@ def _zone_filter_legends(state, max_hr: int | None) -> None:
     """
     is_dark = hd.theme().is_dark
 
-    # ── Pace Intensity legend ───────────────────────────────────────────
+    # ── Power Intensity legend ──────────────────────────────────────────
     active_bins: set[int] = set(state.active_bins)
     with hd.box(gap=0.3):
         with hd.hbox(
@@ -954,21 +969,21 @@ def _zone_filter_legends(state, max_hr: int | None) -> None:
             justify="center",
         ):
             hd.text(
-                "Pace Intensity",
+                "Power Intensity",
                 font_size="small",
                 font_weight="bold",
                 font_color="neutral-600",
                 min_width=7,
             )
             for i, name in enumerate(BIN_NAMES[1:], start=1):
-                with hd.scope(f"pace_{name}"):
+                with hd.scope(f"power_{name}"):
                     color_str = BIN_COLORS[i][0 if is_dark else 1]
                     clicked = _intensity_chip(
                         name=name,
                         color_str=color_str,
                         is_active=i in active_bins,
-                        definition=PACE_ZONE_DEFINITION_TEXT.get(i, ""),
-                        filter_rule=PACE_ZONE_FILTER_TEXT.get(i, ""),
+                        definition=POWER_ZONE_DEFINITION_TEXT.get(i, ""),
+                        filter_rule=POWER_ZONE_FILTER_TEXT.get(i, ""),
                     )
                     if clicked:
                         sel = set(state.active_bins)
@@ -1237,7 +1252,7 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Intensity column rendering (Pace + HR)
+# Intensity column rendering (Power + HR)
 # ---------------------------------------------------------------------------
 
 
@@ -1252,7 +1267,7 @@ def _render_intensity_cell(
     skip_indices: tuple[int, ...] = (0,),
 ) -> None:
     """
-    Shared cell renderer for the Pace Intensity and HR Intensity columns.
+    Shared cell renderer for the Power Intensity and HR Intensity columns.
 
     Layout: score (bold) on top, a small stacked zone bar (half-width)
     underneath, and a rich content-slot tooltip listing each non-empty zone
@@ -1332,9 +1347,24 @@ def intervals_page(ctx, global_state, excluded_seasons=(), machine="All") -> Non
     profile = get_profile_from_context(ctx) or {}
     max_hr, _max_hr_estimated = resolve_max_hr(profile, all_workouts)
 
-    ref_sbs = get_reference_sbs(all_workouts)
-    thresholds = compute_bin_thresholds(ref_sbs, all_workouts)
-    all_intervals = _enrich_workouts(all_workouts, thresholds, max_hr)
+    # Time-aware thresholds: block on the reference-watts loader so the
+    # first-time index build shows a progress bar rather than spawning a
+    # synchronous build inside _enrich_workouts.
+    if not reference_watts_loader(all_workouts):
+        return
+
+    # Cache per-date so we don't recompute thresholds when many workouts
+    # share a date.
+    th_cache: dict = {}
+
+    def _thresholds_for(w):
+        d = parse_date(w.get("date", ""))
+        if d not in th_cache:
+            ref = get_reference_watts(d, all_workouts)
+            th_cache[d] = compute_bin_thresholds(ref)
+        return th_cache[d]
+
+    all_intervals = _enrich_workouts(all_workouts, _thresholds_for, max_hr)
 
     if not all_intervals:
         with hd.box(padding=4, align="center"):
@@ -1371,9 +1401,9 @@ def intervals_page(ctx, global_state, excluded_seasons=(), machine="All") -> Non
                 s, font_size="x-small", font_color="neutral-500", font_style="italic"
             )
 
-    def _render_pace_intensity_cell(w):
+    def _render_power_intensity_cell(w):
         _render_intensity_cell(
-            score=w.get("_pace_score"),
+            score=w.get("_power_score"),
             bar_uri=w.get("_bar_uri"),
             bin_meters=w.get("_bin_meters"),
             zone_names=BIN_NAMES,
@@ -1408,18 +1438,18 @@ def intervals_page(ctx, global_state, excluded_seasons=(), machine="All") -> Non
         expected_score = (info or {}).get("expected_score", 0)
         expected_work_s = (info or {}).get("expected_work_s", 0)
         stim_name = (info or {}).get("name", "this stimulus")
-        score = w.get("_pace_score")
+        score = w.get("_power_score")
         work_s = (w.get("time") or 0) / 10.0
         style = _QUALITY_STYLE[q]
         if q == "Low":
             explanation = (
-                f"Pace intensity {score:.0f} is below the ~{expected_score:.0f} "
+                f"Power intensity {score:.0f} is below the ~{expected_score:.0f} "
                 f"expected of a {stim_name} session — the session wasn't hard "
                 f"enough to count as a quality dose."
             )
         elif q == "Medium":
             explanation = (
-                f"Pace intensity {score:.0f} meets or exceeds the ~"
+                f"Power intensity {score:.0f} meets or exceeds the ~"
                 f"{expected_score:.0f} expected for {stim_name}, but total "
                 f"work time ({format_time(int(work_s * 10))}) is below the "
                 f"~{format_time(expected_work_s * 10)} dose typical of a full "
@@ -1427,7 +1457,7 @@ def intervals_page(ctx, global_state, excluded_seasons=(), machine="All") -> Non
             )
         else:  # High
             explanation = (
-                f"Pace intensity {score:.0f} meets or exceeds the ~"
+                f"Power intensity {score:.0f} meets or exceeds the ~"
                 f"{expected_score:.0f} expected for {stim_name}, and total "
                 f"work time ({format_time(int(work_s * 10))}) clears the "
                 f"~{format_time(expected_work_s * 10)} dose expected of a full "
@@ -1485,12 +1515,12 @@ def intervals_page(ctx, global_state, excluded_seasons=(), machine="All") -> Non
             sortable=False,
         ),
         ColumnDef(
-            "pace_intensity",
-            "Pace Intensity",
+            "power_intensity",
+            "Power Intensity",
             "8rem",
-            render_cell=_render_pace_intensity_cell,
-            sort_value=lambda w: w.get("_pace_score")
-            if w.get("_pace_score") is not None
+            render_cell=_render_power_intensity_cell,
+            sort_value=lambda w: w.get("_power_score")
+            if w.get("_power_score") is not None
             else -1.0,
         ),
         ColumnDef(
@@ -1557,7 +1587,7 @@ def intervals_page(ctx, global_state, excluded_seasons=(), machine="All") -> Non
             pre_filtered = _filter_disjunctive(
                 all_intervals,
                 set(state.active_bins),
-                pace_bin_passes,
+                power_bin_passes,
                 "_bin_meters",
             )
             pre_filtered = _filter_disjunctive(

@@ -1,9 +1,15 @@
 """
-Volume aggregation and pace-zone binning for the Sessions chart.
+Volume aggregation and power-zone binning for the Sessions chart.
 
-Pace zones are defined relative to "reference SBs" — the best performance
-at key distances/times within ±365 days of today, with log-log power-law
-fallback for events without recent data.
+Power zones are defined in watts, against a **time-aware** fitness reference:
+for each workout we look up the rower's reference watts at that workout's date
+(via :mod:`services.reference_watts`), then classify each meter into one of
+six physiological zones (1–6) plus a Rest bin (0) for interval rest distance.
+
+The classification is in watts, not pace — watts is the physiologically
+correct unit of intensity and is directly comparable across events (1k, 2k,
+60min live on the same axis, unlike their paces).  Higher watts ⇒ more
+intense ⇒ lower bin index among 1–6.
 
 Exported:
     BIN_NAMES                   — ordered list of bin display names (index 0 = Rest)
@@ -12,17 +18,18 @@ Exported:
     Z1_BINS                     — frozenset of bin indices for easy zone (5, 6)
     Z2_BINS                     — frozenset of bin indices for threshold zone (4)
     Z3_BINS                     — frozenset of bin indices for hard zone (1, 2, 3)
-    PACE_INTENSITY_WEIGHTS      — 7-element per-bin weights for the 0–100 score
-    PACE_ZONE_DEFINITION_TEXT   — one-line human definition per bin index
-    PACE_ZONE_FILTER_TEXT       — one-line human description of each bin's
+    POWER_INTENSITY_WEIGHTS     — 7-element per-bin weights for the 0–100 score
+    POWER_ZONE_DEFINITION_TEXT  — one-line human definition per bin index
+    POWER_ZONE_FILTER_TEXT      — one-line human description of each bin's
                                   filter-pass threshold
-    pace_intensity_score()      — compute a workout's 0–100 pace-intensity score
-    pace_bin_passes()           — true if a workout's bin meters pass the zone
+    power_intensity_score()     — compute a workout's 0–100 power-intensity score
+    power_bin_passes()          — true if a workout's bin meters pass the zone
                                   threshold used by the Intervals-page filter
-    get_reference_sbs()         — find recent SBs for key events
-    compute_bin_thresholds()    — build pace cutoffs from reference SBs
-    classify_pace()             — map a pace value → bin index
+    compute_bin_thresholds()    — build watts cutoffs from a reference-watts dict
+    classify_watts()            — map a watts value → bin index
     workout_bin_meters()        — per-bin meter counts for a single workout
+    workout_power_intensity()   — single-workout score using date-appropriate
+                                  thresholds (for the sessions-page hook)
     bin_bar_svg()               — data-URI SVG stacked bar from bin meters
     swatch_svg()                — data-URI SVG color swatch for legends
     aggregate_workouts()        — group all workouts by week / month / season × bin
@@ -31,27 +38,24 @@ Exported:
 from __future__ import annotations
 
 import base64
-from datetime import date, timedelta
+from datetime import date
 from typing import Optional
 
 from services.rowing_utils import (
-    RANKED_DIST_SET,
-    RANKED_TIME_SET,
     INTERVAL_WORKOUT_TYPES,
-    PACE_MIN,
     PACE_MAX,
-    parse_date,
+    PACE_MIN,
     compute_pace,
+    compute_watts,
     get_season,
-    workout_cat_key,
-    loglog_fit,
-    loglog_predict_pace,
+    parse_date,
+    watts_to_pace,
 )
 
 # ---------------------------------------------------------------------------
 # Bin definitions
 # ---------------------------------------------------------------------------
-# Index 0 = Rest (interval rest distance), 1-6 = pace zones fastest → slowest.
+# Index 0 = Rest (interval rest distance), 1-6 = power zones fastest → slowest.
 
 BIN_NAMES = [
     "Rest",
@@ -75,35 +79,35 @@ BIN_COLORS = [
     ("rgba(115,170,230,1)", "rgba(80,140,205,1)"),  # 6 Slow Aerobic
 ]
 
-# 3-zone model — maps the 6 pace bins onto the Z1/Z2/Z3 framework used in the
-# volume distribution table and interval tab.
+# 3-zone model — maps the 6 power bins onto the Z1/Z2/Z3 framework used in
+# the volume distribution table and interval tab.
 Z3_BINS: frozenset = frozenset({1, 2, 3})  # Fast + 2k + 5k  (above LT2)
 Z2_BINS: frozenset = frozenset({4})  # Threshold        (LT1–LT2)
 Z1_BINS: frozenset = frozenset({5, 6})  # Fast+Slow Aero   (below LT1)
 
-# Linear weights per bin index for the 0–100 pace-intensity score.
+# Linear weights per bin index for the 0–100 power-intensity score.
 # Score = Σ (meters_in_bin / work_meters × weight), ignoring bin 0 (Rest).
 # Fastest zone → 100, slowest → 0.
-PACE_INTENSITY_WEIGHTS: list[int] = [0, 100, 80, 60, 40, 20, 0]
+POWER_INTENSITY_WEIGHTS: list[int] = [0, 100, 80, 60, 40, 20, 0]
 
 # One-line definition per bin, indexed by bin index (0 = Rest).  Thresholds
 # are personalised via compute_bin_thresholds(); these strings describe the
 # midpoint-based rule without quoting the user's current numbers.
-PACE_ZONE_DEFINITION_TEXT: dict[int, str] = {
+POWER_ZONE_DEFINITION_TEXT: dict[int, str] = {
     0: "Interval rest distance — not counted toward intensity.",
-    1: "Faster than the midpoint between your 1k and 2k pace.",
-    2: "Between midpoint(1k, 2k) and midpoint(2k, 5k) — near 2k race pace.",
-    3: "Between midpoint(2k, 5k) and midpoint(5k, 60min) — near 5k race pace.",
+    1: "Higher watts than the midpoint between your 1k and 2k watts.",
+    2: "Between midpoint(1k, 2k) and midpoint(2k, 5k) — near 2k race power.",
+    3: "Between midpoint(2k, 5k) and midpoint(5k, 60min) — near 5k race power.",
     4: "Between midpoint(5k, 60min) and midpoint(60min, marathon) — threshold.",
-    5: "From threshold down to ~3 s/500m slower than marathon pace.",
-    6: "Slower than the fast-aerobic cutoff — base / easy work.",
+    5: "From threshold down to the watts corresponding to ~3 s/500m slower than marathon pace.",
+    6: "Lower watts than the fast-aerobic cutoff — base / easy work.",
 }
 
 # Threshold each bin must clear (as a fraction of a workout's total work
 # meters) for the Intervals-page filter legend to consider the zone "present".
 # A value of None means the zone uses a compound rule implemented in
-# pace_bin_passes() below.  Consumed by chip tooltips and the filter.
-PACE_ZONE_FILTER_TEXT: dict[int, str] = {
+# power_bin_passes() below.  Consumed by chip tooltips and the filter.
+POWER_ZONE_FILTER_TEXT: dict[int, str] = {
     1: "Selected: workouts with ≥5% of work meters in Fast.",
     2: "Selected: workouts with ≥10% of work meters in 2k.",
     3: "Selected: workouts with ≥15% of work meters in 5k.",
@@ -114,166 +118,89 @@ PACE_ZONE_FILTER_TEXT: dict[int, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# Key events for reference-SB lookup
+# Threshold computation from a reference-watts dict
 # ---------------------------------------------------------------------------
 
-# Each entry: (event_type, event_value, label, representative_dist_for_loglog)
-# representative_dist_for_loglog is used when the event has no direct SB and
-# we need a distance to feed into the log-log predictor.
-_SB_LOOKUP = [
-    ("dist", 1000, "1k", 1000),
-    ("dist", 2000, "2k", 2000),
-    ("dist", 5000, "5k", 5000),
-    ("time", 36000, "60min", 10000),  # 36000 tenths = 60 min; ~10k as proxy
-    ("dist", 42195, "marathon", 42195),
-]
+# Events needed for the five zone boundaries (cat_key tuples from workout_cat_key).
+_CK_1K = ("dist", 1000)
+_CK_2K = ("dist", 2000)
+_CK_5K = ("dist", 5000)
+_CK_60MIN = ("time", 36000)
+_CK_MARATHON = ("dist", 42195)
 
 
-def get_reference_sbs(all_workouts: list, today: Optional[date] = None) -> dict:
+def compute_bin_thresholds(ref_watts: Optional[dict]) -> Optional[dict]:
     """
-    For each key event, find the best pace within ±365 days of today.
-    Only considers non-interval workouts.
+    Compute watts cutoffs for the 6 power bins from a reference-watts dict.
+
+    ``ref_watts`` maps cat_key tuples → watts (the output of
+    :func:`services.reference_watts.get_reference_watts`).  It must contain at
+    least the 1k, 2k, 5k, 60min and marathon entries for a meaningful result;
+    if any is missing this returns None.
 
     Returns
     -------
-    dict: {label: pace_sec_per_500m}  e.g. {"1k": 85.4, "2k": 92.1, ...}
-    """
-    today = today or date.today()
-    window_start = today - timedelta(days=365)
-    window_end = today + timedelta(days=365)
-
-    sbs: dict = {}
-    for w in all_workouts:
-        if w.get("workout_type") in INTERVAL_WORKOUT_TYPES:
-            continue
-        dt = parse_date(w.get("date", ""))
-        if dt < window_start or dt > window_end:
-            continue
-        pace = compute_pace(w)
-        if pace is None or pace < PACE_MIN or pace > PACE_MAX:
-            continue
-        dist = w.get("distance")
-        time_val = w.get("time")
-        for etype, evalue, label, _ in _SB_LOOKUP:
-            if etype == "dist" and dist == evalue:
-                if label not in sbs or pace < sbs[label]:
-                    sbs[label] = pace
-            elif etype == "time" and time_val == evalue:
-                if label not in sbs or pace < sbs[label]:
-                    sbs[label] = pace
-    return sbs
-
-
-def compute_bin_thresholds(
-    ref_sbs: dict,
-    all_workouts: Optional[list] = None,
-) -> Optional[dict]:
-    """
-    Compute pace cutoffs for the 7 pace bins.
-
-    Strategy:
-    1. Use ref_sbs for known event paces.
-    2. For missing events, try log-log power-law prediction from lifetime bests
-       across all non-interval ranked workouts.
-    3. Fill any remaining gaps with simple proportional extrapolations.
-    4. Return None if we cannot determine at least p2k and p5k.
-
-    Returns
-    -------
-    dict with keys:
-        fast_upper      — pace < this → Fast bin
-        two_k_upper     — pace < this → 2k bin
-        five_k_upper    — pace < this → 5k bin
-        threshold_upper — pace < this → Threshold bin
-        fast_aero_upper — pace < this → Fast Aerobic bin
+    dict with keys (watts values; higher = more intense):
+        fast_lower_w      — watts > this → Fast bin
+        two_k_lower_w     — watts > this → 2k bin
+        five_k_lower_w    — watts > this → 5k bin
+        threshold_lower_w — watts > this → Threshold bin
+        fast_aero_lower_w — watts > this → Fast Aerobic bin
     or None if insufficient data.
     """
-    # Build log-log fallback from lifetime ranked bests.
-    fit_params = None
-    if all_workouts is not None:
-        lb: dict = {}
-        lb_anchor: dict = {}
-        for w in all_workouts:
-            if w.get("workout_type") in INTERVAL_WORKOUT_TYPES:
-                continue
-            dist = w.get("distance")
-            time_val = w.get("time")
-            if dist not in RANKED_DIST_SET and time_val not in RANKED_TIME_SET:
-                continue
-            cat = workout_cat_key(w)
-            if cat is None:
-                continue
-            pace = compute_pace(w)
-            if pace is None or pace < PACE_MIN or pace > PACE_MAX:
-                continue
-            if cat not in lb or pace < lb[cat]:
-                lb[cat] = pace
-                lb_anchor[cat] = dist or 0
-        if len(lb) >= 2:
-            fit_params = loglog_fit(lb, lb_anchor)
-
-    def predict(label: str, proxy_dist: int) -> Optional[float]:
-        """Return SB pace for label, or loglog prediction at proxy_dist."""
-        if label in ref_sbs:
-            return ref_sbs[label]
-        if fit_params is not None:
-            try:
-                return loglog_predict_pace(*fit_params, proxy_dist)
-            except Exception:
-                pass
+    if not ref_watts:
         return None
 
-    p1k = predict("1k", 1000)
-    p2k = predict("2k", 2000)
-    p5k = predict("5k", 5000)
-    p60min = predict("60min", 10000)
-    pmarathon = predict("marathon", 42195)
+    w1k = ref_watts.get(_CK_1K)
+    w2k = ref_watts.get(_CK_2K)
+    w5k = ref_watts.get(_CK_5K)
+    w60 = ref_watts.get(_CK_60MIN)
+    wmara = ref_watts.get(_CK_MARATHON)
 
-    # Require at least p2k and p5k for meaningful binning.
-    if p2k is None or p5k is None:
+    # The zone boundaries require all five anchors; without them the
+    # reference-watts index did not converge for this rower / machine.
+    if w1k is None or w2k is None or w5k is None or w60 is None or wmara is None:
         return None
-
-    # Fill remaining gaps via simple proportional extrapolation.
-    if p1k is None:
-        p1k = p2k * 0.96  # ~4% faster than 2k is a reasonable floor
-    if p60min is None:
-        p60min = p5k * 1.10  # ~10% slower than 5k
-    if pmarathon is None:
-        pmarathon = p60min * 1.15  # ~15% slower than 60min
 
     def _mid(a: float, b: float) -> float:
         return (a + b) / 2.0
 
+    # Fast-aerobic floor is defined in pace terms (marathon pace + 3 s/500m)
+    # — translate at the edge so the semantics match the legacy implementation.
+    mara_pace = watts_to_pace(wmara)
+    fast_aero_watts = compute_watts(mara_pace + 3.0)
+
     return {
-        "fast_upper": _mid(p1k, p2k),
-        "two_k_upper": _mid(p2k, p5k),
-        "five_k_upper": _mid(p5k, p60min),
-        "threshold_upper": _mid(p60min, pmarathon),
-        "fast_aero_upper": pmarathon + 3.0,
+        "fast_lower_w": _mid(w1k, w2k),
+        "two_k_lower_w": _mid(w2k, w5k),
+        "five_k_lower_w": _mid(w5k, w60),
+        "threshold_lower_w": _mid(w60, wmara),
+        "fast_aero_lower_w": fast_aero_watts,
     }
 
 
-def classify_pace(pace: float, thresholds: Optional[dict]) -> int:
+def classify_watts(watts: float, thresholds: Optional[dict]) -> int:
     """
-    Return the bin index (1–6) for a given pace.
+    Return the bin index (1–6) for a given watts value.
 
     0 = Rest (used only for interval rest distance, not set here).
     1 = Fast, 2 = 2k, 3 = 5k, 4 = Threshold, 5 = Fast Aerobic, 6 = Slow Aerobic.
 
-    If thresholds is None, all meters fall into bin 6 (Slow Aerobic) — the
-    caller can still display totals without zone coloring.
+    Higher watts ⇒ more intense ⇒ lower bin index.  If thresholds is None, all
+    meters fall into bin 6 (Slow Aerobic) — the caller can still display
+    totals without zone coloring.
     """
     if thresholds is None:
         return 6
-    if pace < thresholds["fast_upper"]:
+    if watts > thresholds["fast_lower_w"]:
         return 1
-    if pace < thresholds["two_k_upper"]:
+    if watts > thresholds["two_k_lower_w"]:
         return 2
-    if pace < thresholds["five_k_upper"]:
+    if watts > thresholds["five_k_lower_w"]:
         return 3
-    if pace < thresholds["threshold_upper"]:
+    if watts > thresholds["threshold_lower_w"]:
         return 4
-    if pace < thresholds["fast_aero_upper"]:
+    if watts > thresholds["fast_aero_lower_w"]:
         return 5
     return 6
 
@@ -305,16 +232,16 @@ def _empty_bins() -> list:
 
 def workout_bin_meters(workout: dict, thresholds: Optional[dict]) -> list:
     """
-    Return ``[m0, m1, …, m6]`` — meter counts per pace bin for one workout.
+    Return ``[m0, m1, …, m6]`` — meter counts per power bin for one workout.
 
     Bin 0 is Rest (interval rest distance only).
-    Bins 1–6 are pace zones ordered fastest → slowest (see BIN_NAMES).
+    Bins 1–6 are power zones ordered fastest → slowest (see BIN_NAMES).
 
-    For interval workouts each interval is classified by its own pace
-    (``interval_time / 10 / (interval_dist / 500)``).  The top-level
-    ``rest_distance`` goes into bin 0.
+    For interval workouts each interval is classified by its own watts
+    (from ``compute_watts(interval_pace)``).  The top-level ``rest_distance``
+    goes into bin 0.
 
-    For steady-state workouts the session's overall pace sets a single bin.
+    For steady-state workouts the session's overall watts set a single bin.
     """
     bins = _empty_bins()
 
@@ -324,7 +251,7 @@ def workout_bin_meters(workout: dict, thresholds: Optional[dict]) -> list:
         if rest_dist > 0:
             bins[0] += rest_dist
 
-        # Each work interval classified by its own pace
+        # Each work interval classified by its own pace → watts
         intervals = (workout.get("workout") or {}).get("intervals") or []
         for iv in intervals:
             iv_dist = iv.get("distance") or 0
@@ -334,20 +261,20 @@ def workout_bin_meters(workout: dict, thresholds: Optional[dict]) -> list:
             iv_pace = (iv_time / 10.0) / (iv_dist / 500.0)
             if iv_pace < PACE_MIN or iv_pace > PACE_MAX:
                 continue
-            bins[classify_pace(iv_pace, thresholds)] += iv_dist
+            bins[classify_watts(compute_watts(iv_pace), thresholds)] += iv_dist
     else:
         dist = workout.get("distance") or 0
         if dist > 0:
             pace = compute_pace(workout)
             if pace is not None and PACE_MIN <= pace <= PACE_MAX:
-                bins[classify_pace(pace, thresholds)] += dist
+                bins[classify_watts(compute_watts(pace), thresholds)] += dist
 
     return bins
 
 
-def pace_intensity_score(bin_meters: list) -> Optional[float]:
+def power_intensity_score(bin_meters: list) -> Optional[float]:
     """
-    Return a 0–100 weighted-average intensity score for a workout's pace bins.
+    Return a 0–100 weighted-average intensity score for a workout's power bins.
 
     Bin 0 (Rest) is excluded from both the weights and the denominator.
     Returns None when a workout has no classifiable work meters — callers
@@ -357,17 +284,16 @@ def pace_intensity_score(bin_meters: list) -> Optional[float]:
     total = sum(work)
     if total <= 0:
         return None
-    weights = PACE_INTENSITY_WEIGHTS[1:]
+    weights = POWER_INTENSITY_WEIGHTS[1:]
     return sum((m / total) * w for m, w in zip(work, weights))
 
 
-def pace_bin_passes(bm: list, bin_idx: int) -> bool:
+def power_bin_passes(bm: list, bin_idx: int) -> bool:
     """
-    Return True if a workout's pace-bin vector has enough meters in
+    Return True if a workout's power-bin vector has enough meters in
     ``bin_idx`` for the Intervals-page filter legend to consider that zone
-    "present".  Thresholds are the existing per-zone heuristics from the
-    old intervals-page filter (see PACE_ZONE_FILTER_TEXT for the human
-    form).  Bin 0 (Rest) is not filterable.
+    "present".  Thresholds are the per-zone heuristics documented in
+    POWER_ZONE_FILTER_TEXT.  Bin 0 (Rest) is not filterable.
     """
     work_total = sum(bm[1:])
     if not work_total:
@@ -387,6 +313,25 @@ def pace_bin_passes(bm: list, bin_idx: int) -> bool:
     return False
 
 
+def workout_power_intensity(workout: dict, all_workouts: list) -> Optional[float]:
+    """
+    Single-workout Power Intensity score using date-appropriate thresholds.
+
+    Intended for the sessions-page quality metric.  Resolves reference watts
+    at the workout's own date, derives thresholds, then scores that workout.
+    """
+    # Local import — avoid a circular dependency with reference_watts, which
+    # doesn't import this module today but might in the future.
+    from services.reference_watts import get_reference_watts
+
+    d = parse_date(workout.get("date", ""))
+    if d == date.min:
+        return None
+    ref = get_reference_watts(d, all_workouts)
+    th = compute_bin_thresholds(ref)
+    return power_intensity_score(workout_bin_meters(workout, th))
+
+
 def bin_bar_svg(
     bin_meters: list,
     width: int = 160,
@@ -395,7 +340,7 @@ def bin_bar_svg(
 ) -> str:
     """
     Return a ``data:image/svg+xml;base64,…`` URI for a stacked horizontal
-    bar showing work-meter fraction in each pace zone (bin 0 / Rest excluded).
+    bar showing work-meter fraction in each power zone (bin 0 / Rest excluded).
 
     colors are taken from ``BIN_COLORS`` (dark or light variant).
     Segments smaller than 2 % of work total are omitted to avoid hairlines.
@@ -483,7 +428,8 @@ def aggregate_workouts(
     bin_fn:
         Optional callable(workout) → list[float].  When provided, replaces the
         default ``workout_bin_meters(w, thresholds)`` call, allowing callers to
-        supply an alternate binning strategy (e.g. HR-zone binning).
+        supply an alternate binning strategy (e.g. time-aware per-workout
+        thresholds, or HR-zone binning).
 
     Returns
     -------

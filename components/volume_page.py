@@ -3,9 +3,11 @@ Volume tab — stacked intensity-zone bar chart + distribution data table.
 
 Volume chart:
   - Stacked bar chart showing meters per intensity zone per week / month / season.
-  - Zone mode toggle: Pace | HR
-      Pace mode: zones derived from personal-best pace thresholds (volume_bins.py).
-      HR mode:   zones derived from % of HRmax (heartrate_utils.py).
+  - Zone mode toggle: Power | HR
+      Power mode: zones derived from time-aware reference watts (each workout
+                  classified against the rower's fitness at the workout's own
+                  date via services/reference_watts.py → volume_bins.py).
+      HR mode:    zones derived from % of HRmax (heartrate_utils.py).
   - Toggle: Weekly | Monthly | Seasonal  (radio button group)
   - Season and machine filters are applied globally (from app.py gfilter)
     before this component receives workouts; no page-level filter UI for these.
@@ -27,14 +29,16 @@ import hyperdiv as hd
 import json
 
 from components.concept2_sync import sync_from_context
+from components.reference_watts_loader import reference_watts_loader
 from components.view_context import your
 from services.formatters import machine_label
-from services.rowing_utils import get_season, profile_complete
+from services.reference_watts import get_reference_watts
+from services.rowing_utils import get_season, parse_date, profile_complete
 
 from services.volume_bins import (
-    get_reference_sbs,
-    compute_bin_thresholds,
     aggregate_workouts,
+    compute_bin_thresholds,
+    workout_bin_meters,
 )
 from services.heartrate_utils import (
     resolve_max_hr,
@@ -72,13 +76,13 @@ _PERIOD_HEADERS = {
 
 
 def _distribution_table(
-    rows: list, view: str, zone_mode: str = "pace_intensity"
+    rows: list, view: str, zone_mode: str = "power_intensity"
 ) -> None:
     """
     Render a sortable CSS Grid table with one row per period showing zone
     breakdowns and a training distribution classification.
 
-    Pace mode columns:
+    Power mode columns:
       Period | Total | Rest | Z1 Easy | Z2 Threshold | Z3 Hard | Distribution
 
     HR mode columns:
@@ -316,7 +320,7 @@ def _volume_section(
 
     state = hd.state(
         view="monthly",
-        zone_mode="pace_intensity",  # "pace_intensity" | "hr"
+        zone_mode="power_intensity",  # "power_intensity" | "hr"
     )
     view = state.view
     machine_filter = None if machine == "All" else {machine}
@@ -361,9 +365,28 @@ def _volume_section(
                 no_data_bins=_HR_NO_DATA_BINS,
             )
         else:
-            ref_sbs = get_reference_sbs(all_workouts)
-            thresholds = compute_bin_thresholds(ref_sbs, all_workouts)
-            aggregated = aggregate_workouts(all_workouts, thresholds, machine_filter)
+            # Time-aware thresholds: each workout is classified against the
+            # rower's fitness at the workout's own date.  Gate on the
+            # reference-watts loader so the first-time index build shows a
+            # progress bar instead of blocking the render.
+            if not reference_watts_loader(all_workouts):
+                return
+
+            # Cache per-date so we don't recompute when many workouts share a date.
+            th_cache: dict = {}
+
+            def _thresholds_for(w):
+                d = parse_date(w.get("date", ""))
+                if d not in th_cache:
+                    ref = get_reference_watts(d, all_workouts)
+                    th_cache[d] = compute_bin_thresholds(ref)
+                return th_cache[d]
+
+            aggregated = aggregate_workouts(
+                all_workouts,
+                machine_filter=machine_filter,
+                bin_fn=lambda w: workout_bin_meters(w, _thresholds_for(w)),
+            )
             chart_config = build_volume_chart_config(
                 aggregated,
                 view=view,
@@ -398,17 +421,16 @@ def _volume_section(
             if view_rg.changed:
                 state.view = view_rg.value.lower()
 
-            # Zone mode radio group (Pace / HR)
+            # Zone mode radio group (Power / HR)
             with hd.radio_buttons(
                 value=state.zone_mode,
                 font_size="small",
             ) as mode_rg:
-                hd.radio_button("Pace Intensity", value="pace_intensity")
+                hd.radio_button("Power Intensity", value="power_intensity")
                 hd.radio_button("HR Intensity", value="hr")
 
             if mode_rg.changed:
                 state.zone_mode = mode_rg.value
-                print(state.zone_mode)
 
         if state.zone_mode == "hr":
             _hr_callout(all_workouts, profile, is_owner=is_owner)

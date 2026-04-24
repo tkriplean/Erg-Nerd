@@ -2,14 +2,14 @@
 
 ## Overview
 
-The Volume Chart on the Volume page shows how many meters were rowed across time, broken down by the physiological intensity zone each meter was performed at. The goal is to make it easy to understand training load distribution at a glance: how much was easy aerobic base, how much was threshold or race-pace work, and how much was rest between intervals.
+The Volume Chart on the Volume page shows how many meters were rowed across time, broken down by the physiological intensity zone each meter was performed at. The goal is to make it easy to understand training load distribution at a glance: how much was easy aerobic base, how much was threshold or race work, and how much was rest between intervals.
 
 The chart supports two **zone modes**:
 
-- **Pace mode** (default) — zones derived from personal-best pace thresholds, relative to the user's recent performances.
+- **Power Intensity mode** (default) — zones derived from watts thresholds, time-indexed to the rower's fitness on each workout's own date (see `services/reference_watts.py`).
 - **HR mode** — zones derived from percentage of HRmax, using per-split or per-interval HR data where available.
 
-A **Pace / HR toggle** in the controls row switches between the two modes. Both modes share the same visual language (7-bin stacked bar, same draw order, same distribution table structure).
+A **Power Intensity / HR Intensity toggle** in the controls row switches between the two modes. Both modes share the same visual language (7-bin stacked bar, same draw order, same distribution table structure).
 
 ---
 
@@ -29,37 +29,39 @@ A **Pace / HR toggle** in the controls row switches between the two modes. Both 
 
 ---
 
-## Pace Zone Definitions
+## Power Zone Definitions
 
-Zones are defined relative to **reference SBs** — the best performance at each key event within ±365 days of today. This window spans past and future because the goal is to establish a stable physiological baseline for binning, not to enforce a cutoff.
+Zones are defined relative to **reference watts** at five key events, evaluated at the workout's own date. `services/reference_watts.py` builds a quarterly index of reference watts (CP fit → Paul's Law regression → default k=5.0, merged with actual PBs) and interpolates linearly between quarterly markers. The "current" reference window for each marker is ±365 days around that marker's date, so old workouts are graded against era-appropriate fitness.
 
-| Bin           | Pace Range                                        | Approx. Physiology              |
-|---------------|---------------------------------------------------|---------------------------------|
-| Fast          | < midpoint(1k SB, 2k SB)                         | Phosphagen / max sprint         |
-| 2k            | midpoint(1k, 2k) → midpoint(2k, 5k)              | VO₂max race pace                |
-| 5k            | midpoint(2k, 5k) → midpoint(5k, 60min)           | VO₂max / high aerobic           |
-| Threshold     | midpoint(5k, 60min) → midpoint(60min, marathon)   | Lactate threshold / tempo       |
-| Fast Aerobic  | midpoint(60min, marathon) → marathon + 3 s        | Aerobic base, upper end         |
-| Slow Aerobic  | > marathon + 3 s                                  | Recovery / easy distance        |
-| Rest          | N/A (interval rest distance, explicitly flagged)  | Active recovery                 |
+| Bin           | Watts Range                                                 | Approx. Physiology              |
+|---------------|-------------------------------------------------------------|---------------------------------|
+| Fast          | > midpoint(1k watts, 2k watts)                              | Phosphagen / max sprint         |
+| 2k            | midpoint(1k,2k) → midpoint(2k,5k)                           | VO₂max race pace                |
+| 5k            | midpoint(2k,5k) → midpoint(5k,60min)                        | VO₂max / high aerobic           |
+| Threshold     | midpoint(5k,60min) → midpoint(60min,marathon)               | Lactate threshold / tempo       |
+| Fast Aerobic  | watts(marathon pace + 3 s/500m) → midpoint(60min,marathon)  | Aerobic base, upper end         |
+| Slow Aerobic  | < watts(marathon pace + 3 s/500m)                           | Recovery / easy distance        |
+| Rest          | N/A (interval rest distance, explicitly flagged)            | Active recovery                 |
 
-The marathon + 3 s boundary for the Fast/Slow Aerobic split was chosen because marathon pace represents an athlete's long-run aerobic ceiling; anything marginally slower is aerobic base, and anything substantially slower is recovery-pace rowing.
+The watts comparison is **inverted** relative to pace (higher watts = more intense = lower bin index). The Fast/Slow Aerobic split is still expressed as "marathon pace + 3 s/500m" — that pace rule is translated to a watts threshold at the boundary via `compute_watts(watts_to_pace(wmara) + 3.0)`.
 
-### Reference SB Key Events
+### Reference Watts Key Events
 
-| Event    | Type      | Proxy distance for log-log fallback |
-|----------|-----------|-------------------------------------|
-| 1k       | Distance  | 1,000 m                             |
-| 2k       | Distance  | 2,000 m                             |
-| 5k       | Distance  | 5,000 m                             |
-| 60 min   | Time      | 10,000 m (≈ 60 min at moderate pace)|
-| Marathon | Distance  | 42,195 m                            |
+| Event    | Type      | `cat_key`          |
+|----------|-----------|--------------------|
+| 1k       | Distance  | `("dist", 1000)`   |
+| 2k       | Distance  | `("dist", 2000)`   |
+| 5k       | Distance  | `("dist", 5000)`   |
+| 60 min   | Time      | `("time", 36000)`  |
+| Marathon | Distance  | `("dist", 42195)`  |
 
-### Fallback when SBs are missing
+`reference_watts.py` returns watts for all 13 rankable events; `compute_bin_thresholds` consumes these five.
 
-1. **Log-log power-law fit** across all lifetime ranked non-interval workouts. If at least two ranked categories have data, the fit predicts pace at any distance.
-2. **Simple proportional extrapolation** for any event still missing after the log-log step (e.g. 1k ≈ 2k × 0.96, marathon ≈ 60min × 1.15).
-3. If neither 2k nor 5k can be determined, binning is skipped entirely and all work meters are placed in Slow Aerobic (totals remain accurate).
+### Fallback when reference watts are missing
+
+1. **Log-log power-law fit** across the reference-watts values for any events that are present, predicting watts at any required event.
+2. **Simple proportional extrapolation** for events still missing after the log-log step.
+3. If neither 2k nor 5k can be determined, `compute_bin_thresholds` returns `None`, binning is skipped, and all work meters are placed in Slow Aerobic (totals remain accurate).
 
 ---
 
@@ -67,11 +69,11 @@ The marathon + 3 s boundary for the Fast/Slow Aerobic split was chosen because m
 
 For **interval workouts** (`workout_type` in `INTERVAL_WORKOUT_TYPES`):
 
-- Each individual interval is classified by its own average pace: `(interval_time / 10) / (interval_dist / 500)`.
+- Each individual interval is classified by its own average watts: `compute_watts(average_pace)` where `average_pace = (interval_time / 10) / (interval_dist / 500)`.
 - Interval rest distance is taken from the top-level `rest_distance` field if present; otherwise it equals `total_distance − sum(interval_distances)`.
 - All rest distance goes into the **Rest** bin.
 
-For **steady-state workouts**: the session's overall average pace determines the bin (one bin for the entire workout).
+For **steady-state workouts**: the session's overall average watts determines the bin (one bin for the entire workout).
 
 ---
 
@@ -149,16 +151,17 @@ Distribution badge colors:
 
 ---
 
-## Architecture (Pace Mode)
+## Architecture (Power Intensity Mode)
 
-### Service layer (`services/volume_bins.py`)
+### Service layer (`services/volume_bins.py` + `services/reference_watts.py`)
 
 | Function                  | Purpose                                                              |
 |---------------------------|----------------------------------------------------------------------|
-| `get_reference_sbs()`     | Best pace at key events within ±365 days                             |
-| `compute_bin_thresholds()`| Build pace cutoffs from ref SBs + log-log fallback                   |
-| `classify_pace()`         | Map a pace value → bin index 1–6                                     |
-| `aggregate_workouts(bin_fn=)` | Accumulate meters by week/month/season × bin; `bin_fn` overrides default binning |
+| `get_reference_watts(when, all_workouts)` | Reference watts at all 13 events for the given date (quarterly-indexed + recent-tail merge) |
+| `compute_bin_thresholds(ref_watts)` | Build watts cutoffs from reference watts + log-log fallback          |
+| `classify_watts(watts, thresholds)` | Map a watts value → bin index 1–6 (inverted vs pace)                 |
+| `aggregate_workouts(bin_fn=)` | Accumulate meters by week/month/season × bin; `bin_fn` overrides default binning (used for per-workout thresholds) |
+| `workout_power_intensity(workout, all_workouts)` | Single-workout 0–100 power-intensity score using date-appropriate thresholds |
 
 ### Chart builder (`components/volume_chart_builder.py`)
 
@@ -191,7 +194,7 @@ Registered as `VolumeChart` in the HyperDiv plugin system. Injects:
 
 ### Enabling HR Mode
 
-Toggle the **Pace / HR** radio buttons in the controls row. The mode is stored in `state.zone_mode` ("pace" | "hr").
+Toggle the **Power Intensity / HR Intensity** radio buttons in the controls row. The mode is stored in `state.zone_mode` (`"power_intensity"` | `"hr"`).
 
 ### Zone Definitions (% of HRmax)
 
@@ -254,7 +257,7 @@ HR mode uses a 5-zone model exposed as 4 data columns (Z3 is split into two):
 | Threshold (80–90%) | bin 2 | Z4 Threshold |
 | Max (90%+) | bin 1 | Z5 Max |
 
-A **Distribution** column is included. Classification uses the same thresholds as pace mode (Polarized, Pyramidal, etc.) but the percentages are computed over HR-classified meters only — the "No HR" bin (bin 6) is excluded from the denominator so that unmonitored sessions don't dilute zone fractions. Periods with fewer than 500 HR-classified meters receive "—".
+A **Distribution** column is included. Classification uses the same thresholds as power-intensity mode (Polarized, Pyramidal, etc.) but the percentages are computed over HR-classified meters only — the "No HR" bin (bin 6) is excluded from the denominator so that unmonitored sessions don't dilute zone fractions. Periods with fewer than 500 HR-classified meters receive "—".
 
 ---
 
@@ -264,7 +267,8 @@ A **Distribution** column is included. Classification uses the same thresholds a
 
 | File | Key functions |
 |---|---|
-| `services/volume_bins.py` | `get_reference_sbs()`, `compute_bin_thresholds()`, `aggregate_workouts(bin_fn=)` |
+| `services/volume_bins.py` | `compute_bin_thresholds()`, `classify_watts()`, `aggregate_workouts(bin_fn=)`, `workout_power_intensity()` |
+| `services/reference_watts.py` | `get_reference_watts()`, `build_reference_watts_index()` |
 | `services/heartrate_utils.py` | `is_valid_hr()`, `resolve_max_hr()`, `hr_zone_idx()`, `workout_hr_meters()`, `hr_coverage()` |
 
 `aggregate_workouts()` accepts a `bin_fn` keyword argument. When provided, it replaces the default `workout_bin_meters(w, thresholds)` call, allowing HR-mode binning without any other code changes. The call from the volume tab in HR mode is:
@@ -279,7 +283,7 @@ aggregate_workouts(
 
 ### Chart builder (`components/volume_chart_builder.py`)
 
-Both exported functions accept optional override arguments so the same code serves pace and HR modes:
+Both exported functions accept optional override arguments so the same code serves power-intensity and HR modes:
 
 ```python
 build_volume_chart_config(aggregated, ..., bin_names=None, bin_colors=None, draw_order=None)
@@ -292,7 +296,7 @@ get_period_rows(
 )
 ```
 
-All defaults preserve pace-mode behavior — no existing callers need to change.
+All defaults preserve power-intensity-mode behavior — HR callers override the three arguments.
 
 ---
 
