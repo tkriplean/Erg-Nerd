@@ -262,14 +262,14 @@ def _always_white(is_dark: bool) -> str:
 # Session quality
 # ---------------------------------------------------------------------------
 #
-# Each session is rated Low / Medium / High by scoring every split/interval
+# Each session is rated Low / Medium / High / Super by scoring every split/interval
 # against the rower's date-aware reference watts (see
 # :mod:`services.workout_quality`).  Each split contributes "quality energy"
 # weighted by how hard it was vs. the reference for its power-intensity
 # category; interval sessions additionally discount that energy by preceding
 # rest ratio.  Summed across categories and normalized by a per-category
 # reference target, the result is a scalar bucketed by the thresholds in
-# :mod:`services.workout_quality` (currently 0.5 / 0.75).  Workouts whose
+# :mod:`services.workout_quality` (currently 0.5 / 0.75 / 1.0).  Workouts whose
 # reference-watts index is missing anchor events return None and render as "—".
 
 
@@ -289,6 +289,12 @@ _QUALITY_STYLE: dict[str, dict] = {
     "High": {
         "label": "High",
         "bg": (25, 150, 50, 0.90),  # green
+        "fg_on_dark_theme": "neutral-1000",
+        "fg_on_light_theme": "neutral-0",
+    },
+    "Super": {
+        "label": "Super",
+        "bg": (25, 150, 50, 1),  # green
         "fg_on_dark_theme": "neutral-1000",
         "fg_on_light_theme": "neutral-0",
     },
@@ -1473,7 +1479,7 @@ def intervals_page(ctx, global_state, excluded_seasons=(), machine="All") -> Non
                                 font_size="x-small",
                             )
             with hd.box(
-                padding=(0.15, 0.5),
+                padding=(0.15, 0.5, 0.15, 0.5),
                 border_radius="medium",
                 background_color=style["bg"],
                 align="center",

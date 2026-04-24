@@ -76,8 +76,9 @@ WORK_REST_PENALTY_FACTOR = 0.25
 # work High.  Reassess once real usage lands.
 _LOW_MAX = 0.5
 _MEDIUM_MAX = 0.75
+_HIGH_MAX = 1
 
-QUALITY_ORDER: dict[str, int] = {"Low": 0, "Medium": 1, "High": 2}
+QUALITY_ORDER: dict[str, int] = {"Low": 0, "Medium": 1, "High": 2, "Super": 3}
 
 
 def _category_from_bin(bin_idx: int) -> Optional[str]:
@@ -112,7 +113,9 @@ def _bucket(score: float) -> str:
         return "Low"
     if score < _MEDIUM_MAX:
         return "Medium"
-    return "High"
+    if score < _HIGH_MAX:
+        return "High"
+    return "Super"
 
 
 def _iter_quality_splits(workout: dict, is_interval: bool):
