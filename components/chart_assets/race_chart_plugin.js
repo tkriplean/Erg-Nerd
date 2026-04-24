@@ -216,12 +216,14 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   sortSelect.value = "date";
   sortSelect.className = "race-sort";
   sortSelect.setAttribute("hoist", "");
+  sortSelect.style.position = "absolute"
+  sortSelect.style.top = "-20px"
   const _sortOptDate = document.createElement("sl-option");
   _sortOptDate.value = "date";
-  _sortOptDate.textContent = "Sort by date";
+  _sortOptDate.textContent = "Sort boats by date";
   const _sortOptResult = document.createElement("sl-option");
   _sortOptResult.value = "result";
-  _sortOptResult.textContent = "Sort by result";
+  _sortOptResult.textContent = "Sort boats by result";
   sortSelect.appendChild(_sortOptDate);
   sortSelect.appendChild(_sortOptResult);
 
@@ -229,7 +231,7 @@ window.hyperdiv.registerPlugin("RaceChart", (ctx) => {
   // controls.appendChild(timeDisplay);
   controls.appendChild(seekInput);
   // controls.appendChild(totalDisplay);
-  controls.appendChild(sortSelect);
+  canvasWrap.appendChild(sortSelect);
   controls.appendChild(speedSelect);
   
 

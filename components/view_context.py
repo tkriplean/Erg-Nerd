@@ -52,14 +52,15 @@ def your(ctx: "ViewContext", capitalize: bool = True) -> str:
     "Your Quality 2k Efforts" which become "Hank's Quality 2k Efforts" when
     someone else is browsing a public profile.
 
-    Rule: always append "'s" — even for names that end in s ("James's") — for
-    consistency.  Falls back to "Their/their" when no display name is set.
+    Falls back to "Their/their" when no display name is set.
     """
     if ctx is None or ctx.mode == "owner":
         return "Your" if capitalize else "your"
     name = (ctx.display_name or "").strip()
     if not name:
         return "Their" if capitalize else "their"
+    if name[-1] == "s":
+        return f"{name}'"
     return f"{name}'s"
 
 

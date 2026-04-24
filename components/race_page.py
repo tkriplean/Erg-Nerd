@@ -212,9 +212,7 @@ def _race_stroke_graph(
     # the real-stroke set.
     primary_wkt: dict | None = None
     if pb_id is not None:
-        primary_wkt = next(
-            (w for w in with_strokes if w.get("id") == pb_id), None
-        )
+        primary_wkt = next((w for w in with_strokes if w.get("id") == pb_id), None)
     if primary_wkt is None:
         first = sorted_racing_workouts[0]
         is_time_event = first.get("distance") not in RANKED_DIST_SET
@@ -229,9 +227,7 @@ def _race_stroke_graph(
 
     primary_id = primary_wkt.get("id")
     primary_strokes = raw_by_id.get(str(primary_id), [])
-    compared_ids = tuple(
-        w.get("id") for w in with_strokes if w.get("id") != primary_id
-    )
+    compared_ids = tuple(w.get("id") for w in with_strokes if w.get("id") != primary_id)
     compare_results = {cid: raw_by_id.get(str(cid), []) for cid in compared_ids}
 
     # Season-colored per-id map — lines match their race lane color.
@@ -249,33 +245,6 @@ def _race_stroke_graph(
         any(s.get("hr") for s in raw_by_id.get(str(w.get("id")), []))
         for w in with_strokes
     )
-
-    with hd.hbox(
-        gap=1.5, align="center", justify="center", wrap="wrap", padding=0.5
-    ):
-        with hd.scope("race_chart_metric"):
-            with radio_group(value=state.chart_metric, size="small") as mrg:
-                hd.radio_button("Pace", value="pace")
-                hd.radio_button("Watts", value="watts")
-            if mrg.changed:
-                state.chart_metric = mrg.value
-
-        with hd.scope("race_chart_pace_sw"):
-            _lbl = "Watts" if state.chart_metric == "watts" else "Pace"
-            pace_sw = hd.switch(_lbl, checked=state.chart_show_pace, size="small")
-            if pace_sw.changed:
-                state.chart_show_pace = pace_sw.checked
-
-        with hd.scope("race_chart_spm_sw"):
-            spm_sw = hd.switch("SPM", checked=state.chart_show_spm, size="small")
-            if spm_sw.changed:
-                state.chart_show_spm = spm_sw.checked
-
-        if has_hr_any:
-            with hd.scope("race_chart_hr_sw"):
-                hr_sw = hd.switch("HR", checked=state.chart_show_hr, size="small")
-                if hr_sw.changed:
-                    state.chart_show_hr = hr_sw.checked
 
     # ── Build config ─────────────────────────────────────────────────────
     show_watts = state.chart_metric == "watts"
@@ -302,22 +271,48 @@ def _race_stroke_graph(
         primary_label=label_of[primary_id],
     )
 
-    if cfg:
-        with hd.scope("race_chart"):
-            StrokeChart(config=cfg, height="45vh")
+    with hd.box(align="center", gap=0.5):
+        # ── note for skipped boats ────────────────────────────────────
+        if without_strokes:
+            skipped_dates = ", ".join(
+                build_boat_label(w, sorted_racing_workouts) for w in without_strokes
+            )
+            n = len(without_strokes)
+            hd.text(
+                f"Stroke-level data isn't available for {n} "
+                f"workout{'s' if n != 1 else ''}: {skipped_dates}.",
+                font_color="neutral-500",
+                font_size="small",
+            )
 
-    # ── Footer note for skipped boats ────────────────────────────────────
-    if without_strokes:
-        skipped_dates = ", ".join(
-            build_boat_label(w, sorted_racing_workouts) for w in without_strokes
-        )
-        n = len(without_strokes)
-        hd.text(
-            f"Stroke-level data isn't available for {n} "
-            f"workout{'s' if n != 1 else ''}: {skipped_dates}.",
-            font_color="neutral-500",
-            font_size="small",
-        )
+        if cfg:
+            with hd.scope("race_chart"):
+                StrokeChart(config=cfg, height="45vh")
+
+    with hd.hbox(gap=1.5, align="center", justify="center", wrap="wrap", padding=0.5):
+        with hd.scope("race_chart_metric"):
+            with radio_group(value=state.chart_metric, size="small") as mrg:
+                hd.radio_button("Pace", value="pace")
+                hd.radio_button("Watts", value="watts")
+            if mrg.changed:
+                state.chart_metric = mrg.value
+
+        with hd.scope("race_chart_pace_sw"):
+            _lbl = "Watts" if state.chart_metric == "watts" else "Pace"
+            pace_sw = hd.switch(_lbl, checked=state.chart_show_pace, size="small")
+            if pace_sw.changed:
+                state.chart_show_pace = pace_sw.checked
+
+        with hd.scope("race_chart_spm_sw"):
+            spm_sw = hd.switch("SPM", checked=state.chart_show_spm, size="small")
+            if spm_sw.changed:
+                state.chart_show_spm = spm_sw.checked
+
+        if has_hr_any:
+            with hd.scope("race_chart_hr_sw"):
+                hr_sw = hd.switch("HR", checked=state.chart_show_hr, size="small")
+                if hr_sw.changed:
+                    state.chart_show_hr = hr_sw.checked
 
 
 # ── Results table ─────────────────────────────────────────────────────────────
@@ -624,20 +619,6 @@ def race_page(
             if _wr_chart.wr_requested != state.show_wr_boat:
                 state.show_wr_boat = _wr_chart.wr_requested
 
-            # ── Stroke-data graph ──────────────────────────────────────────────
-            if sorted_racing_workouts and not is_loading:
-                with hd.box(
-                    gap=0.5, align="stretch", width="100%", padding_top=2
-                ):
-                    _race_stroke_graph(
-                        state,
-                        sorted_racing_workouts,
-                        raw_by_id,
-                        _workouts_dict,
-                        pb_id,
-                        is_dark,
-                    )
-
         with hd.box(gap=1, align="center"):
             with hd.h2():
                 _poss = your(ctx)
@@ -648,12 +629,25 @@ def race_page(
                 elif state.include_filter == "top":
                     hd.text(f"{_poss} Top 10 {_cur_event_lbl} Efforts")
 
-            # ── Results table ─────────────────────────────────────────────────────────
-            if racing_workouts:
-                _results_table(racing_workouts, event_type, pb_id)
-            elif not is_loading:
-                with hd.box(padding=3, align="center"):
-                    hd.text(
-                        f"No {_fmt_event_long(event_type, event_value)} results in the selected scope.",
-                        font_color="neutral-500",
+            # ── Stroke-data graph ──────────────────────────────────────────────
+            if sorted_racing_workouts and not is_loading:
+                with hd.box(gap=0.5, align="stretch", width="100%"):
+                    _race_stroke_graph(
+                        state,
+                        sorted_racing_workouts,
+                        raw_by_id,
+                        _workouts_dict,
+                        pb_id,
+                        is_dark,
                     )
+
+            # ── Results table ─────────────────────────────────────────────────────────
+            with hd.box():
+                if racing_workouts:
+                    _results_table(racing_workouts, event_type, pb_id)
+                elif not is_loading:
+                    with hd.box(padding=3, align="center"):
+                        hd.text(
+                            f"No {_fmt_event_long(event_type, event_value)} results in the selected scope.",
+                            font_color="neutral-500",
+                        )
