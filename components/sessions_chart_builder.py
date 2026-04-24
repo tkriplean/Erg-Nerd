@@ -469,7 +469,7 @@ def sessions_chart(workouts: list, global_state, ctx=None) -> None:
         with hd.box(gap=0.2, align="center"):
 
             with hd.h1(font_weight="normal"):
-                with hd.hbox(gap=.6, align="center"):
+                with hd.hbox(gap=0, align="center"):
                     hd.text("Take a Gander at ")
                     with hd.dropdown() as _sessions_dd:
                         from components.view_context import your as _your
@@ -477,7 +477,7 @@ def sessions_chart(workouts: list, global_state, ctx=None) -> None:
                         _poss = _your(ctx)
                         _sessions_label = f"All {_poss}{" Long " if state.filter_10k else " "} {" " if state.filter_ivl == "All" else state.filter_ivl} Work"
                         _sessions_btn = hd.button(
-                            _sessions_label, caret=True, size="medium", font_color="neutral-800", font_size=2, font_weight="bold", slot=_sessions_dd.trigger
+                            _sessions_label, caret=True, size="small", font_color="neutral-800",font_size=2,font_weight="bold", padding=(1, 0, 1, 0),border="none",label_style=hd.style(padding_right=0), slot=_sessions_dd.trigger
                         )
                         if _sessions_btn.clicked:
                             _sessions_dd.opened = not _sessions_dd.opened

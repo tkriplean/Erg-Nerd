@@ -1001,7 +1001,7 @@ def _page_header(
     with hd.box(gap=0.2, align="center"):
         with hd.h1(font_weight="normal"):
             with hd.hbox(
-                gap=0.6,
+                gap=0,
                 align="center",
                 padding_bottom=0,
                 justify="center",
@@ -1012,10 +1012,12 @@ def _page_header(
                         _bf_btn = hd.button(
                             _cur_best_lbl,
                             caret=True,
-                            size="large",
+                            label_style=hd.style(padding_right=0),
+                            border="none",
                             font_color="neutral-800",
                             font_size=2,
                             font_weight="bold",
+                            padding=(1, 0, 1, 0),
                             slot=_bf_dd.trigger,
                         )
                         if _bf_btn.clicked:
@@ -1067,7 +1069,7 @@ def _page_header(
                 _n_ev_tot = len(RANKED_DISTANCES) + len(RANKED_TIMES)
                 _ev_lbl = "All Events" if _n_ev_sel == _n_ev_tot else "Some Events"
 
-                hd.text("for", font_size="medium")
+                hd.text("for")
 
                 with hd.dropdown() as _ev_dd:
                     _ev_btn = hd.button(
@@ -1076,15 +1078,19 @@ def _page_header(
                         font_size=2,
                         font_weight="bold",
                         caret=True,
-                        size="large",
+                        label_style=hd.style(padding_right=0),
+                        border="none",
                         slot=_ev_dd.trigger,
+                        padding=(1, 0, 1, 0),
                     )
                     if _ev_btn.clicked:
                         _ev_dd.opened = not _ev_dd.opened
                     with hd.box(padding=1, gap=0.5, background_color="neutral-50"):
                         with hd.hbox(gap=0.5, padding_bottom=0.5):
                             if hd.button(
-                                "Select all", size="small", variant="text"
+                                "Select all",
+                                size="small",
+                                variant="text",
                             ).clicked:
                                 state.dist_enabled = tuple(
                                     True for _ in RANKED_DISTANCES
@@ -1130,10 +1136,8 @@ def _page_header(
                                         if cb.checked != state.time_enabled[i]:
                                             cb.checked = state.time_enabled[i]
 
-                hd.text("through", font_size="medium")
                 hd.text(
-                    _date_label,
-                    font_size="2x-large",
+                    f"through {_date_label}",
                     font_weight="normal",
                     min_width="225px",
                 )

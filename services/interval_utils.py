@@ -253,15 +253,12 @@ def build_interval_lines(r: dict, compact: bool = False) -> list[str]:
                 inner_for_render.append(modified)
             else:
                 inner_for_render.append(b)
-        inner_lines = _format_blocks(
-            inner_for_render, iv_type, _ft, _rest_suffix
-        )
+        inner_lines = _format_blocks(inner_for_render, iv_type, _ft, _rest_suffix)
         if inner_lines is not None and len(inner_lines) == 1:
             inner_str = inner_lines[0]
             if outer_rest > 0:
                 return [
-                    f"{n_reps} × ({inner_str})  /  "
-                    f"{_ft(outer_rest)}{_rest_suffix}"
+                    f"{n_reps} × ({inner_str})  /  " f"{_ft(outer_rest)}{_rest_suffix}"
                 ]
             return [f"{n_reps} × ({inner_str})"]
 
