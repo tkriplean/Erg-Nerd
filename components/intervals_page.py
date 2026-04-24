@@ -78,18 +78,17 @@ render as "—" and sort last.
 Time-aware thresholds: each row's Power Intensity score is computed
 against the rower's reference watts **on that row's own date** (via
 services/reference_watts.py), so a 2010 session is graded against 2010
-fitness, not today's.  The Quality column's expected_score comes from a
-fixed rubric in ``_STIMULUS_INFO`` — it is deliberately anchored to
-"today" because the grid is a "what should I be hitting now" view.
+fitness, not today's.  The Quality column uses the same time-aware
+reference watts.
 
-The Quality column compares each workout against its cell's own
-``expected_score`` and ``expected_work_s`` in ``_STIMULUS_INFO``.
-**Low** = power score below expected (session wasn't hard enough).
-**Medium** = power score meets/exceeds expected but total work time is
-below the cell's dose target.  **High** = both meet/exceed.  Cells
-classified as "Other" (uncommon combinations) show "—".  The cell shows
-a small coloured pill whose tooltip explains the grade with the
-workout's own numbers alongside the targets.
+The Quality column scores every work interval against the date-matched
+reference watts via :mod:`services.workout_quality`.  Each split accrues
+"quality energy" weighted by ``split_watts / category_reference_watts``
+and discounted (for interval sessions) by the preceding rest ratio;
+per-category energy is normalized by a reference target and summed.  The
+scalar is bucketed **Low** (<0.5) / **Medium** (<0.75) / **High** (≥0.75).
+Workouts whose reference-watts index is missing anchors show "—"; sort is
+by raw score so ordering is continuous within each bucket.
 
 Structure filter: clicking any Structure cell sets a filter restricting
 the table to workouts with that same structure key.  Clicking the same
@@ -112,6 +111,7 @@ from services.interval_utils import (
     interval_structure_key,
 )
 from services.reference_watts import get_reference_watts
+from services.workout_quality import compute_workout_quality
 from services.volume_bins import (
     BIN_NAMES,
     BIN_COLORS,
@@ -262,48 +262,16 @@ def _always_white(is_dark: bool) -> str:
 # Session quality
 # ---------------------------------------------------------------------------
 #
-# Each session is rated Low / Medium / High against the row's quality
-# expectations.  The rule is intentionally lenient:
-#
-#   • Low     — power intensity is below the row's expected intensity.
-#               (The session wasn't actually hard enough to count as quality
-#                at this work:rest ratio, regardless of volume.)
-#   • Medium  — power intensity ≥ expected, but total work time is below
-#               the row's expected dose.  (Right intensity, short dose.)
-#   • High    — power intensity ≥ expected AND total work time ≥ expected.
-#
-# The row's score uses the workout's own-date thresholds (time-aware);
-# expected_score comes from a fixed rubric anchored to "today".  The
-# asymmetry is intentional — the grid is a "what should I be hitting now"
-# view.  Sessions with no meaningful meters (score is None) return None.
+# Each session is rated Low / Medium / High by scoring every split/interval
+# against the rower's date-aware reference watts (see
+# :mod:`services.workout_quality`).  Each split contributes "quality energy"
+# weighted by how hard it was vs. the reference for its power-intensity
+# category; interval sessions additionally discount that energy by preceding
+# rest ratio.  Summed across categories and normalized by a per-category
+# reference target, the result is a scalar bucketed by the thresholds in
+# :mod:`services.workout_quality` (currently 0.5 / 0.75).  Workouts whose
+# reference-watts index is missing anchor events return None and render as "—".
 
-
-def _compute_quality(r: dict) -> str | None:
-    score = r.get("_power_score")
-    if score is None:
-        return None
-    row = r.get("_grid_row")
-    col = r.get("_grid_col")
-    if row is None or col is None:
-        return None
-    info = (
-        _STIMULUS_INFO[row][col] if 0 <= row < _N_ROWS and 0 <= col < _N_COLS else None
-    )
-    if info is None:
-        return None
-    expected_score = info.get("expected_score")
-    expected_work_s = info.get("expected_work_s")
-    if expected_score is None or expected_work_s is None:
-        return None
-    work_s = (r.get("time") or 0) / 10.0
-    if score < expected_score:
-        return "Low"
-    if work_s < expected_work_s:
-        return "Medium"
-    return "High"
-
-
-_QUALITY_ORDER = {"Low": 0, "Medium": 1, "High": 2}
 
 _QUALITY_STYLE: dict[str, dict] = {
     "Low": {
@@ -723,6 +691,7 @@ def _compute_grid_placement(r: dict) -> tuple[int, int]:
 def _enrich_workouts(
     workouts: list[dict],
     thresholds_for,
+    ref_watts_for,
     max_hr: int | None,
 ) -> list[dict]:
     """
@@ -732,6 +701,8 @@ def _enrich_workouts(
     ``thresholds_for(workout) -> dict | None`` resolves a workout to its
     own-date power thresholds — time-aware, so a 2010 row is classified
     against 2010 fitness (see services/reference_watts.py).
+    ``ref_watts_for(workout) -> dict | None`` resolves the same date's
+    reference-watts dict, used by the Quality metric.
 
     Fields attached:
 
@@ -800,7 +771,15 @@ def _enrich_workouts(
         r["_grid_col"] = col
         r["_grid_row"] = row
         r["_stimulus"] = _cell_name(row, col)
-        r["_quality"] = _compute_quality(r)
+        quality = compute_workout_quality(r, ref_watts_for(r), thresholds_for(r))
+        if quality is not None:
+            r["_quality"] = quality["category"]
+            r["_quality_score"] = quality["score"]
+            r["_quality_energy"] = quality["per_category_energy"]
+        else:
+            r["_quality"] = None
+            r["_quality_score"] = None
+            r["_quality_energy"] = None
         result.append(r)
     result.sort(key=lambda x: x.get("date", ""), reverse=True)
     return result
@@ -1372,17 +1351,27 @@ def intervals_page(ctx, global_state, excluded_seasons=(), machine="All") -> Non
         return
 
     # Cache per-date so we don't recompute thresholds when many workouts
-    # share a date.
+    # share a date.  We cache both the ref-watts dict and the derived
+    # bin thresholds; the Quality metric needs the raw ref-watts.
     th_cache: dict = {}
 
-    def _thresholds_for(w):
+    def _resolve(w):
         d = parse_date(w.get("date", ""))
         if d not in th_cache:
             ref = get_reference_watts(d, all_workouts)
-            th_cache[d] = compute_bin_thresholds(ref)
+            print(ref)
+            th_cache[d] = (ref, compute_bin_thresholds(ref))
         return th_cache[d]
 
-    all_intervals = _enrich_workouts(all_workouts, _thresholds_for, max_hr)
+    def _thresholds_for(w):
+        return _resolve(w)[1]
+
+    def _ref_watts_for(w):
+        return _resolve(w)[0]
+
+    all_intervals = _enrich_workouts(
+        all_workouts, _thresholds_for, _ref_watts_for, max_hr
+    )
 
     if not all_intervals:
         with hd.box(padding=4, align="center"):
@@ -1446,49 +1435,43 @@ def intervals_page(ctx, global_state, excluded_seasons=(), machine="All") -> Non
         if q is None:
             hd.text("—", font_size="small", font_color="neutral-400")
             return
-        row = w.get("_grid_row", 0)
-        col = w.get("_grid_col", 0)
-        info = (
-            _STIMULUS_INFO[row][col]
-            if 0 <= row < _N_ROWS and 0 <= col < _N_COLS
-            else None
-        )
-        expected_score = (info or {}).get("expected_score", 0)
-        expected_work_s = (info or {}).get("expected_work_s", 0)
-        stim_name = (info or {}).get("name", "this stimulus")
-        score = w.get("_power_score")
-        work_s = (w.get("time") or 0) / 10.0
+        score = w.get("_quality_score") or 0.0
+        energy = w.get("_quality_energy") or {}
         style = _QUALITY_STYLE[q]
+        top_cats = sorted(
+            ((cat, e) for cat, e in energy.items() if e > 0),
+            key=lambda p: p[1],
+            reverse=True,
+        )[:3]
         if q == "Low":
-            explanation = (
-                f"Power intensity {score:.0f} is below the ~{expected_score:.0f} "
-                f"expected of a {stim_name} session — the session wasn't hard "
-                f"enough to count as a quality dose."
+            headline = (
+                f"Quality score {score:.2f} — below the 0.50 threshold for a "
+                f"Medium session."
             )
         elif q == "Medium":
-            explanation = (
-                f"Power intensity {score:.0f} meets or exceeds the ~"
-                f"{expected_score:.0f} expected for {stim_name}, but total "
-                f"work time ({format_time(int(work_s * 10))}) is below the "
-                f"~{format_time(expected_work_s * 10)} dose typical of a full "
-                f"quality session."
+            headline = (
+                f"Quality score {score:.2f} — clears the 0.50 Medium threshold, "
+                f"below the 0.75 cutoff for High."
             )
         else:  # High
-            explanation = (
-                f"Power intensity {score:.0f} meets or exceeds the ~"
-                f"{expected_score:.0f} expected for {stim_name}, and total "
-                f"work time ({format_time(int(work_s * 10))}) clears the "
-                f"~{format_time(expected_work_s * 10)} dose expected of a full "
-                f"quality session."
-            )
+            headline = f"Quality score {score:.2f} — clears the 0.75 High threshold."
         with hd.tooltip() as tt:
-            with hd.box(slot=tt.content_slot, padding=0.4, gap=0.25, max_width=22):
-                hd.text(
-                    f"{q} quality",
-                    font_size="small",
-                    font_weight="bold",
-                )
-                hd.text(explanation, font_size="x-small")
+            with hd.box(slot=tt.content_slot, padding=0.4, gap=0.3, max_width=24):
+                hd.text(f"{q} quality", font_size="small", font_weight="bold")
+                hd.text(headline, font_size="x-small")
+                if top_cats:
+                    total = sum(e for _, e in top_cats) or 1.0
+                    hd.text(
+                        "Top contributions:",
+                        font_size="x-small",
+                        font_color="neutral-500",
+                    )
+                    for cat, e in top_cats:
+                        with hd.scope(f"{cat} {e}"):
+                            hd.text(
+                                f"  • {cat}: {100.0 * e / total:.0f}%",
+                                font_size="x-small",
+                            )
             with hd.box(
                 padding=(0.15, 0.5),
                 border_radius="medium",
@@ -1555,7 +1538,9 @@ def intervals_page(ctx, global_state, excluded_seasons=(), machine="All") -> Non
             "Quality",
             "6rem",
             render_cell=_render_quality_cell,
-            sort_value=lambda w: _QUALITY_ORDER.get(w.get("_quality"), -1),
+            sort_value=lambda w: w.get("_quality_score")
+            if w.get("_quality_score") is not None
+            else -1.0,
         ),
         ColumnDef(
             "work",

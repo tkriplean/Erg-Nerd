@@ -243,33 +243,45 @@ Each chip carries an `hd.tooltip` whose `content_slot` box contains: bold zone h
 | Stimulus | `r["_stimulus"]` | Grid cell label, italic |
 | Power Intensity | `r["_power_score"]` + `r["_bar_uri"]` | Bold 0–100 score above a small stacked power-zone bar. Rich tooltip lists each non-empty zone (swatch · name · percentage). "—" when no work meters. |
 | HR Intensity | `r["_hr_score"]` + `r["_hr_bar_uri"]` | Same layout as Power Intensity, using HR zones. "—" when the workout has no usable HR data or the user has no max HR. |
-| Quality | `r["_quality"]` | Low / Medium / High pill, compared against the row's expected intensity and work-time targets. Rich tooltip explains the grade. "—" for workouts without a power score. |
+| Quality | `r["_quality"]` + `r["_quality_score"]` | Low / Medium / High pill derived from a reference-watts-based quality score (see Quality Grade). Rich tooltip shows the raw score and the top category contributions. "—" when the reference-watts index is missing anchors. |
 | Work | `r["distance"]` | Work-only meters (C2 API excludes rest from `distance` on interval workouts) |
 | Avg Split | `r["_work_pace"]` | `r["time"] * 500 / r["distance"]`; work-only |
 | Time | `r["time_formatted"]` | Work-only time |
 | SPM | `r["_work_spm"]` | Work-weighted average |
 | ↗ | — | Open-workout link (`COL_LINK`) |
 
-Sort direction flips on repeated header clicks; split defaults ascending (fastest = lowest number). Power / HR Intensity sort descending by score, with `None` sorting last. Quality sorts by `_QUALITY_ORDER` (High > Medium > Low > None).
+Sort direction flips on repeated header clicks; split defaults ascending (fastest = lowest number). Power / HR Intensity sort descending by score, with `None` sorting last. Quality sorts by the raw `_quality_score` (continuous within each Low/Medium/High bucket).
 
 ### Quality Grade
 
-`_compute_quality(r)` assigns Low / Medium / High per workout by comparing its power intensity score and total work time against **the cell's own targets** (not the row's). The row's `_power_score` is computed against the workout's own-date thresholds; the cell's `expected_score` is anchored to today's fitness (see *Time-aware power thresholds*). Each populated entry in `_STIMULUS_INFO` carries two fields:
+`compute_workout_quality(workout, ref_watts, thresholds)` from `services/workout_quality.py` computes a scalar quality score against the rower's **date-aware reference watts** (same curve used for the Power Intensity zones). It works for both interval and steady-state workouts — the interval-only rest penalty is the only branching.
 
-- `expected_score` — the 0–100 power-intensity score a good session of that specific stimulus should reach (e.g. 40 for Supra-threshold, 75 for Race-pace intervals, 0 for Aerobic base).
-- `expected_work_s` — a rough lower bound on total work seconds needed to count as a full dose.
+Per split or work interval:
 
-Why per-cell rather than per-row: the same work:rest ratio can mean very different sessions at different durations. A 30"–2' piece in the "Short rest" row is Glycolytic capacity (expect ~65 score); a 20'+ piece on the same row is Tempo (expect ~25 score). One expectation per row forced the colour map and the quality grade to average across these — per-cell targets fix both.
+1. Compute `split_watts` from pace.
+2. Classify it into a power category via the existing `classify_watts` bin (`Fast`, `2k`, `5k`, `Threshold`, `Fast Aerobic`, `Slow Aerobic`).
+3. Accumulate `energy = (split_watts / category_ref_watts) × split_watts × work_seconds` — faster-than-reference work contributes quadratically, slower-than-reference linearly.
+4. For interval workouts, multiply by `(1 - WORK_REST_PENALTY_FACTOR) + WORK_REST_PENALTY_FACTOR × (rest / (rest + work))`, where `rest` is the rest that *preceded* the work interval. `WORK_REST_PENALTY_FACTOR = 0.25`, so a no-rest rep keeps 75% of its energy and a rest-dominated rep keeps 100%.
 
-Continuous-row cells (Fartlek, Steady state, Aerobic base, LSD) set `expected_score` to 0 or a very low value so pure low-intensity Z2 work doesn't grade as Low; quality on those rows is governed almost entirely by whether the session accumulated enough volume.
+Category reference targets (per `QUALITY_REFERENCE_EVENTS` / `QUALITY_REFERENCE_DISTANCES_M`):
 
-Rules:
-- **Low** — power score below the cell's expected intensity.
-- **Medium** — power score meets/exceeds expected, but total work time is below the cell's dose target.
-- **High** — both power score and total work time meet/exceed expected.
-- **—** — power score is `None`, the workout sits outside the grid, or its cell is "Other" (no expectations defined).
+| Category | Reference watts | Target distance |
+|---|---|---|
+| Fast | 1k watts | 1 km |
+| 2k | 2k watts | 2 km |
+| 5k | 5k watts | 5 km |
+| Threshold | 60 min watts | 10 km |
+| Fast Aerobic | Marathon watts | 13 km |
+| Slow Aerobic | 0.9 × marathon watts | 15 km |
 
-Each cell is a small coloured pill (red/orange/green). The hover tooltip shows the grade name plus a one-sentence explanation with the workout's score and work-minutes alongside the row's targets, so the user can see *why* it graded the way it did.
+The final score is `Σ energy[cat] / (ref_watts[cat] × ref_distance[cat])`. Buckets:
+
+- **Low** — score < 0.50
+- **Medium** — 0.50 ≤ score < 0.75
+- **High** — score ≥ 0.75
+- **—** — reference-watts index is missing one of the 5 anchor events (1k, 2k, 5k, 60 min, marathon) for the workout's date, or the workout has no scorable splits.
+
+Thresholds and the category → target distance mapping are tunable in one place (`services/workout_quality.py`). The cell renders as a coloured pill (red/orange/green); the hover tooltip shows the raw score plus the top three category contributions as a percentage of total quality energy.
 
 ### Pagination
 
