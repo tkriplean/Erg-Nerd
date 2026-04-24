@@ -169,7 +169,7 @@ _DUR_COLS = [
     ("30s – 2min", 30, 120),
     ("2 – 4min", 120, 240),
     ("4 – 8min", 240, 480),
-    ("8 – 20min'", 480, 1200),
+    ("8 – 20min", 480, 1200),
     ("20min+", 1200, float("inf")),
 ]
 _N_COLS = len(_DUR_COLS)
@@ -593,7 +593,7 @@ _STIMULUS_INFO: list[list[dict | None]] = [
         {
             "name": "Maximal sprints",
             "description": (
-                "True maximum-effort sprints with full PCr recovery. Every "
+                "Maximum-effort sprints with full PCr recovery. Every "
                 "rep should be maximally explosive."
             ),
             "example": "6× 10\" / 2'r, 8× 15\" / 3'r.",
@@ -1205,36 +1205,54 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                                 background_color=cell_bg_rgba,
                                 border="1px solid neutral-0",
                             ):
-                                with aligned_button(
-                                    width="100%",
-                                    height=_CELL_H,
-                                    line_height="normal",
-                                    align="center",
-                                    background_color=cell_bg_rgba,
-                                    border="none",
-                                    padding_bottom=0,
-                                    padding_top=1.5,
-                                ) as cell_btn:
-                                    if count > 0:
+                                if count > 0:
+                                    with aligned_button(
+                                        width="100%",
+                                        height=_CELL_H,
+                                        line_height="normal",
+                                        align="center",
+                                        background_color=cell_bg_rgba,
+                                        border="none",
+                                        padding_bottom=0,
+                                        padding_top=1.5,
+                                    ) as cell_btn:
+                                        if count > 0:
+                                            hd.text(
+                                                str(count),
+                                                font_size="large",
+                                                font_weight="bold",
+                                                font_color=white_token,
+                                            )
                                         hd.text(
-                                            str(count),
-                                            font_size="large",
-                                            font_weight="bold",
+                                            display_label,
+                                            font_size="x-small",
+                                            text_align="center",
                                             font_color=white_token,
                                         )
-                                    hd.text(
-                                        display_label,
-                                        font_size="x-small",
-                                        text_align="center",
-                                        font_color=white_token,
-                                    )
-                                if cell_btn.clicked:
-                                    sel = set(state.active_cells)
-                                    if is_sel:
-                                        sel.discard(k)
-                                    else:
-                                        sel.add(k)
-                                    state.active_cells = tuple(sorted(sel))
+                                    if cell_btn.clicked:
+                                        sel = set(state.active_cells)
+                                        if is_sel:
+                                            sel.discard(k)
+                                        else:
+                                            sel.add(k)
+                                        state.active_cells = tuple(sorted(sel))
+                                else:
+                                    with hd.box(
+                                        width="100%",
+                                        height=_CELL_H,
+                                        line_height="normal",
+                                        align="center",
+                                        background_color=cell_bg_rgba,
+                                        border="none",
+                                        padding_bottom=0,
+                                        padding_top=2,
+                                    ) as cell_btn:
+                                        hd.text(
+                                            display_label,
+                                            font_size="x-small",
+                                            text_align="center",
+                                            font_color=white_token,
+                                        )
 
                                 with hd.tooltip() as tt:
                                     _grid_cell_tooltip_content(tt, ri, ci)

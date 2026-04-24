@@ -1017,7 +1017,7 @@ def _page_header(
                             font_color="neutral-800",
                             font_size=2,
                             font_weight="bold",
-                            padding=(1, 0, 1, 0),
+                            padding=(1, 0.5, 1, 0),
                             slot=_bf_dd.trigger,
                         )
                         if _bf_btn.clicked:
@@ -1081,7 +1081,7 @@ def _page_header(
                         label_style=hd.style(padding_right=0),
                         border="none",
                         slot=_ev_dd.trigger,
-                        padding=(1, 0, 1, 0),
+                        padding=(1, 0.5, 1, 0),
                     )
                     if _ev_btn.clicked:
                         _ev_dd.opened = not _ev_dd.opened

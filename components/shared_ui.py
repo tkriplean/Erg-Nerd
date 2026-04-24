@@ -179,7 +179,7 @@ def header_dropdown(
                 font_weight="bold",
                 border="none",
                 slot=dd.trigger,
-                padding=(1, 0, 1, 0),
+                padding=(1, 0.5, 1, 0),
                 label_style=hd.style(padding_right=0),
             )
             if btn.clicked:
