@@ -78,7 +78,7 @@ _LOW_MAX = 0.5
 _MEDIUM_MAX = 0.75
 _HIGH_MAX = 1
 
-QUALITY_ORDER: dict[str, int] = {"Low": 0, "Medium": 1, "High": 2, "Super": 3}
+QUALITY_ORDER: dict[str, int] = {"Low": 0, "Medium": 1, "High": 2, "Ultra": 3}
 
 
 def _category_from_bin(bin_idx: int) -> Optional[str]:
@@ -115,7 +115,7 @@ def _bucket(score: float) -> str:
         return "Medium"
     if score < _HIGH_MAX:
         return "High"
-    return "Super"
+    return "Ultra"
 
 
 def _iter_quality_splits(workout: dict, is_interval: bool):

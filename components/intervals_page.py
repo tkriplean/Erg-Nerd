@@ -65,7 +65,7 @@ Sortable headers (▲/▼), default sort: date descending.
 
 Columns: Date · Reps · Structure (rep-stripped) · Stimulus ·
          Power Intensity (score + bar) · HR Intensity (score + bar) ·
-         Quality (Low/Medium/High pill) ·
+         Quality (Low/Medium/High/Ultra pill) ·
          Work dist · Avg Split · Time · SPM · ↗
 
 The Power/HR Intensity columns each show a 0–100 weighted-average score
@@ -262,7 +262,7 @@ def _always_white(is_dark: bool) -> str:
 # Session quality
 # ---------------------------------------------------------------------------
 #
-# Each session is rated Low / Medium / High / Super by scoring every split/interval
+# Each session is rated Low / Medium / High / Ultra by scoring every split/interval
 # against the rower's date-aware reference watts (see
 # :mod:`services.workout_quality`).  Each split contributes "quality energy"
 # weighted by how hard it was vs. the reference for its power-intensity
@@ -292,8 +292,8 @@ _QUALITY_STYLE: dict[str, dict] = {
         "fg_on_dark_theme": "neutral-1000",
         "fg_on_light_theme": "neutral-0",
     },
-    "Super": {
-        "label": "Super",
+    "Ultra": {
+        "label": "Ultra",
         "bg": (25, 150, 50, 1),  # green
         "fg_on_dark_theme": "neutral-1000",
         "fg_on_light_theme": "neutral-0",
