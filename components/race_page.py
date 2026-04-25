@@ -2,9 +2,8 @@
 Race Page — Regatta-style race animation for a single ranked event.
 
 Exported:
-    race_page(client, user_id, excluded_seasons=(), machine="All")
+    race_page(client, user_id)
         Top-level HyperDiv component; call from app.py.
-        excluded_seasons / machine come from the global filter in app.py.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 UI LAYOUT
@@ -71,7 +70,8 @@ from services.rowing_utils import (
     is_rankable_noninterval,
     profile_complete,
 )
-from components.concept2_sync import sync_from_context, strokes_batch
+
+from components.concept2_sync import get_all_workouts, strokes_batch
 from components.view_context import your
 from components.race_chart_plugin import RaceChart
 from components.hyperdiv_extensions import radio_group
@@ -80,6 +80,8 @@ from components.workout_chart_builder import (
     build_compare_series,
 )
 from components.workout_chart_plugin import StrokeChart
+from components.race_scatter import build_race_scatter_config
+from components.race_scatter_plugin import RaceScatterChart
 from components.workout_table import (
     WorkoutTable,
     COL_DATE,
@@ -165,6 +167,58 @@ def _include_filtered(state, workouts: list, include_filter: str) -> list:
         return workouts[:10]
 
     return apply_best_only(workouts, by_season=True)
+
+
+# ── WR record caption ─────────────────────────────────────────────────────────
+
+
+def _wr_caption(event_type: str, event_value: int, rec: dict) -> None:
+    """Render a two-line muted caption describing the WR holder + record.
+
+    Only called when the WR lane is visible and ``rec`` has full metadata.
+    """
+    name = rec.get("name") or "World Record holder"
+    gender = {"M": "M", "F": "F"}.get(rec.get("gender", ""), "")
+    age_cat = rec.get("age_category") or ""
+    weight_class = rec.get("weight_class")
+    date = rec.get("date") or ""
+    result = rec.get("result") or 0
+
+    # Result and pace formatting.  format_time and fmt_split both expect
+    # tenths of a second.
+    if event_type == "dist":
+        result_str = format_time(round(result * 10))
+        pace_s = result / (event_value / 500.0) if event_value else 0
+        pace_str = fmt_split(round(pace_s * 10))
+        what = f"record of {result_str} ({pace_str}/500m)"
+    else:
+        dur_s = event_value / 10.0
+        pace_s = dur_s / (result / 500.0) if result else 0
+        pace_str = fmt_split(round(pace_s * 10))
+        result_str = f"{round(result)}m"
+        what = f"record of {result_str} ({pace_str}/500m)"
+
+    cat_bits = [b for b in (gender, weight_class, age_cat) if b]
+    cat = " ".join(cat_bits)
+
+    line1_bits = [name]
+    if cat:
+        line1_bits.append(f"'s {cat}")
+    else:
+        line1_bits.append("'s")
+    line1 = f"{''.join(line1_bits)} {what}"
+    if date:
+        line1 += f" set on {date}"
+    line1 += "."
+
+    with hd.box(gap=0.25, align="center", padding_top=0.5):
+        hd.text(line1, font_color="neutral-600", font_size="small")
+        hd.text(
+            "The WR boat rows even splits because stroke-level data isn't available.",
+            font_color="neutral-500",
+            font_size="x-small",
+            font_style="italic",
+        )
 
 
 # ── Race stroke-data graph ────────────────────────────────────────────────────
@@ -349,12 +403,7 @@ def _results_table(workouts: list, etype: str, pb_id: int | None) -> None:
 # ── Main page entry point ─────────────────────────────────────────────────────
 
 
-def race_page(
-    ctx,
-    global_state,
-    excluded_seasons: tuple = (),
-    machine: str = "All",
-) -> None:
+def race_page(ctx) -> None:
     """
     Top-level entry point for the Race tab.
 
@@ -391,29 +440,18 @@ def race_page(
     is_dark = hd.theme().is_dark
 
     profile = get_profile_from_context(ctx)
-    sync_result = sync_from_context(ctx)
 
-    if sync_result is None or profile is None:
+    result = get_all_workouts(ctx)
+
+    if result is None or profile is None:
         hd.box(padding=2, min_height="80vh")
         return
 
-    _workouts_dict, sorted_workouts = sync_result
-    all_workouts = list(sorted_workouts)
+    _workouts_dict, all_workouts = result
 
     # ── Apply quality filter (same strategy as Performance page) ─────────────
     rankable_efforts = [w for w in all_workouts if is_rankable_noninterval(w)]
     rankable_efforts = apply_quality_filters(rankable_efforts)
-
-    # ── Apply global filters ──────────────────────────────────────────────────
-    if excluded_seasons:
-        _excl = set(excluded_seasons)
-        rankable_efforts = [
-            w for w in rankable_efforts if get_season(w.get("date", "")) not in _excl
-        ]
-    if machine != "All":
-        rankable_efforts = [
-            w for w in rankable_efforts if w.get("type", "rower") == machine
-        ]
 
     # ── Compute available events ──────────────────────────────────────────────
     event_counts: dict = {}
@@ -438,11 +476,15 @@ def race_page(
         event_type, event_value = available_events[0]
 
     # ── Derived workout sets ───────────────────────────────────────────────────
-    # Table scope: event + global filters (include_filter ignored for table)
-    racing_workouts = _event_workouts(rankable_efforts, event_type, event_value, "All")
+    # Full event scope: every qualifying workout for the event + global filters.
+    # Used by the scatter plot below the table (include_filter intentionally
+    # ignored — the scatter shows the long-arc trend across all efforts).
+    all_event_workouts = _event_workouts(
+        rankable_efforts, event_type, event_value, "All"
+    )
 
     # Race scope: additionally apply include_filter
-    racing_workouts = _include_filtered(state, racing_workouts, state.include_filter)
+    racing_workouts = _include_filtered(state, all_event_workouts, state.include_filter)
 
     # PB identification
     pb_id: int | None = None
@@ -492,7 +534,7 @@ def race_page(
     # ── World Record ghost boat ────────────────────────────────────────────────
     # Available only when: profile is complete, machine filter is rower (WR
     # records are RowErg only), and the user has enabled the toggle.
-    _wr_available = profile_complete(profile) and machine in ("All", "rower")
+    _wr_available = profile_complete(profile)
 
     # Compute the profile key regardless of toggle state so UI status text
     # can reference it when the checkbox is visible.
@@ -524,7 +566,8 @@ def race_page(
         if state.wr_records_key == _wr_key:
             _rec = state.wr_records.get((event_type, event_value))
             if _rec is not None:
-                _wr_boat = build_wr_boat(event_type, event_value, _rec)
+                _rec_val = _rec["result"] if isinstance(_rec, dict) else _rec
+                _wr_boat = build_wr_boat(event_type, event_value, _rec_val)
 
     # Prepend the WR boat so it occupies the first lane and is always visible.
     if _wr_boat is not None:
@@ -568,7 +611,7 @@ def race_page(
                             field="event",
                         )
 
-                global_filter_ui(global_state, ctx)
+                global_filter_ui(ctx)
 
             # ── Loading progress bar ──────────────────────────────────────────────────
             if is_loading:
@@ -619,6 +662,13 @@ def race_page(
             if _wr_chart.wr_requested != state.show_wr_boat:
                 state.show_wr_boat = _wr_chart.wr_requested
 
+            # ── WR record caption ────────────────────────────────────────────
+            # Two-line muted caption below the canvas when the WR boat is on:
+            #   1. Holder's name + category + record + date.
+            #   2. Note that the WR lane rows even splits.
+            if state.show_wr_boat and _wr_boat is not None and isinstance(_rec, dict):
+                _wr_caption(event_type, event_value, _rec)
+
         with hd.box(gap=1, align="center"):
             with hd.h2():
                 _poss = your(ctx)
@@ -651,3 +701,31 @@ def race_page(
                             f"No {_fmt_event_long(event_type, event_value)} results in the selected scope.",
                             font_color="neutral-500",
                         )
+
+            # ── Pace-vs-date scatter ──────────────────────────────────────────
+            # Long-arc view: every qualifying effort for the event (the
+            # include_filter is intentionally ignored here — the scatter is
+            # for spotting trends across all efforts, not just the bests).
+            if all_event_workouts and len(all_event_workouts) >= 1:
+                with hd.box(padding_top=2, gap=0.5):
+                    with hd.hbox(justify="space-between", align="center"):
+                        hd.text(
+                            f"Pace over time — {_fmt_event_long(event_type, event_value)}",
+                            font_color="neutral-700" if not is_dark else "neutral-300",
+                            font_size="small",
+                        )
+                        with hd.scope("race_scatter_metric"):
+                            with radio_group(
+                                value=state.scatter_metric, size="small"
+                            ) as srg:
+                                hd.radio_button("Pace", value="pace")
+                                hd.radio_button("Watts", value="watts")
+                            if srg.changed:
+                                state.scatter_metric = srg.value
+                    _scatter_cfg = build_race_scatter_config(
+                        all_event_workouts,
+                        metric=state.scatter_metric,
+                        is_dark=is_dark,
+                        pb_id=pb_id,
+                    )
+                    RaceScatterChart(config=_scatter_cfg, height="40vh")
