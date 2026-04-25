@@ -52,13 +52,24 @@ def render_rankings_modal(
     user_date_label: str = "",
 ) -> None:
     """Populate ``dialog`` with a rankings table. Call while dialog is open."""
-    total = len(pool)
-
     # Sort pool best → worst for display.
     if event_kind == "dist":
         ordered = sorted(pool, key=lambda e: e.get("value_tenths") or 10**12)
     else:
         ordered = sorted(pool, key=lambda e: -(e.get("value_tenths") or 0))
+
+    # Splice the user's own performance into the displayed list at their rank.
+    user_entry = {
+        "name": "You",
+        "age": user_age,
+        "country": "",
+        "value_tenths": user_value_tenths,
+        "verified": "",
+        "_is_user": True,
+    }
+    insert_idx = max(0, min(len(ordered), user_rank - 1))
+    ordered.insert(insert_idx, user_entry)
+    total = len(ordered)
 
     # Determine rows to show: top 500 + ±25 around user's position.
     top_cap = 500
@@ -74,7 +85,7 @@ def render_rankings_modal(
         segments = [(0, show_top), (window_lo, window_hi)]
 
     with dialog:
-        with hd.box(gap=0.5, width="92vw"):
+        with hd.box(gap=0.5, width="100%"):
             hd.text(
                 f"{total:,} ranked performances",
                 font_color="neutral-500",
@@ -99,7 +110,6 @@ def render_rankings_modal(
 
             with hd.box(
                 max_height="60vh",
-                # overflow="auto",
                 gap=0,
             ) as scroll_box:
                 prev_hi = 0
@@ -116,9 +126,7 @@ def render_rankings_modal(
                     for i in range(seg_lo, seg_hi):
                         entry = ordered[i]
                         rank_1b = i + 1
-                        is_user = rank_1b == user_rank and (
-                            entry.get("value_tenths") == user_value_tenths
-                        )
+                        is_user = bool(entry.get("_is_user"))
                         bg = "primary-100" if is_user else None
                         v = entry.get("value_tenths") or 0
                         pt = _pace_tenths_for(event_kind, event_value, v)
@@ -141,9 +149,9 @@ def render_rankings_modal(
 
                     prev_hi = seg_hi
 
-            if user_rank > 0:
-                hd.text(
-                    f"{user_row_label} — rank {user_rank:,} of {total:,}",
-                    font_color="neutral-600",
-                    font_size="small",
-                )
+            # if user_rank > 0:
+            #     hd.text(
+            #         f"{user_row_label} — rank {user_rank:,} of {total:,}",
+            #         font_color="neutral-600",
+            #         font_size="small",
+            #     )

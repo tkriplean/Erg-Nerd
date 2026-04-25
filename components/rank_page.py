@@ -3,7 +3,7 @@ Rank Page — "how do I rank?" view comparing a user's ranked performances
 against the world record or the Concept2 rankings field.
 
 Exported:
-    rank_page(ctx, excluded_seasons=(), machine="All")
+    rank_page(ctx)
         Top-level HyperDiv component; call from app.py.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -11,7 +11,7 @@ UI LAYOUT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   Heading (inline dropdowns):
-      "Your [Season Bests ▾] Against [C2 Age-Matched Rankings ▾]"
+      "Your [Season Bests ▾] Against [C2 Same Age Peers ▾]"
 
   Main chart:
       RankChart — scatter over categorical x (ranked events), y = % of WR
@@ -75,10 +75,11 @@ from services.concept2_rankings import (
     rank_in_pool,
     histogram_watts,
     rankings_age_band,
+    RankingModifiers,
 )
 from services.concept2_rankings_index import load_event_index
 
-from components.concept2_sync import sync_from_context
+from components.concept2_sync import get_all_workouts
 from components.profile_page import get_profile_from_context
 from components.view_context import your
 from components.rank_chart_plugin import RankChart
@@ -92,8 +93,8 @@ from services.volume_bins import swatch_svg
 
 _INCLUDE_LABELS = {"SBs": "Season Bests", "PBs": "Personal Bests"}
 _FOCUS_LABELS = {
-    "c2_age_matched": "C2 Age-Matched Peers",
-    "c2_age_group": "C2 Age-Group Peers",
+    "c2_age_matched": "C2 Same Age Peers",
+    "c2_age_group": "C2 Age Group Peers",
     "world_record": "World Record",
 }
 
@@ -167,18 +168,101 @@ def _rankings_weight_class(wr_class: str | None) -> str | None:
     return None
 
 
-def _qualifying_performances(
-    raw_workouts: list, *, machine: str, excluded_seasons: tuple, best_filter: str
-) -> list:
+# ──────────────────────────────────────────────────────────────────────────
+# Cross-event name aggregates (lazy, module-global cache)
+# ──────────────────────────────────────────────────────────────────────────
+# Loading these scans every ranking index file — expensive (millions of rows)
+# but cached for the process lifetime. Only computed when the user enables
+# the corresponding modifier in the "additional filters" dropdown.
+
+_NAME_AGG_CACHE: dict = {}
+
+
+def _load_name_counts() -> dict:
+    """Return {name: total_entries_across_all_events}. Cached process-wide."""
+    if "counts" in _NAME_AGG_CACHE:
+        return _NAME_AGG_CACHE["counts"]
+    counts: dict = {}
+    for et, ev, _ in _EVENT_ORDER:
+        try:
+            entries = load_event_index(et, ev) or []
+        except Exception:
+            entries = []
+        for e in entries:
+            n = e.get("name")
+            if n:
+                counts[n] = counts.get(n, 0) + 1
+    _NAME_AGG_CACHE["counts"] = counts
+    return counts
+
+
+def _load_name_event_sets(required: frozenset) -> dict:
+    """Return {name: frozenset((kind, value))} for names appearing in the
+    supplied required events. Cached per required-set."""
+    key = ("events", tuple(sorted(required)))
+    if key in _NAME_AGG_CACHE:
+        return _NAME_AGG_CACHE[key]
+    tmp: dict[str, set] = {}
+    for et, ev in required:
+        try:
+            entries = load_event_index(et, ev) or []
+        except Exception:
+            entries = []
+        seen: set = set()
+        for e in entries:
+            n = e.get("name")
+            if not n or n in seen:
+                continue
+            seen.add(n)
+            s = tmp.get(n)
+            if s is None:
+                s = set()
+                tmp[n] = s
+            s.add((et, ev))
+    frozen = {n: frozenset(s) for n, s in tmp.items()}
+    _NAME_AGG_CACHE[key] = frozen
+    return frozen
+
+
+def _build_modifiers(state) -> RankingModifiers | None:
+    """Construct a RankingModifiers from UI state, or None if all defaults."""
+    must_have_raw = tuple(state.modifier_must_have_events or ())
+    exclude_unv = bool(state.modifier_exclude_unverified)
+    min_perf = int(state.modifier_min_performances or 1)
+
+    if not must_have_raw and not exclude_unv and min_perf <= 1:
+        return None
+
+    must_have: frozenset = frozenset()
+    name_event_sets = None
+    if must_have_raw:
+        parsed: set = set()
+        for key in must_have_raw:
+            try:
+                k, v = key.split(":", 1)
+                parsed.add((k, int(v)))
+            except ValueError:
+                continue
+        must_have = frozenset(parsed)
+        if must_have:
+            name_event_sets = _load_name_event_sets(must_have)
+
+    name_counts = None
+    if min_perf > 1:
+        name_counts = _load_name_counts()
+
+    return RankingModifiers(
+        must_have_event_kinds=must_have,
+        exclude_unverified=exclude_unv,
+        min_ranked_performances=min_perf,
+        name_counts=name_counts,
+        name_event_sets=name_event_sets,
+    )
+
+
+def _qualifying_performances(raw_workouts: list, *, best_filter: str) -> list:
     """Return the list of ranked performances (one per workout) to display."""
-    excl = set(excluded_seasons)
-    quality = [
-        w
-        for w in raw_workouts
-        if (machine == "All" or w.get("type") == machine)
-        and is_rankable_noninterval(w)
-        and get_season(w.get("date", "")) not in excl
-    ]
+    quality = [w for w in raw_workouts if is_rankable_noninterval(w)]
     quality = apply_quality_filters(quality)
     # Keep only rows whose (etype, evalue) is in the ranked set.
     ranked = [w for w in quality if workout_cat_key(w) is not None]
@@ -203,6 +287,7 @@ def _build_rows(
     dob = profile.get("dob", "")
 
     indices_cache: dict[str, list] = {}
+    modifiers = _build_modifiers(state)
 
     rows: list[dict] = []
     for w in qualifying:
@@ -267,6 +352,7 @@ def _build_rows(
                 k=state.k_age_match,
                 gender=gender_api,
                 weight_class=w_class,
+                modifiers=modifiers,
             )
         elif state.ranking_focus == "c2_age_group":
             pool = age_group_matched_rankings(
@@ -274,6 +360,7 @@ def _build_rows(
                 age_band=rankings_age_band(age),
                 gender=gender_api,
                 weight_class=w_class,
+                modifiers=modifiers,
             )
         else:
             pool = []
@@ -308,9 +395,10 @@ def _build_rows(
             wr = get_records_for_age(gender_api, age, weight_kg)
             rec = wr.get((etype, evalue))
             if rec is not None:
-                # WR stores seconds for dist, meters for time.
+                # WR metadata dict; ``result`` is seconds (dist) or meters (time).
+                rec_val = rec["result"] if isinstance(rec, dict) else rec
                 if etype == "dist":
-                    wr_time_s = float(rec)
+                    wr_time_s = float(rec_val)
                     wr_pace = wr_time_s / (evalue / 500.0)
                     wr_watts = compute_watts(wr_pace)
                     user_time_s = value_tenths / 10.0
@@ -324,7 +412,7 @@ def _build_rows(
                     row["wr_watts"] = wr_watts
                     row["wr_value"] = wr_time_s
                 else:
-                    wr_meters = float(rec)
+                    wr_meters = float(rec_val)
                     dur_s = evalue / 10.0
                     wr_pace = dur_s / (wr_meters / 500.0)
                     wr_watts = compute_watts(wr_pace)
@@ -361,21 +449,7 @@ def _build_series(rows: list[dict], state) -> tuple[list, list]:
     # Percentile series: one per season for SBs, one combined for PBs.
     if state.include_filter == "PBs":
         ages = [r["age"] for r in rows]
-        pts = []
-        for r in rows:
-            if not r.get("rank_total"):
-                continue
-            pts.append(
-                {
-                    "x_key": r["event_key"],
-                    "y": round(r["percentile"], 2),
-                    "tooltip": (
-                        f"{r['event_label']} · {r['date_label']} · Age {r['age']}"
-                        f" · rank {r['rank']:,} of {r['rank_total']:,}"
-                        f" · {r['percentile']:.1f}%ile"
-                    ),
-                }
-            )
+        pts = [_pct_point(r) for r in rows if r.get("rank_total")]
         return event_order, [
             {
                 "label": f"Personal Bests · Ages {_fmt_ages(ages)}",
@@ -398,18 +472,7 @@ def _build_series(rows: list[dict], state) -> tuple[list, list]:
     for s in seasons_sorted:
         ages = season_ages.get(s, [])
         label = f"{s} · Ages {_fmt_ages(ages)}" if ages else s
-        pts = [
-            {
-                "x_key": r["event_key"],
-                "y": round(r["percentile"], 2),
-                "tooltip": (
-                    f"{r['event_label']} · {r['date_label']} · Age {r['age']}"
-                    f" · rank {r['rank']:,} of {r['rank_total']:,}"
-                    f" · {r['percentile']:.1f}%ile"
-                ),
-            }
-            for r in by_season[s]
-        ]
+        pts = [_pct_point(r) for r in by_season[s]]
         color, border = _season_color_pair(s)
         series.append(
             {
@@ -422,45 +485,64 @@ def _build_series(rows: list[dict], state) -> tuple[list, list]:
     return event_order, series
 
 
+def _duration_seconds(r: dict) -> float:
+    """Return the physical duration of this performance in seconds.
+
+    For ``time`` events that's the fixed event window. For ``dist`` events
+    that's the user's actual elapsed time, so per-row positions on the log
+    x-axis honestly reflect effort length.
+    """
+    if r["event_kind"] == "time":
+        return r["event_value"] / 10.0
+    vt = r.get("value_tenths") or 0
+    return vt / 10.0
+
+
+def _pct_point(r: dict) -> dict:
+    """Point payload for percentile-mode series."""
+    return {
+        "x": _duration_seconds(r),
+        "y": round(r["percentile"], 2),
+        "event": r["event_label"],
+        "date": r["date_label"],
+        "age": r["age"],
+        "rank": r["rank"],
+        "rank_total": r["rank_total"],
+        "percentile": round(r["percentile"], 2),
+    }
+
+
+def _wr_point(r: dict, *, kind: str) -> dict:
+    """Point payload for WR-mode series. ``kind`` is "pace" or "watts"."""
+    val = r["wr_pct_pace"] if kind == "pace" else r["wr_pct_watts"]
+    return {
+        "x": _duration_seconds(r),
+        "y": round(val, 2),
+        "event": r["event_label"],
+        "date": r["date_label"],
+        "age": r["age"],
+        "wr_pct": round(val, 2),
+        "wr_kind": kind,
+    }
+
+
 def _build_wr_series(rows: list[dict], state) -> list:
     """Build chart series for the world_record focus."""
     if state.include_filter == "PBs":
         ages = [r["age"] for r in rows]
-        pts_pace = []
-        pts_watts = []
-        for r in rows:
-            if "wr_pct_pace" not in r:
-                continue
-            pts_pace.append(
-                {
-                    "x_key": r["event_key"],
-                    "y": round(r["wr_pct_pace"], 2),
-                    "tooltip": (
-                        f"{r['event_label']} · {r['date_label']} · {r['wr_pct_pace']:.1f}% of WR pace"
-                    ),
-                }
-            )
-            pts_watts.append(
-                {
-                    "x_key": r["event_key"],
-                    "y": round(r["wr_pct_watts"], 2),
-                    "tooltip": (
-                        f"{r['event_label']} · {r['date_label']} · {r['wr_pct_watts']:.1f}% of WR watts"
-                    ),
-                }
-            )
+        wr_rows = [r for r in rows if "wr_pct_pace" in r]
         return [
             {
                 "label": f"% of WR pace · Ages {_fmt_ages(ages)}",
                 "color": _palette_hsla(0, 0, 0.9),
                 "border_color": _palette_hsla(0, -10, 1.0),
-                "points": pts_pace,
+                "points": [_wr_point(r, kind="pace") for r in wr_rows],
             },
             {
                 "label": f"% of WR watts · Ages {_fmt_ages(ages)}",
                 "color": _palette_hsla(1, 0, 0.9),
                 "border_color": _palette_hsla(1, -10, 1.0),
-                "points": pts_watts,
+                "points": [_wr_point(r, kind="watts") for r in wr_rows],
             },
         ]
 
@@ -477,16 +559,7 @@ def _build_wr_series(rows: list[dict], state) -> list:
     for s in seasons_sorted:
         ages = season_ages.get(s, [])
         label = f"{s} · Ages {_fmt_ages(ages)}"
-        pts = [
-            {
-                "x_key": r["event_key"],
-                "y": round(r["wr_pct_pace"], 2),
-                "tooltip": (
-                    f"{r['event_label']} · {r['date_label']} · {r['wr_pct_pace']:.1f}% of WR pace"
-                ),
-            }
-            for r in by_season[s]
-        ]
+        pts = [_wr_point(r, kind="pace") for r in by_season[s]]
         color, border = _season_color_pair(s)
         series.append(
             {
@@ -504,11 +577,9 @@ def _build_wr_series(rows: list[dict], state) -> list:
 # ──────────────────────────────────────────────────────────────────────────
 
 
-def rank_page(
-    ctx, global_state, excluded_seasons: tuple = (), machine: str = "All"
-) -> None:
+def rank_page(ctx) -> None:
     """Top-level Rank Page component. Called from app.py."""
-    sync = sync_from_context(ctx)
+    sync = get_all_workouts(ctx)
     profile = get_profile_from_context(ctx)
 
     if sync is None or profile is None:
@@ -531,15 +602,17 @@ def rank_page(
         include_filter="SBs",
         ranking_focus="c2_age_matched",
         k_age_match=0,
+        modifier_must_have_events=(),
+        modifier_exclude_unverified=False,
+        modifier_min_performances=1,
     )
 
     qualifying = _qualifying_performances(
-        list(workouts_dict.values()),
-        machine=machine,
-        excluded_seasons=tuple(excluded_seasons),
+        sorted_workouts,
         best_filter=state.include_filter,
     )
     rows = _build_rows(qualifying, profile=profile, state=state)
+    _annotate_display_metadata(rows)
 
     event_order_prop, series_prop = _build_series(rows, state)
 
@@ -564,7 +637,7 @@ def rank_page(
                         current_value=state.ranking_focus,
                         field="ranking_focus",
                     )
-            global_filter_ui(global_state, ctx)
+            global_filter_ui(ctx)
 
         # ── Chart ──────────────────────────────────────────────────────────
         y_label = (
@@ -604,11 +677,63 @@ def rank_page(
                             )
                             hd.text(s["label"], font_size="small")
 
+        # ── Age-matched explainer ──────────────────────────────────────────
+        if state.ranking_focus in ("c2_age_matched", "c2_age_group"):
+            _render_c2_comparison_explainer(state)
+
+        # ── Esoteric filters (c2_* focus only) ─────────────────────────────
+        if state.ranking_focus in ("c2_age_matched", "c2_age_group"):
+            _render_filters_dropdown(state)
+
         # ── Data table ──────────────────────────────────────────────────────
         _render_table(rows, state)
 
 
 _EVENT_ORDER_IDX = {_event_key(et, ev): i for i, (et, ev, _) in enumerate(_EVENT_ORDER)}
+
+
+def _annotate_display_metadata(rows: list[dict]) -> None:
+    """Stash cross-row display values used by cell renderers.
+
+    * ``_rank_chars`` / ``_total_chars`` — max widths (in characters) across
+      all rows with a rank, so the "X of Y" cell can right-align uniformly.
+    * ``_dom_min`` / ``_dom_max`` — shared watts domain for the distribution
+      column so histograms of different events share an x-axis.
+    """
+    ranked = [r for r in rows if r.get("rank_total")]
+    if ranked:
+        rank_chars = max(len(f"{r['rank']:,}") for r in ranked)
+        total_chars = max(len(f"{r['rank_total']:,}") for r in ranked)
+    else:
+        rank_chars = total_chars = 1
+
+    with_hist = [
+        r
+        for r in rows
+        if r.get("hist_counts") and r.get("hist_max") > r.get("hist_min", 0)
+    ]
+    if with_hist:
+        dom_min = min(r["hist_min"] for r in with_hist)
+        dom_max = max(r["hist_max"] for r in with_hist)
+        if dom_max <= dom_min:
+            dom_max = dom_min + 1.0
+        # Include each row's user watts so the marker stays in-range.
+        for r in with_hist:
+            w = r.get("watts")
+            if w is None:
+                continue
+            if w < dom_min:
+                dom_min = w
+            if w > dom_max:
+                dom_max = w
+    else:
+        dom_min = dom_max = 0.0
+
+    for r in rows:
+        r["_rank_chars"] = rank_chars
+        r["_total_chars"] = total_chars
+        r["_dom_min"] = dom_min
+        r["_dom_max"] = dom_max
 
 
 def _render_result_cell(r: dict) -> None:
@@ -621,15 +746,39 @@ def _render_rank_cell(r: dict) -> None:
     if not r.get("rank_total"):
         hd.text("—", font_size="small", font_color="neutral-400")
         return
-    btn = hd.button(
-        f"{r['rank']:,} of {r['rank_total']:,}",
+    rank_w = f"{7 * max(1, r.get('_rank_chars', 1))}px"
+    total_w = f"{7 * max(1, r.get('_total_chars', 1))}px"
+    rank_s = f"{r['rank']:,}"
+    total_s = f"{r['rank_total']:,}"
+    with hd.button(
         size="small",
         variant="text",
-        font_size="small",
-    )
+        padding=(0, 0.3),
+    ) as btn:
+        with hd.hbox(gap=0.3, align="center", justify="center"):
+            hd.text(
+                rank_s,
+                width=rank_w,
+                text_align="end",
+                font_size="small",
+                font_family="mono",
+            )
+            hd.text("of", font_size="x-small", padding_left=0.3)
+            hd.text(
+                total_s,
+                width=total_w,
+                text_align="end",
+                font_size="small",
+                font_family="mono",
+            )
+    title_parts = [r["event_label"], f"Age {r['age']}"]
+    if r["date_label"]:
+        title_parts.append(r["date_label"])
+    wc = r["weight_class"]
+    title_parts.append(f"{r['gender']} {wc}" if wc else r["gender"])
     dlg = hd.dialog(
-        f"{r['event_label']} · Age {r['age']}"
-        f" · {r['gender']} {r['weight_class'] or ''}"
+        " · ".join(title_parts),
+        panel_style=hd.style(width="1000px", max_width="95vw"),
     )
     if btn.clicked:
         dlg.opened = True
@@ -647,16 +796,45 @@ def _render_rank_cell(r: dict) -> None:
         )
 
 
+def _render_percentile_cell(r: dict) -> None:
+    if not r.get("rank_total"):
+        hd.text("—", font_size="small", font_color="neutral-400")
+        return
+    pct = r["percentile"]
+    whole = int(pct)
+    tenth = int(round((pct - whole) * 10))
+    if tenth >= 10:
+        whole += 1
+        tenth = 0
+    with hd.hbox(gap=0, align="start", justify="center"):
+        hd.text(
+            f"{whole}",
+            font_size="large",
+            font_weight="semibold",
+        )
+        hd.text(
+            f".{tenth}",
+            font_size="x-small",
+            font_color="neutral-500",
+            padding_top=0.1,
+        )
+
+
 def _render_distribution_cell(r: dict) -> None:
     if r.get("hist_counts") and r.get("watts"):
+        dom_min = r.get("_dom_min") or r["hist_min"]
+        dom_max = r.get("_dom_max") or r["hist_max"]
         uri = distribution_svg(
             r["hist_counts"],
             float(r["watts"]),
             r["hist_min"],
             r["hist_max"],
+            x_min=dom_min,
+            x_max=dom_max,
             is_dark=hd.theme().is_dark,
         )
-        hd.image(src=uri, width="140px", height="32px")
+        with hd.box(width="100%"):
+            hd.image(src=uri, width="100%", height="32px")
     else:
         hd.text("—", font_size="small", font_color="neutral-400")
 
@@ -770,15 +948,13 @@ def _columns_for(focus: str) -> list[ColumnDef]:
         key="percentile",
         header="%ile",
         width="5rem",
-        render_value=lambda r: (
-            f"{r['percentile']:.1f}" if r.get("rank_total") else "—"
-        ),
+        render_cell=_render_percentile_cell,
         sort_value=lambda r: r.get("percentile") or 0,
     )
     col_dist = ColumnDef(
         key="distribution",
-        header="Distribution",
-        width="10rem",
+        header="Watts Distribution",
+        width="minmax(10rem,1fr)",
         render_cell=_render_distribution_cell,
         sortable=False,
     )
@@ -813,7 +989,12 @@ def _render_table(rows: list[dict], state) -> None:
     if not rows:
         return
     columns = _columns_for(state.ranking_focus)
-    scope_key = f"rank_tbl_{state.ranking_focus}_{state.include_filter}"
+    scope_key = (
+        f"rank_tbl_{state.ranking_focus}_{state.include_filter}"
+        f"_{len(state.modifier_must_have_events)}"
+        f"_{int(state.modifier_exclude_unverified)}"
+        f"_{state.modifier_min_performances}"
+    )
     with hd.scope(scope_key):
         WorkoutTable(
             rows,
@@ -821,3 +1002,152 @@ def _render_table(rows: list[dict], state) -> None:
             default_sort_col="event",
             default_sort_asc=True,
         )
+
+
+def _render_c2_comparison_explainer(state) -> None:
+    """Small muted-box explainer shown above the filters for age-matched focus."""
+
+    k = int(state.k_age_match or 0)
+    tolerance = "at exactly your age" if k == 0 else f"within ±{k} years of your age"
+    with hd.box(
+        padding=1,
+        background_color="primary-50",
+        border_radius="medium",
+        border="1px solid primary-100",
+        max_width="700px",
+        width="100%",
+        align="center",
+    ):
+        if state.ranking_focus == "c2_age_matched":
+            hd.text(
+                "Comparing to your Same Age Peers is different from what you see on the Concept2 logbook.",
+                font_size="medium",
+                font_weight="semibold",
+                font_color="primary-700",
+            )
+            hd.text(
+                f"Taking all leaderboard entries back to 2002, each of your performances is ranked against all "
+                "the entries by people who were your exact age at the time you recorded the respective performance.",
+                font_size="small",
+                font_color="neutral-700",
+            )
+        else:
+            hd.text(
+                "Comparing to your Age Group Peers is different from what you see on the Concept2 logbook.",
+                font_size="medium",
+                font_weight="semibold",
+                font_color="primary-700",
+            )
+            hd.text(
+                f"Taking all leaderboard entries back to 2002, each of your performances is ranked against your "
+                "respective age group at the time of your performance.",
+                font_size="small",
+                font_color="neutral-700",
+            )
+
+
+def _render_filters_dropdown(state) -> None:
+    """Render the additional-filters dropdown.
+
+    Controls ``modifier_must_have_events`` (event checklist), ``modifier_exclude_unverified``
+    (checkbox), and ``modifier_min_performances`` (radio 1/5/10/20).
+    """
+    active_count = (
+        (1 if state.modifier_exclude_unverified else 0)
+        + (1 if int(state.modifier_min_performances or 1) > 1 else 0)
+        + (1 if state.modifier_must_have_events else 0)
+    )
+    trigger_label = (
+        "Additional filters on leaderboard results"
+        if active_count == 0
+        else f"Additional filters on leaderboard results — {active_count} active"
+    )
+
+    with hd.box(width="100%", max_width="92vw", align="start"):
+        with hd.dropdown() as dd:
+            btn = hd.button(
+                trigger_label,
+                caret=True,
+                size="small",
+                variant="text",
+                slot=dd.trigger,
+                font_size="small",
+                font_weight="semibold" if active_count else "normal",
+                font_color="neutral-700",
+            )
+            if btn.clicked:
+                dd.opened = not dd.was_opened
+
+            with hd.box(
+                padding=1,
+                gap=1,
+                background_color="neutral-50",
+                min_width=22,
+            ):
+                with hd.box(gap=0.5):
+                    # ── Min performances ─────────────────────────────────────
+                    hd.text(
+                        "Minimum ranked performances per rower:",
+                        font_size="small",
+                        font_weight="semibold",
+                        font_color="neutral-700",
+                    )
+                    with hd.hbox(gap=0.3, wrap="wrap", padding_left=0.5):
+                        for n in (1, 2, 5, 10, 20):
+                            with hd.scope(f"mp_{n}"):
+                                is_active = (
+                                    int(state.modifier_min_performances or 1) == n
+                                )
+                                label = "Any" if n == 1 else f"≥ {n}"
+                                if hd.button(
+                                    label,
+                                    size="small",
+                                    variant="primary" if is_active else "text",
+                                ).clicked:
+                                    state.modifier_min_performances = n
+
+                hd.divider()
+
+                # ── Must-have events ─────────────────────────────────────
+                with hd.box(gap=0.5):
+                    hd.text(
+                        "Only include leaderboard entries from rowers who have also ranked in:",
+                        font_size="small",
+                        font_color="neutral-700",
+                    )
+                    with hd.box(gap=0.25, padding_left=0.5):
+                        current = set(state.modifier_must_have_events or ())
+                        for et, ev, lbl in _EVENT_ORDER:
+                            key = _event_key(et, ev)
+                            with hd.scope(f"mh_{key}"):
+                                cb = hd.checkbox(lbl, checked=key in current)
+                                if cb.changed:
+                                    new = set(current)
+                                    if cb.checked:
+                                        new.add(key)
+                                    else:
+                                        new.discard(key)
+                                    state.modifier_must_have_events = tuple(sorted(new))
+
+                hd.divider()
+
+                # ── Exclude unverified ───────────────────────────────────
+                with hd.scope("ex_unv"):
+                    cb = hd.checkbox(
+                        "Exclude unverified performances",
+                        checked=state.modifier_exclude_unverified,
+                    )
+                    if cb.changed:
+                        state.modifier_exclude_unverified = cb.checked
+
+                # ── Reset ────────────────────────────────────────────────
+                if active_count:
+                    with hd.hbox(justify="end", padding_top=0.5):
+                        if hd.button(
+                            "Clear filters",
+                            size="small",
+                            variant="text",
+                        ).clicked:
+                            state.modifier_must_have_events = ()
+                            state.modifier_exclude_unverified = False
+                            state.modifier_min_performances = 1
