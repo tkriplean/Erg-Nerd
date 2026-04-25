@@ -408,7 +408,6 @@ def swatch_svg(color: str, size: int = 12, radius: int = 2) -> str:
 def aggregate_workouts(
     all_workouts: list,
     thresholds: Optional[dict] = None,
-    machine_filter: Optional[set] = None,
     *,
     bin_fn=None,
 ) -> dict:
@@ -423,8 +422,6 @@ def aggregate_workouts(
         Output of compute_bin_thresholds(); if None and bin_fn is also None,
         all meters are binned into Slow Aerobic (useful for totals-only display).
         Ignored when bin_fn is provided.
-    machine_filter:
-        If not None, only include workouts whose 'type' field is in this set.
     bin_fn:
         Optional callable(workout) → list[float].  When provided, replaces the
         default ``workout_bin_meters(w, thresholds)`` call, allowing callers to
@@ -454,10 +451,6 @@ def aggregate_workouts(
         bucket[key]["total"] += meters
 
     for w in all_workouts:
-        mtype = w.get("type", "")
-        if machine_filter is not None and mtype not in machine_filter:
-            continue
-
         date_str = w.get("date", "")
         if not date_str:
             continue

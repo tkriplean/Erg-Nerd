@@ -349,13 +349,6 @@ def _dashboard_view(ctx, app_state, path_suffix: str | None = None) -> None:
     # route that 404s in public mode.
     _hidden_nav_pages = {"Profile"}
 
-    # ── Global state ────────────────────────────────────────────────
-    # Shared across all pages; lives here so it persists.
-    gstate = hd.state(
-        excluded_seasons=(),  # tuple[str] of "YYYY-YY" seasons to hide
-        machine="All",  # "All" or a machine-type string
-    )
-
     public_banner(ctx)
 
     with hd.box(padding=2, gap=1, padding_top=0):
@@ -455,49 +448,19 @@ def _dashboard_view(ctx, app_state, path_suffix: str | None = None) -> None:
                 session_id = None
             if session_id is not None:
                 with hd.scope(session_id):
-                    workout_page(session_id, ctx, global_state=gstate)
+                    workout_page(session_id, ctx)
         elif current_page == "Volume":
-            volume_page(
-                ctx,
-                global_state=gstate,
-                excluded_seasons=gstate.excluded_seasons,
-                machine=gstate.machine,
-            )
+            volume_page(ctx)
         elif current_page == "Sessions":
-            sessions_page(
-                ctx,
-                global_state=gstate,
-                excluded_seasons=gstate.excluded_seasons,
-                machine=gstate.machine,
-            )
+            sessions_page(ctx)
         elif current_page == "Intervals":
-            intervals_page(
-                ctx,
-                global_state=gstate,
-                excluded_seasons=gstate.excluded_seasons,
-                machine=gstate.machine,
-            )
+            intervals_page(ctx)
         elif current_page == "Power Curve":
-            power_curve_page(
-                ctx,
-                global_state=gstate,
-                excluded_seasons=gstate.excluded_seasons,
-                machine=gstate.machine,
-            )
+            power_curve_page(ctx)
         elif current_page == "Race":
-            race_page(
-                ctx,
-                global_state=gstate,
-                excluded_seasons=gstate.excluded_seasons,
-                machine=gstate.machine,
-            )
+            race_page(ctx)
         elif current_page == "Rank":
-            rank_page(
-                ctx,
-                global_state=gstate,
-                excluded_seasons=gstate.excluded_seasons,
-                machine=gstate.machine,
-            )
+            rank_page(ctx)
         else:
             # Profile page is owner-only; public-mode requests render 404.
             if is_public:

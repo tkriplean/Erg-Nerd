@@ -28,10 +28,9 @@ import hyperdiv as hd
 
 import json
 
-from components.concept2_sync import sync_from_context
+from components.concept2_sync import get_all_workouts
 from components.reference_watts_loader import reference_watts_loader
 from components.view_context import your
-from services.formatters import machine_label
 from services.reference_watts import get_reference_watts
 from services.rowing_utils import get_season, parse_date, profile_complete
 
@@ -311,8 +310,6 @@ def _hr_callout(all_workouts: list, profile: dict, is_owner: bool = True) -> tup
 def _volume_section(
     all_workouts: list,
     profile: dict,
-    global_state,
-    machine: str = "All",
     is_owner: bool = True,
     ctx=None,
 ) -> None:
@@ -323,12 +320,11 @@ def _volume_section(
         zone_mode="power_intensity",  # "power_intensity" | "hr"
     )
     view = state.view
-    machine_filter = None if machine == "All" else {machine}
 
     with hd.box(gap=1, align="center"):
         with hd.box(gap=0.2, align="center"):
             hd.h1(f"How Does {your(ctx)} Work Stack Up?")
-            global_filter_ui(global_state, ctx)
+            global_filter_ui(ctx)
 
         # ── HR callout (only in HR mode) — must come before chart to resolve max_hr ──
         max_hr, is_estimated = resolve_max_hr(profile, all_workouts)
@@ -340,7 +336,6 @@ def _volume_section(
         elif state.zone_mode == "hr":
             aggregated = aggregate_workouts(
                 all_workouts,
-                machine_filter=machine_filter,
                 bin_fn=lambda w: workout_hr_meters(w, max_hr),
             )
             chart_config = build_volume_chart_config(
@@ -384,7 +379,6 @@ def _volume_section(
 
             aggregated = aggregate_workouts(
                 all_workouts,
-                machine_filter=machine_filter,
                 bin_fn=lambda w: workout_bin_meters(w, _thresholds_for(w)),
             )
             chart_config = build_volume_chart_config(
@@ -445,26 +439,18 @@ def _volume_section(
 # ---------------------------------------------------------------------------
 
 
-def volume_page(ctx, global_state, excluded_seasons=(), machine="All") -> None:
+def volume_page(ctx) -> None:
     """Top-level component for the Volume tab."""
 
-    result = sync_from_context(ctx)
+    result = get_all_workouts(ctx)
+
     profile = get_profile_from_context(ctx)
 
     if result is None or not profile:
         hd.box(padding=2, min_height="80vh")
         return
-    _workouts_dict, all_workouts = result
 
-    # Apply global filters
-    if excluded_seasons:
-        all_workouts = [
-            w
-            for w in all_workouts
-            if get_season(w.get("date", "")) not in set(excluded_seasons)
-        ]
-    if machine != "All":
-        all_workouts = [w for w in all_workouts if w.get("type") == machine]
+    _, all_workouts = result
 
     if not all_workouts:
         with hd.box(padding=4, align="center"):
@@ -475,8 +461,6 @@ def volume_page(ctx, global_state, excluded_seasons=(), machine="All") -> None:
         _volume_section(
             all_workouts,
             profile,
-            global_state,
-            machine=machine,
             is_owner=ctx.is_owner,
             ctx=ctx,
         )

@@ -164,6 +164,7 @@ from components.power_curve_animation import (
 from components.concept2_sync import load_world_record_data
 from components.hyperdiv_extensions import radio_group, grid_box
 from components.shared_ui import global_filter_ui
+from services.global_state import GlobalFilters
 
 
 # ---------------------------------------------------------------------------
@@ -982,7 +983,6 @@ def compute_axis_bounds(
 
 def _page_header(
     state,
-    global_state,
     ctx,
     *,
     timeline_date: date,
@@ -1142,7 +1142,7 @@ def _page_header(
                     min_width="225px",
                 )
 
-        global_filter_ui(global_state, ctx)
+        global_filter_ui(ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -1150,11 +1150,12 @@ def _page_header(
 # ---------------------------------------------------------------------------
 
 
-def power_curve_page(ctx, global_state, excluded_seasons=(), machine="All") -> None:
+def power_curve_page(ctx) -> None:
     """
     Top-level entry point for the Performance tab.
     Fetches data, computes all derived state, then calls sub-components.
     """
+    gstate = GlobalFilters()
     state = hd.state(
         dist_enabled=tuple(True for _ in RANKED_DISTANCES),
         time_enabled=tuple(True for _ in RANKED_TIMES),
@@ -1190,6 +1191,10 @@ def power_curve_page(ctx, global_state, excluded_seasons=(), machine="All") -> N
         _wk_prop_key=(),  # cache key for workouts/season_meta props
         _wk_prop_data=None,  # cached (workouts_prop, season_meta_prop)
     )
+
+    excluded_seasons = gstate.excluded_seasons
+    machine = gstate.machine
+
     is_dark = hd.theme().is_dark
 
     # ── Profile & Data ───────────────────────────────────────────────────────────────
@@ -1328,7 +1333,6 @@ def power_curve_page(ctx, global_state, excluded_seasons=(), machine="All") -> N
         with hd.box(width="100%", align="center"):
             _page_header(
                 state,
-                global_state,
                 ctx,
                 timeline_date=timeline_date,
             )

@@ -411,7 +411,7 @@ def step_ms(all_ms: list, window_size: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def sessions_chart(workouts: list, global_state, ctx=None) -> None:
+def sessions_chart(workouts: list, ctx=None) -> None:
     """
     Render the pace-vs-date focus+context chart with brush navigator,
     session filters, and an in-window workouts table.
@@ -494,7 +494,7 @@ def sessions_chart(workouts: list, global_state, ctx=None) -> None:
                                 cb_10k = hd.checkbox("10k+", checked=state.filter_10k)
                                 if cb_10k.changed:
                                     state.filter_10k = cb_10k.checked
-            global_filter_ui(global_state, ctx)
+            global_filter_ui(ctx)
 
 
         # with hd.hbox(gap=2, align="center", wrap="wrap", padding_bottom=1):

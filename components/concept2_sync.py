@@ -43,7 +43,9 @@ from services.concept2_records import (
     weight_class_str as wr_weight_class_str,
     fetch_wr_data,
 )
-from services.rowing_utils import age_from_dob
+from services.rowing_utils import age_from_dob, get_season
+
+from services.global_state import GlobalFilters
 
 
 def _fmt_month_year(date_str: str) -> str:
@@ -52,6 +54,30 @@ def _fmt_month_year(date_str: str) -> str:
         return datetime.strptime(date_str[:10], "%Y-%m-%d").strftime("%b %Y")
     except Exception:
         return date_str[:7]
+
+
+def get_all_workouts(ctx):
+    result = sync_from_context(ctx)
+    if result is None:
+        hd.box(padding=2, min_height="80vh")
+        return None
+    workouts_dict, all_workouts = result
+
+    # Apply global filters
+    gstate = GlobalFilters()
+    excluded_seasons = gstate.excluded_seasons
+    machine = gstate.machine
+
+    if excluded_seasons:
+        all_workouts = [
+            w
+            for w in all_workouts
+            if get_season(w.get("date", "")) not in set(excluded_seasons)
+        ]
+    if machine != "All":
+        all_workouts = [w for w in all_workouts if w.get("type") == machine]
+
+    return workouts_dict, all_workouts
 
 
 def sync_from_context(ctx) -> tuple | None:

@@ -3,9 +3,10 @@ from services.local_storage_compression import decompress_workouts
 from services.formatters import machine_label
 from services.rowing_utils import get_season
 from components.concept2_sync import sync_from_context
+from services.global_state import GlobalFilters
 
 
-def global_filter_ui(gstate, ctx) -> None:
+def global_filter_ui(ctx) -> None:
     """
     Render the global Season and Machine filter controls.
     Called from the nav-bar row in _dashboard_view.
@@ -20,6 +21,8 @@ def global_filter_ui(gstate, ctx) -> None:
     # so the filter UI can render even before any page has fetched data.
     # We do a lightweight read here; concept2_sync() on the active page handles
     # the full data load.
+
+    gstate = GlobalFilters()
     _ls_wkts_meta = hd.local_storage.get_item("workouts")
 
     all_seasons: list = []
