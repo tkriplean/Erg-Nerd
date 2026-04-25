@@ -12,9 +12,12 @@ event definitions.
 Public API
 ----------
   get_age_group_records(gender, age, weight_kg)
-      → {("dist", 2000): 347.8, ("time", 18000): 9207, ...}
-        distance events  → seconds (float)
-        time events      → meters (float)
+      → {("dist", 2000): {"result": 347.8, "name": "...",
+                          "date": "2024-03-10",
+                          "age_category": "30-39",
+                          "weight_class": "Hwt" | None,
+                          "gender": "M" | "F"}, ...}
+        result is seconds (dist events) or meters (time events).
 
   records_to_cp_input(records)
       → [{"duration_s": float, "watts": float}, ...]
@@ -225,10 +228,13 @@ def _filter_records(
     raw: list[dict], gender: str, age_cat: str, wt_class: str | None
 ) -> dict:
     """
-    Filter the raw API payload and return {(etype, evalue): best_result} for
+    Filter the raw API payload and return {(etype, evalue): metadata_dict} for
     RowErg world records matching the specified gender/age/weight.
+
+    metadata_dict keys: result (float), name, date, age_category, weight_class,
+    gender.  ``result`` is seconds for dist events, meters for time events.
     """
-    best: dict[tuple, float] = {}
+    best: dict[tuple, dict] = {}
     for r in raw:
         if r.get("type") != "RowErg":
             continue
@@ -254,16 +260,26 @@ def _filter_records(
         if parsed is None:
             continue
 
+        entry = {
+            "result": parsed,
+            "name": r.get("name") or "",
+            "date": r.get("date") or "",
+            "age_category": r.get("age_category") or "",
+            "weight_class": r.get("weight_class"),
+            "gender": r.get("gender") or "",
+        }
+
         etype = key[0]
         if key not in best:
-            best[key] = parsed
+            best[key] = entry
         else:
             # For distance events: lower time = better
             # For time events: higher meters = better
-            if etype == "dist" and parsed < best[key]:
-                best[key] = parsed
-            elif etype == "time" and parsed > best[key]:
-                best[key] = parsed
+            cur = best[key]["result"]
+            if etype == "dist" and parsed < cur:
+                best[key] = entry
+            elif etype == "time" and parsed > cur:
+                best[key] = entry
 
     return best
 
@@ -287,8 +303,8 @@ def get_age_group_records(gender: str, age: int, weight_kg: float) -> dict:
     Returns
     -------
     dict keyed by ranked-event tuple, e.g.:
-        {("dist", 2000): 347.8,   # seconds
-         ("time", 18000): 9207.0} # meters
+        {("dist", 2000): {"result": 347.8, "name": "...", "date": "...", ...},
+         ("time", 18000): {"result": 9207.0, ...}}
     Empty dict if the API is unreachable and no cache is available.
     """
     age_cat = age_category(age)
@@ -303,10 +319,7 @@ def get_age_group_records(gender: str, age: int, weight_kg: float) -> dict:
     if filter_key in cache:
         entry = cache[filter_key]
         if now - entry.get("_ts", 0) < _CACHE_TTL:
-            return {
-                tuple(k.split("|")[:1] + [int(k.split("|")[1])]): v
-                for k, v in entry.get("records", {}).items()
-            }
+            return _deserialize_records(entry.get("records", {}))
 
     # Load raw payload — reuse if cached and fresh, otherwise re-fetch.
     raw_entry = cache.get("_raw", {})
@@ -320,10 +333,7 @@ def get_age_group_records(gender: str, age: int, weight_kg: float) -> dict:
             # API unavailable: return whatever filtered records we have (may be stale).
             if filter_key in cache:
                 entry = cache[filter_key]
-                return {
-                    tuple(k.split("|")[:1] + [int(k.split("|")[1])]): v
-                    for k, v in entry.get("records", {}).items()
-                }
+                return _deserialize_records(entry.get("records", {}))
             return {}
 
     # Filter and cache.
@@ -331,10 +341,35 @@ def get_age_group_records(gender: str, age: int, weight_kg: float) -> dict:
     # Serialize keys as "dist|2000" strings for JSON.
     cache[filter_key] = {
         "_ts": now,
-        "records": {f"{etype}|{evalue}": v for (etype, evalue), v in filtered.items()},
+        "records": {
+            f"{etype}|{evalue}": v for (etype, evalue), v in filtered.items()
+        },
     }
     _save_cache(cache)
     return filtered
+
+
+def _deserialize_records(raw: dict) -> dict:
+    """Deserialize cached records, converting flat-float legacy entries to
+    the current metadata-dict shape so older caches still work."""
+    out: dict = {}
+    for k, v in raw.items():
+        parts = k.split("|")
+        if len(parts) != 2:
+            continue
+        key = (parts[0], int(parts[1]))
+        if isinstance(v, dict):
+            out[key] = v
+        else:
+            out[key] = {
+                "result": float(v),
+                "name": "",
+                "date": "",
+                "age_category": "",
+                "weight_class": None,
+                "gender": "",
+            }
+    return out
 
 
 def get_records_for_age(gender: str, age: int, weight_kg: float) -> dict:
@@ -375,7 +410,8 @@ def records_to_cp_input(records: dict) -> list[dict]:
     Returns the list sorted by duration_s ascending.
     """
     result = []
-    for (etype, evalue), value in records.items():
+    for (etype, evalue), rec in records.items():
+        value = rec["result"] if isinstance(rec, dict) else rec
         if etype == "dist":
             # value = time in seconds for this distance
             dist_m = evalue
@@ -420,7 +456,8 @@ def records_to_lbest(records: dict) -> tuple[dict, dict]:
     """
     lb: dict = {}
     lba: dict = {}
-    for (etype, evalue), value in records.items():
+    for (etype, evalue), rec in records.items():
+        value = rec["result"] if isinstance(rec, dict) else rec
         if etype == "dist":
             dist_m = evalue
             t_sec = value  # value = seconds for this distance
@@ -470,9 +507,10 @@ def fetch_wr_data(gender_api: str, age: int, weight_kg: float) -> dict | None:
     gender_rl = "Male" if gender_api == "M" else "Female"
     _ref_dist, _ref_time_s = None, None
     for _d in [2000, 1000, 5000, 6000, 10000, 500, 21097]:
-        _t = records.get(("dist", _d))
-        if _t:
-            _ref_dist, _ref_time_s = _d, _t
+        _rec = records.get(("dist", _d))
+        if _rec:
+            _ref_dist = _d
+            _ref_time_s = _rec["result"] if isinstance(_rec, dict) else _rec
             break
     if _ref_dist is not None and _ref_time_s is not None:
         time_tenths = round(_ref_time_s * 10)
