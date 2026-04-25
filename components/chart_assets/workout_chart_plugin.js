@@ -3,15 +3,57 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
   const style = document.createElement("style");
   style.textContent = `
     :host { display: block; width: 100%; }
+    .chart-wrap { position: relative; width: 100%; }
     canvas { display: block; width: 100% !important; }
+    .range-btn {
+      position: absolute;
+      top: 4px;
+      right: 6px;
+      z-index: 2;
+      background: transparent;
+      border: 1px solid rgba(128,128,128,0.35);
+      border-radius: 4px;
+      font-size: 11px;
+      padding: 1px 6px;
+      line-height: 1.4;
+      cursor: pointer;
+      color: inherit;
+      opacity: 0.55;
+      transition: opacity 120ms ease;
+    }
+    .range-btn:hover { opacity: 1; }
+    .range-btn[hidden] { display: none !important; }
   `;
   ctx.domElement.appendChild(style);
 
+  const chartWrap = document.createElement("div");
+  chartWrap.className = "chart-wrap";
   const canvas = document.createElement("canvas");
-  ctx.domElement.appendChild(canvas);
+  chartWrap.appendChild(canvas);
+
+  // "Full range" toggle — un-caps the pace/watts axis so strokes at the
+  // warm-up catch (or a failed split) can be inspected when needed.
+  const rangeBtn = document.createElement("button");
+  rangeBtn.className = "range-btn";
+  rangeBtn.hidden = true;
+  rangeBtn.title = "Expand y-axis to include all data";
+  rangeBtn.textContent = "⤢ full range";
+  chartWrap.appendChild(rangeBtn);
+
+  ctx.domElement.appendChild(chartWrap);
 
   let chartInstance = null;
   let clickSeq = 0;
+  let showFullRange = false;
+
+  rangeBtn.addEventListener("click", () => {
+    showFullRange = !showFullRange;
+    rangeBtn.textContent = showFullRange ? "⤡ capped" : "⤢ full range";
+    rangeBtn.title = showFullRange
+      ? "Snap y-axis back to the capped race range"
+      : "Expand y-axis to include all data";
+    buildChart(_config);
+  });
 
   // -----------------------------------------------------------------------
   // Formatters
@@ -102,10 +144,20 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
     // Stacked mode — one dataset per interval per visible metric, x reset to 0
     // -----------------------------------------------------------------------
 
+    // Toggle between capped (default) and full range.  The button in the
+    // chart wrap flips `showFullRange`; buildChart is called again.
+    const paceMinCapped = cfg.paceYMin     != null ? cfg.paceYMin     : undefined;
+    const paceMaxCapped = cfg.paceYMax     != null ? cfg.paceYMax     : undefined;
+    const paceMinFull   = cfg.paceYMinFull != null ? cfg.paceYMinFull : paceMinCapped;
+    const paceMaxFull   = cfg.paceYMaxFull != null ? cfg.paceYMaxFull : paceMaxCapped;
+    const hasCapDifference =
+      (paceMinFull !== paceMinCapped) || (paceMaxFull !== paceMaxCapped);
+    rangeBtn.hidden = !hasCapDifference;
+
     if (cfg.stack) {
       const intervals = cfg.stackedIntervals || [];
-      const paceYMin = cfg.paceYMin != null ? cfg.paceYMin : undefined;
-      const paceYMax = cfg.paceYMax != null ? cfg.paceYMax : undefined;
+      const paceYMin = showFullRange ? paceMinFull : paceMinCapped;
+      const paceYMax = showFullRange ? paceMaxFull : paceMaxCapped;
 
       const datasets = [];
 
@@ -243,8 +295,8 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
     const bands = cfg.bands || [];
     const xMin = cfg.xMin != null ? cfg.xMin : undefined;
     const xMax = cfg.xMax != null ? cfg.xMax : undefined;
-    const paceYMin = cfg.paceYMin != null ? cfg.paceYMin : undefined;
-    const paceYMax = cfg.paceYMax != null ? cfg.paceYMax : undefined;
+    const paceYMin = showFullRange ? paceMinFull : paceMinCapped;
+    const paceYMax = showFullRange ? paceMaxFull : paceMaxCapped;
 
     // Pre-compute faded x-ranges: rest periods + the first few seconds of
     // each work interval (onset strokes are noisy).
@@ -388,7 +440,12 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
               callback: (v) => cfg.showWatts ? `${Math.round(v)}W` : formatPace(v),
             },
           },
-          ...buildRightScales(cfg, isDark, cfg.showSpm !== false, cfg.hasHr || false),
+          ...buildRightScales(
+            cfg,
+            isDark,
+            cfg.showSpm !== false,
+            cfg.showHr !== false && (cfg.hasHr || false)
+          ),
         },
       },
     };

@@ -202,6 +202,61 @@ def _interval_colors(n: int) -> list:
     return [f"hsl({round(220 - i * 190 / (n - 1))}, 75%, 55%)" for i in range(n)]
 
 
+def _slow_end_cap(
+    points: list,
+    bands: list,
+    *,
+    show_watts: bool,
+    workout: dict,
+    compare_series: Optional[list] = None,
+) -> Optional[float]:
+    """Return the y-value that caps the slow end of the pace/watts axis.
+
+    Slow end = the side of the axis representing slower rowing —
+    higher seconds/500m for pace, lower watts for power.  Without the cap,
+    a single slow catch stroke can stretch the axis so far that the actual
+    race line looks compressed into a 15% band.
+
+    Cap = (slowest band/workout average) ± 10%.  The caller uses this as
+    a ceiling vs. the observed slow-end value and picks the *faster* of
+    the two (lower pace, higher watts), i.e. the tighter range.
+
+    "Band/workout average" is derived in this order:
+      1. Mean of ``points`` inside each work band, taking the max-pace /
+         min-watts band (the slowest work interval).
+      2. If there are no bands, the workout-wide pace average from
+         ``workout['time'] / workout['distance']``.
+      3. Each compare series contributes its own full-series mean.
+
+    Returns None when no usable average can be computed.
+    """
+    work_bands = [b for b in (bands or []) if b.get("work")]
+    avgs: list = []
+
+    if work_bands:
+        for b in work_bands:
+            lo, hi = b["xMin"], b["xMax"]
+            in_band = [p["y"] for p in points if lo <= p["x"] <= hi]
+            if in_band:
+                avgs.append(sum(in_band) / len(in_band))
+    else:
+        t = (workout.get("time") or 0) / 10.0
+        d = workout.get("distance") or 0
+        if t > 0 and d > 0:
+            pace_s = t * 500 / d
+            avgs.append(compute_watts(pace_s) if show_watts else pace_s)
+
+    for cs in (compare_series or []):
+        pts = cs.get("pace_points") or []
+        if pts:
+            avgs.append(sum(p["y"] for p in pts) / len(pts))
+
+    if not avgs:
+        return None
+    slowest = min(avgs) if show_watts else max(avgs)
+    return slowest * (0.90 if show_watts else 1.10)
+
+
 def _pad(lo, hi, frac=0.12, min_pad=0, lo_floor=None, round_to_int=False):
     """Expand [lo, hi] by frac of the span on each side.
 
@@ -347,6 +402,8 @@ def _build_stacked_config(
     has_hr: bool,
     pace_y_min,
     pace_y_max,
+    pace_y_min_full,
+    pace_y_max_full,
     spm_y_min,
     spm_y_max,
     pace_color: str,
@@ -414,6 +471,8 @@ def _build_stacked_config(
         "hasHr": has_hr,
         "paceYMin": pace_y_min,
         "paceYMax": pace_y_max,
+        "paceYMinFull": pace_y_min_full,
+        "paceYMaxFull": pace_y_max_full,
         "spmYMin": spm_y_min,
         "spmYMax": spm_y_max,
         "paceColor": pace_color,
@@ -754,9 +813,29 @@ def build_stroke_chart_config(
             if cs.get("has_hr"):
                 y_hr.extend(p["y"] for p in (cs.get("hr_points") or []))
 
-    pace_y_min, pace_y_max = _pad(
+    pace_y_min_full, pace_y_max_full = _pad(
         *((min(y_pace), max(y_pace)) if y_pace else (None, None))
     )
+    # Cap the slow end (top for pace, bottom for watts) so a single slow
+    # catch stroke can't stretch the axis past the useful range.  The JS
+    # plugin exposes a "full range" toggle button that swaps back to the
+    # uncapped bounds.
+    pace_y_min, pace_y_max = pace_y_min_full, pace_y_max_full
+    slow_cap = _slow_end_cap(
+        pace_pts,
+        bands,
+        show_watts=show_watts,
+        workout=workout,
+        compare_series=compare_series or [],
+    )
+    if slow_cap is not None and y_pace:
+        if show_watts:
+            if pace_y_min_full is not None and slow_cap > pace_y_min_full:
+                pace_y_min = slow_cap
+        else:
+            if pace_y_max_full is not None and slow_cap < pace_y_max_full:
+                pace_y_max = slow_cap
+
     spm_y_min, spm_y_max = _pad(
         *((min(y_spm), max(y_spm)) if y_spm else (None, None)),
         min_pad=2,
@@ -784,6 +863,8 @@ def build_stroke_chart_config(
             has_hr=has_hr,
             pace_y_min=pace_y_min,
             pace_y_max=pace_y_max,
+            pace_y_min_full=pace_y_min_full,
+            pace_y_max_full=pace_y_max_full,
             spm_y_min=spm_y_min,
             spm_y_max=spm_y_max,
             pace_color=pace_color,
@@ -830,6 +911,8 @@ def build_stroke_chart_config(
         "hasHr": has_hr,
         "paceYMin": pace_y_min,
         "paceYMax": pace_y_max,
+        "paceYMinFull": pace_y_min_full,
+        "paceYMaxFull": pace_y_max_full,
         "spmYMin": spm_y_min,
         "spmYMax": spm_y_max,
         "hrYMin": hr_y_min,
