@@ -78,6 +78,16 @@ _LOW_MAX = 0.5
 _MEDIUM_MAX = 0.75
 _HIGH_MAX = 1
 
+# Public mirror of the bucket boundaries above, so UI code can render the
+# same numbers without duplicating literals.  Each entry: (label, upper bound
+# inclusive — Ultra is open-ended).
+QUALITY_THRESHOLDS: list[tuple[str, float | None]] = [
+    ("Low", _LOW_MAX),
+    ("Medium", _MEDIUM_MAX),
+    ("High", _HIGH_MAX),
+    ("Ultra", None),
+]
+
 QUALITY_ORDER: dict[str, int] = {"Low": 0, "Medium": 1, "High": 2, "Ultra": 3}
 
 

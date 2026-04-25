@@ -58,9 +58,20 @@ def _abbreviate_arithmetic(values: list[int], min_len: int = 5) -> list[int] | N
 
 
 def _interval_signature(iv: dict) -> tuple:
-    """Hashable signature of a single interval for super-block equality."""
+    """Hashable signature of a single interval for super-block equality.
+
+    Type-aware: for ``type="time"`` workouts the prescribed dimension is time
+    only (distance varies stroke-by-stroke based on power), so distance is
+    excluded from the signature. Symmetrically, ``type="distance"`` excludes
+    time. Unknown types keep both fields as a conservative fallback.
+    """
+    t = (iv.get("type") or "").lower()
+    if t == "time":
+        return (t, iv.get("time") or 0, iv.get("rest_time") or 0)
+    if t == "distance":
+        return (t, iv.get("distance") or 0, iv.get("rest_time") or 0)
     return (
-        (iv.get("type") or "").lower(),
+        t,
         iv.get("time") or 0,
         iv.get("distance") or 0,
         iv.get("rest_time") or 0,
@@ -77,13 +88,19 @@ def _block_sig_ignore_last_rest(b: list[dict]) -> tuple:
     parts = []
     for i, iv in enumerate(b):
         if i == len(b) - 1:
-            parts.append(
-                (
-                    (iv.get("type") or "").lower(),
-                    iv.get("time") or 0,
-                    iv.get("distance") or 0,
+            t = (iv.get("type") or "").lower()
+            if t == "time":
+                parts.append((t, iv.get("time") or 0))
+            elif t == "distance":
+                parts.append((t, iv.get("distance") or 0))
+            else:
+                parts.append(
+                    (
+                        t,
+                        iv.get("time") or 0,
+                        iv.get("distance") or 0,
+                    )
                 )
-            )
         else:
             parts.append(_interval_signature(iv))
     return tuple(parts)

@@ -10,11 +10,13 @@ A 2D grid shows both physiologically critical dimensions of interval
 training at once:
 
   X axis (6 cols) — representative work-interval duration (median interval):
-      ≤30"  ·  30"–2'  ·  2'–4'  ·  4'–8'  ·  8'–20'  ·  20'+
+      ≤30"  ·  30"–1'  ·  1'–3'  ·  3'–8'  ·  8'–20'  ·  20'+
+      (60s and 180s splits anchor short / medium / long HIIT per
+      Buchheit & Laursen 2013.)
 
   Y axis (5 rows) — work:rest time ratio (total work / total rest):
-      Continuous (≥10:1)  ·  Short (3–10:1)  ·  Balanced (≈1:1)
-      Long (1:2–4)        ·  Very Long (<1:4)
+      Continuous (<9% rest)  ·  Short (9–33% rest)  ·  Balanced (33–60% rest)
+      Long (60–80% rest)     ·  Very Long (>80% rest)
 
 Grid is rendered with CSS Grid (row-first) so column widths are set globally
 via grid_template_columns.  Every cell is a full-width button — populated
@@ -46,17 +48,25 @@ Grid placement rules:
 
 Legends & filters
 -----------------
-Two labelled legend rows below the info panel:
+Three labelled legend rows below the info panel:
   • "Power Intensity" — 6 chips (Fast · 2k · 5k · Threshold · Fast Aero · Slow Aero)
   • "HR Intensity"  — 5 chips (Z5 Max · Z4 Threshold · Z3 Tempo · Z2 Aerobic · Z1 Recovery)
+  • "Quality"        — 4 chips (Low · Medium · High · Ultra)
 
-Both legends are **disjunctive (OR)** within themselves: selecting two chips
-shows workouts touching _either_.  The three filter groups (grid cells,
-pace chips, HR chips) combine conjunctively with each other.  Each chip has
-a rich tooltip (content_slot) explaining zone definition and filter rule.
+All three legends are **disjunctive (OR)** within themselves: selecting two
+chips shows workouts touching _either_.  The four filter groups (grid cells,
+pace chips, HR chips, quality chips) combine conjunctively with each other.
+Each chip has a rich tooltip (content_slot) explaining zone definition and
+filter rule.
 
-The HR legend is hidden entirely when the user has no max HR resolvable;
-a short note points to the Profile page.
+The Power Intensity header carries a (?) icon whose tooltip renders a
+graphical scale showing each zone's reference event (1k / 2k / 5k / 60min /
+marathon) and the user's current watts at that event — boundaries are
+midpoints between adjacent reference watts.
+
+The HR legend's chip row is hidden when the user has no max HR resolvable;
+a short note points to the Profile page.  The Quality legend always renders
+(workouts with no quality score are excluded when any chip is selected).
 
 Table
 -----
@@ -102,7 +112,7 @@ import statistics
 import hyperdiv as hd
 
 from services.rowing_utils import INTERVAL_WORKOUT_TYPES, get_season, parse_date
-from components.concept2_sync import sync_from_context
+from components.concept2_sync import get_all_workouts
 from components.reference_watts_loader import reference_watts_loader
 from components.view_context import your
 from services.interval_utils import (
@@ -111,7 +121,11 @@ from services.interval_utils import (
     interval_structure_key,
 )
 from services.reference_watts import get_reference_watts
-from services.workout_quality import compute_workout_quality
+from services.workout_quality import (
+    compute_workout_quality,
+    QUALITY_ORDER,
+    QUALITY_THRESHOLDS,
+)
 from services.volume_bins import (
     BIN_NAMES,
     BIN_COLORS,
@@ -163,25 +177,21 @@ def _parse_rgba(rgba_str: str) -> tuple:
 # Grid axis definitions
 # ---------------------------------------------------------------------------
 
-# Work duration column boundaries (seconds)
+# Work duration column boundaries (seconds).  60s splits short HIIT from
+# medium HIIT (Buchheit & Laursen 2013); 180s splits medium from long.
 _DUR_COLS = [
     ("≤ 30s", 0, 30),
-    ("30s – 2min", 30, 120),
-    ("2 – 4min", 120, 240),
-    ("4 – 8min", 240, 480),
+    ("30s – 1min", 30, 60),
+    ("1 – 3min", 60, 180),
+    ("3 – 8min", 180, 480),
     ("8 – 20min", 480, 1200),
     ("20min+", 1200, float("inf")),
 ]
 _N_COLS = len(_DUR_COLS)
 
-# Work:rest ratio row boundaries + display label (ratio = rest/work internally)
-_RATIO_ROWS = [
-    ("Continuous", "≥ 10w : 1r", 0.0, 0.10),
-    ("Short rest", "2–10w : 1r", 0.10, 0.50),
-    ("Balanced", "≈ 1w : 1r", 0.50, 1.50),
-    ("Long rest", "1w : 1.5–4r", 1.50, 4.00),
-    ("Very Long", "< 1w : 4r", 4.00, float("inf")),
-]
+# Work:rest ratio row boundaries + display label (ratio = rest/work internally).
+# Aligned with Solli et al. 2024 zone work:rest guidance (Z3 ≈ 6:1, Z4 ≈ 3:1,
+# Z5 ≈ 2:1, Z6/7 ≈ 1:1 to 1:10).
 _RATIO_ROWS = [
     ("Continuous", "< 9% rest", 0.0, 0.10),
     ("Short rest", "9-33% rest", 0.10, 0.50),
@@ -273,6 +283,20 @@ def _always_white(is_dark: bool) -> str:
 # reference-watts index is missing anchor events return None and render as "—".
 
 
+_QUALITY_DEFINITION_TEXT: dict[str, str] = {
+    "Low": "Quality score below 0.50 — junk-mile / easy-day session.",
+    "Medium": "Quality score 0.50–0.75 — solid moderate session.",
+    "High": "Quality score 0.75–1.0 — sharp session with most splits at category-reference watts.",
+    "Ultra": "Quality score > 1.0 — rare, top-end session at or beyond reference power.",
+}
+_QUALITY_FILTER_TEXT: dict[str, str] = {
+    "Low": "Selected: workouts whose Quality score is Low.",
+    "Medium": "Selected: workouts whose Quality score is Medium.",
+    "High": "Selected: workouts whose Quality score is High.",
+    "Ultra": "Selected: workouts whose Quality score is Ultra.",
+}
+
+
 _QUALITY_STYLE: dict[str, dict] = {
     "Low": {
         "label": "Low",
@@ -317,18 +341,19 @@ _QUALITY_STYLE: dict[str, dict] = {
 # continuous ≤30" piece).  The grid labels those "Other" and the info panel
 # explains they are unusual combinations.
 _STIMULUS_INFO: list[list[dict | None]] = [
-    # Row 0 — Continuous (work:rest ≥ 10:1)
-    # Aerobic sessions.  Pace-intensity scores here are intentionally low —
-    # the point is volume at easy/steady intensity, not hardness — so we
-    # set expected_score = 0 and grade purely on work-time accumulation.
+    # Row 0 — Continuous (rest < 9% of cycle, ≈ no formal rest).  Pace-intensity
+    # is intentionally low here — the point is volume at easy/steady intensity,
+    # not hardness — so expected_score = 0 (or 10 for fartlek) and the Quality
+    # column grades purely on work-time accumulation.
     [
         None,  # ≤30" continuous — n/a
+        None,  # 30–60" continuous — uncommon; surges this short are noise inside an aerobic piece
         {
             "name": "Fartlek",
             "description": (
-                "Continuous aerobic effort with internal pace variations. "
-                "The surges are short enough that blood lactate does not "
-                "meaningfully accumulate, so the piece remains fundamentally "
+                "Continuous aerobic effort with internal pace surges of 1–3 "
+                "minutes. The surges are short enough that blood lactate does "
+                "not meaningfully accumulate, so the piece remains fundamentally "
                 "aerobic."
             ),
             "example": "10× 1' easy / 1' moderate, continuous.",
@@ -338,20 +363,10 @@ _STIMULUS_INFO: list[list[dict | None]] = [
         {
             "name": "Sustained aerobic",
             "description": (
-                "2–4 minute continuous aerobic blocks with minimal "
-                "transition. Targets mitochondrial density and fat oxidation."
+                "3–8 minute continuous aerobic blocks with minimal transition. "
+                "Targets mitochondrial density and fat oxidation."
             ),
-            "example": "3× 3' at aerobic pace, continuous.",
-            "expected_score": 0,
-            "expected_work_s": 1500,
-        },
-        {
-            "name": "Steady state",
-            "description": (
-                "Moderate-duration continuous work below the first lactate "
-                "threshold. Develops stroke volume and capillarisation."
-            ),
-            "example": "4× 5' at rate 18–20, continuous.",
+            "example": "3× 5' at aerobic pace, continuous.",
             "expected_score": 0,
             "expected_work_s": 1500,
         },
@@ -376,48 +391,50 @@ _STIMULUS_INFO: list[list[dict | None]] = [
             "expected_work_s": 2700,
         },
     ],
-    # Row 1 — Short rest (work:rest 3–10:1)
+    # Row 1 — Short rest (rest 9–33% of cycle, work:rest ≈ 2–10 : 1).
+    # Aligns with Solli et al. 2024 Z3 (MIT, 6–4 : 1) and the lower end of Z4.
     [
-        None,  # ≤30" — n/a
+        None,  # ≤30" with short rest — physiologically uncommon (alactic territory needs longer rest)
         {
-            "name": "Glycolytic capacity",
+            "name": "Lactate production",
             "description": (
-                "Short high-intensity intervals with very brief recovery. "
+                "Short high-intensity reps (30–60s) with very brief recovery. "
                 "Work-to-rest accumulates glycolytic demand across reps and "
-                "trains tolerance of low muscle pH."
+                'trains tolerance of low muscle pH — the classical "lactate '
+                'production" stimulus.'
             ),
-            "example": '10× 1\' / 12"r, 15× 30" / 8"r.',
+            "example": '12× 30" / 8"r, 10× 45" / 12"r.',
             "expected_score": 65,
             "expected_work_s": 300,
         },
         {
-            "name": "VO₂max intervals",
+            "name": "VO₂max (short rest)",
             "description": (
-                "2–4 minute intervals with short recovery. The incomplete "
-                "recovery keeps oxygen uptake high across reps, producing a "
-                "large VO₂max stimulus per session."
+                "1–3 minute reps with short recovery. The incomplete recovery "
+                "keeps oxygen uptake high across reps, producing a large "
+                "VO₂max stimulus per session."
             ),
-            "example": "6× 3' / 1'r, 8× 2' / 40\"r.",
-            "expected_score": 55,
+            "example": '6× 2\' / 30"r, 8× 90" / 30"r.',
+            "expected_score": 60,
             "expected_work_s": 480,
         },
         {
             "name": "Supra-threshold",
             "description": (
-                "Work at or slightly above the second lactate threshold "
-                "with incomplete recovery. Lactate accumulates gradually "
-                "across reps."
+                "3–8 minute reps at or slightly above the second lactate "
+                "threshold with incomplete recovery. Lactate accumulates "
+                "gradually across reps."
             ),
-            "example": "4× 6' / 2'r, 4× 8' / 2'r.",
+            "example": "4× 6' / 2'r, 5× 4' / 1'r.",
             "expected_score": 40,
             "expected_work_s": 600,
         },
         {
             "name": "Threshold accumulation",
             "description": (
-                "Long intervals near threshold with short recovery. "
-                "Accumulates substantial time at threshold; late reps may "
-                "drift as fatigue builds."
+                "Long reps near threshold with short recovery. Accumulates "
+                "substantial time at threshold; late reps may drift as fatigue "
+                "builds."
             ),
             "example": "3× 12' / 4'r, 4× 10' / 3'r.",
             "expected_score": 30,
@@ -426,63 +443,68 @@ _STIMULUS_INFO: list[list[dict | None]] = [
         {
             "name": "Tempo",
             "description": (
-                "Long work intervals with brief recovery at moderate-to-"
-                "threshold intensity — effectively fractioned tempo work."
+                "Long reps with brief recovery at moderate-to-threshold "
+                "intensity — effectively fractioned tempo work."
             ),
             "example": "2× 20' / 5'r.",
             "expected_score": 25,
             "expected_work_s": 1800,
         },
     ],
-    # Row 2 — Balanced (work:rest ≈ 1:1)
+    # Row 2 — Balanced (rest 33–60% of cycle, work:rest ≈ 1 : 1).
+    # Aligns with Solli et al. 2024 Z4–Z5 (HIT, 3–1 : 1) — the canonical
+    # VO₂max-stimulus zone in periodised endurance programmes.
     [
         {
-            "name": "Neuromuscular sprints",
+            "name": "Short HIIT (Tabata-like)",
             "description": (
-                "Very short efforts with roughly equal recovery. Develops "
-                "repeated peak power as the phosphocreatine system partly "
-                "replenishes between reps."
+                "Very short reps (≤30s) with roughly equal recovery — the "
+                "classic Tabata-style stimulus. Repeated near-maximal output "
+                "keeps oxygen demand pinned at VO₂max while glycolytic load "
+                "accumulates."
             ),
-            "example": '10× 20" / 20"r at maximal power.',
+            "example": '8× 20" / 10"r (Tabata), 10× 30" / 30"r.',
             "expected_score": 80,
             "expected_work_s": 120,
         },
         {
-            "name": "Anaerobic endurance",
+            "name": "Anaerobic capacity",
             "description": (
-                "Sub-2-minute efforts with near-equal rest. Each rep starts "
-                "before lactate has fully cleared; trains tolerance of "
+                "30–60s near-maximal reps with near-equal rest. Each rep "
+                "starts before lactate has fully cleared; trains tolerance of "
                 "accumulating lactate."
             ),
-            "example": '8× 500m / 2\'r, 10× 45" / 45"r.',
+            "example": '10× 45" / 45"r, 8× 60" / 45"r.',
             "expected_score": 75,
             "expected_work_s": 360,
         },
         {
-            "name": "VO₂max (2k-prep)",
+            "name": "VO₂max (medium intervals)",
             "description": (
-                "The canonical VO₂max interval. Work reaches VO₂max; equal "
-                "rest allows partial recovery while keeping oxygen uptake "
-                "elevated across reps."
+                "1–3 minute reps with roughly equal recovery — short HIIT in "
+                "Buchheit & Laursen's framing. Work reaches VO₂max; equal rest "
+                "allows partial recovery while keeping oxygen uptake elevated "
+                "across reps."
             ),
-            "example": "6× 2' / 2'r, 8× 2' / 2'r.",
+            "example": "6× 2' / 2'r, 8× 90\" / 90\"r.",
             "expected_score": 65,
             "expected_work_s": 480,
         },
         {
-            "name": "VO₂max (5k-prep)",
+            "name": "VO₂max (long intervals)",
             "description": (
-                "Longer VO₂max intervals with adequate recovery. Extends "
-                "time at VO₂max per rep while keeping quality high."
+                "3–8 minute reps with adequate recovery — long HIIT in "
+                "Buchheit & Laursen's framing. Extends time at VO₂max per "
+                "rep while keeping quality high."
             ),
-            "example": "4× 4' / 4'r, 5× 1000m / 4'r.",
+            "example": "5× 4' / 4'r, 4× 5' / 4'r, 4× 1000m / 4'r.",
             "expected_score": 55,
             "expected_work_s": 600,
         },
         {
-            "name": "Lactate threshold",
+            "name": "Lactate threshold (1:1)",
             "description": (
-                "Long intervals with roughly equal recovery at controlled "
+                "Long reps with roughly equal recovery at controlled "
                 "intensity. Accumulates extended threshold time with "
                 "manageable fatigue."
             ),
@@ -490,126 +512,79 @@ _STIMULUS_INFO: list[list[dict | None]] = [
             "expected_score": 35,
             "expected_work_s": 900,
         },
-        # {
-        #     "name": "Aerobic blocks",
-        #     "description": (
-        #         "Very long aerobic intervals with roughly equal recovery. "
-        #         "Uncommon in periodised programmes; often arises in low-"
-        #         "intensity adaptation phases."
-        #     ),
-        #     "example": "2× 30' / 30'r, 3× 20' / 20'r.",
-        #     "expected_score": 15,
-        #     "expected_work_s": 1500,
-        # },
-        None,
+        None,  # 20'+ work with 1:1 rest is just two efforts — not a programmed stimulus
     ],
-    # Row 3 — Long rest (work:rest 1:2–4)
+    # Row 3 — Long rest (rest 60–80% of cycle, work:rest ≈ 1 : 2–4).
+    # Aligns with Solli et al. 2024 Z5–Z6 territory and Buchheit & Laursen's
+    # repeated-sprint / short-HIIT-with-long-rest formats.
     [
         {
-            "name": "Speed / power",
+            "name": "Repeated sprints (RST)",
             "description": (
-                "Very short maximal efforts with generous recovery. "
-                "Targets the phosphocreatine system and peak neuromuscular "
-                "power."
+                "Very short maximal efforts with substantial recovery — the "
+                "canonical RST format. Targets the phosphocreatine system and "
+                "peak neuromuscular power; recovery is long enough for partial "
+                "PCr resynthesis between reps."
             ),
-            "example": '8× 15" / 45"r, 6× 20" / 1\'r.',
+            "example": '8× 15" / 45"r, 6× 20" / 60"r.',
             "expected_score": 90,
             "expected_work_s": 60,
         },
         {
             "name": "Speed endurance",
             "description": (
-                "Sub-2-minute high-intensity intervals with substantial "
-                "recovery. Develops the ability to repeat near-maximal "
-                "efforts with partial PCr recovery."
+                "30–60s high-intensity reps with substantial recovery. "
+                "Develops the ability to repeat near-maximal efforts with "
+                "partial PCr recovery."
             ),
-            "example": "5× 1' / 3'r, 6× 500m / 3'r.",
+            "example": '5× 45" / 2\'r, 6× 30" / 90"r.',
             "expected_score": 70,
             "expected_work_s": 240,
         },
         {
-            "name": "VO₂max (long intervals)",
+            "name": "VO₂max (recovery-rich)",
             "description": (
-                "High-quality VO₂max intervals with near-full recovery. "
-                "Prioritises peak power per rep over total VO₂max dose — "
-                "useful for in-season maintenance."
+                "1–3 minute high-quality VO₂max reps with near-full "
+                "recovery. Prioritises peak power per rep over total VO₂max "
+                "dose — useful for in-season maintenance."
             ),
-            "example": "4× 2' / 8'r, 4× 500m / 6'r.",
+            "example": "6× 2' / 4'r, 4× 90\" / 3'r, 4× 500m / 3'r.",
             "expected_score": 70,
             "expected_work_s": 300,
         },
-        # {
-        #     "name": "5k quality",
-        #     "description": (
-        #         "Extended race-pace efforts with generous recovery. "
-        #         "Refines race-pace efficiency and pacing."
-        #     ),
-        #     "example": "3× 5' / 15'r, 4× 1000m / 8'r.",
-        #     "expected_score": 55,
-        #     "expected_work_s": 480,
-        # },
-        # {
-        #     "name": "Extensive endurance",
-        #     "description": (
-        #         "Long work intervals with even longer rest. Typically coach-"
-        #         "prescribed race pieces or block training with full recovery."
-        #     ),
-        #     "example": "3× 10' / 20'r.",
-        #     "expected_score": 30,
-        #     "expected_work_s": 900,
-        # },
-        None,
-        None,
+        None,  # 3–8' work with 1:2–4 rest is uncommon
+        None,  # 8–20' work with very long rest — n/a
         None,  # 20'+ with long rest — n/a
     ],
-    # Row 4 — Very Long rest (work:rest < 1:4)
+    # Row 4 — Very Long rest (rest > 80% of cycle, work:rest < 1 : 4).
+    # Aligns with Solli et al. 2024 Z6/7 all-out and the SIT (Sprint Interval
+    # Training) literature (Wingate-style, ~30s all-out / ~4 min recovery).
     [
         {
-            "name": "Maximal sprints",
+            "name": "Maximal sprints (alactic)",
             "description": (
-                "Maximum-effort sprints with full PCr recovery. Every "
-                "rep should be maximally explosive."
+                "Maximum-effort sprints with full PCr recovery. Every rep "
+                "should be maximally explosive; the energy comes almost "
+                "entirely from the phosphocreatine system."
             ),
             "example": "6× 10\" / 2'r, 8× 15\" / 3'r.",
             "expected_score": 95,
             "expected_work_s": 60,
         },
         {
-            "name": "Alactic (PCr)",
+            "name": "Sprint interval training (SIT)",
             "description": (
-                "Near-maximal efforts with near-complete PCr resynthesis "
-                "between reps. Builds repeated sprint capacity and peak "
-                "neuromuscular power."
+                "30–60s all-out efforts with very long (>4× work) recovery — "
+                "the Wingate-style SIT protocol. Each rep is supramaximal and "
+                "rest is long enough to keep quality high across the set."
             ),
-            "example": "4× 45\" / 5'r",
+            "example": "4× 30\" / 4'r (Wingate), 4× 45\" / 5'r.",
             "expected_score": 90,
             "expected_work_s": 180,
         },
-        # {
-        #     "name": "Race-pace intervals",
-        #     "description": (
-        #         "2–4 minute near-maximal efforts with very long recovery "
-        #         "(>4× work time). Full quality on every rep; used for race-"
-        #         "pace familiarisation and power development."
-        #     ),
-        #     "example": "4× 2' / 8'r, 3× 3' / 12'r at 2k pace.",
-        #     "expected_score": 75,
-        #     "expected_work_s": 240,
-        # },
-        # {
-        #     "name": "Race simulations",
-        #     "description": (
-        #         "4–8 minute efforts at race intensity with very long "
-        #         "recovery (>4× work time). Full recovery keeps each rep "
-        #         "maximally race-representative."
-        #     ),
-        #     "example": "3× 5' / 25'r, 2× 6' / 30'r at 2k race pace.",
-        #     "expected_score": 75,
-        #     "expected_work_s": 360,
-        # },
-        None,
-        None,
-        None,  # 8'–20' with very long rest — n/a
+        None,  # 1–3' work with very long rest — race-pace pieces, but uncommon as a programmed stimulus
+        None,  # 3–8' work with very long rest — n/a
+        None,  # 8–20' work with very long rest — n/a
         None,  # 20'+ with very long rest — n/a
     ],
 ]
@@ -872,6 +847,85 @@ def _grid_cell_tooltip_content(tt, row_idx: int, col_idx: int) -> None:
             )
 
 
+# Reference-event labels for the Power Intensity scale tooltip — paired with
+# their cat_key tuples (matching services.volume_bins._CK_* and the keys used
+# by services.reference_watts.get_reference_watts).  One entry per zone bin
+# (index 1..6); Slow Aerobic has no upper anchor, so its slot is None.
+_POWER_SCALE_ANCHORS: list[tuple[str | None, tuple | None]] = [
+    ("1k", ("dist", 1000)),  # Fast
+    ("2k", ("dist", 2000)),  # 2k
+    ("5k", ("dist", 5000)),  # 5k
+    ("60'", ("time", 36000)),  # Threshold
+    ("Mara", ("dist", 42195)),  # Fast Aerobic
+    (None, None),  # Slow Aerobic — no anchor
+]
+
+
+def _power_scale_tooltip_content(tt, ref_watts: dict | None, is_dark: bool) -> None:
+    """
+    Build a graphical zone-scale explainer in the tooltip's content slot.
+
+    Each colored band is one Power Intensity zone, in order Fast → Slow Aerobic.
+    Below each band: the reference event whose watts anchor that zone, plus
+    the user's actual watts at that event (date = most recent workout).  The
+    boundaries between zones are the midpoints between adjacent reference
+    watts, so seeing the events in each zone makes the rule visually obvious.
+    """
+    with hd.box(slot=tt.content_slot, padding=0.5, gap=0.4, min_width=32):
+        hd.text("Power Intensity zones", font_size="small", font_weight="bold")
+        hd.text(
+            "Each band is one zone; the label below names the PR event that "
+            "sits inside it. Boundaries are midpoints between adjacent "
+            "reference watts.",
+            font_size="x-small",
+            font_color="neutral-500",
+        )
+        with hd.hbox(gap=0.15, padding_top=0.2):
+            for i, name in enumerate(BIN_NAMES[1:], start=1):
+                with hd.scope(f"scale_{name}"):
+                    with hd.box(gap=0.15, align="center"):
+                        color_str = BIN_COLORS[i][0 if is_dark else 1]
+                        hd.box(
+                            width="100%",
+                            height=0.7,
+                            background_color=_parse_rgba(color_str),
+                            border_radius="small",
+                        )
+                        hd.text(
+                            name,
+                            font_size="x-small",
+                            font_weight="semibold",
+                            font_color="neutral-700",
+                        )
+                        evt_name, evt_key = _POWER_SCALE_ANCHORS[i - 1]
+                        if evt_name is None:
+                            hd.text(
+                                "below",
+                                font_size="x-small",
+                                font_color="neutral-400",
+                                font_style="italic",
+                            )
+                        else:
+                            hd.text(
+                                evt_name,
+                                font_size="x-small",
+                                font_color="neutral-500",
+                            )
+                            w = ref_watts.get(evt_key) if ref_watts else None
+                            if w:
+                                hd.text(
+                                    f"{int(w)}W",
+                                    font_size="x-small",
+                                    font_color="neutral-500",
+                                )
+                            else:
+                                hd.text(
+                                    "—",
+                                    font_size="x-small",
+                                    font_color="neutral-400",
+                                )
+
+
 def _chip_tooltip_content(tt, heading: str, definition: str, filter_rule: str) -> None:
     """Rich chip tooltip body: bold zone heading, definition, filter rule."""
     with hd.box(slot=tt.content_slot, padding=0.3, gap=0.25, max_width=40):
@@ -931,15 +985,25 @@ def _intensity_chip(
     return btn.clicked
 
 
-def _zone_filter_legends(state, max_hr: int | None) -> None:
+def _zone_filter_legends(
+    state,
+    max_hr: int | None,
+    ref_watts: dict | None = None,
+) -> None:
     """
-    Two stacked labelled legends: Power Intensity (always) + HR Intensity
-    (only when max_hr is resolvable).  Both combine **disjunctively** within
-    themselves — selecting two chips shows workouts touching EITHER zone.
+    Stacked labelled legends: Power Intensity (always) + HR Intensity
+    (only when max_hr is resolvable) + Quality.  Each combines
+    **disjunctively** within itself — selecting two chips shows workouts
+    touching EITHER zone — and conjunctively across legends.
 
     Each chip has a rich content-slot tooltip with the zone's definition and
-    the filter rule.  Active state lives in state.active_bins (pace) and
-    state.active_hr_bins (HR); chip colour reflects the zone colour when on.
+    the filter rule.  Active state lives in state.active_bins (pace),
+    state.active_hr_bins (HR), and state.active_quality (quality); chip
+    colour reflects the zone colour when on.
+
+    The Power Intensity header carries a (?) icon whose tooltip renders a
+    graphical scale showing each zone's reference event and the user's
+    current watts at that event (dated to the most recent workout).
     """
     is_dark = hd.theme().is_dark
 
@@ -953,13 +1017,20 @@ def _zone_filter_legends(state, max_hr: int | None) -> None:
             wrap="wrap",
             justify="center",
         ):
-            hd.text(
-                "Power Intensity",
-                font_size="small",
-                font_weight="bold",
-                font_color="neutral-600",
-                min_width=7,
-            )
+            with hd.hbox(gap=0.25, align="center", min_width=7):
+                hd.text(
+                    "Power Intensity",
+                    font_size="small",
+                    font_weight="bold",
+                    font_color="neutral-600",
+                )
+                with hd.tooltip() as tt:
+                    _power_scale_tooltip_content(tt, ref_watts, is_dark)
+                    hd.icon(
+                        "question-circle",
+                        font_size="small",
+                        font_color="neutral-400",
+                    )
             for i, name in enumerate(BIN_NAMES[1:], start=1):
                 with hd.scope(f"power_{name}"):
                     color_str = BIN_COLORS[i][0 if is_dark else 1]
@@ -1000,9 +1071,44 @@ def _zone_filter_legends(state, max_hr: int | None) -> None:
                     font_color="neutral-400",
                     font_style="italic",
                 )
-            return
+        else:
+            active_hr_bins: set[int] = set(state.active_hr_bins)
+            with hd.hbox(
+                gap=0.75,
+                align="center",
+                padding=(0.25, 0, 0.5, 0),
+                wrap="wrap",
+                justify="center",
+            ):
+                hd.text(
+                    "HR Intensity",
+                    font_size="small",
+                    font_weight="bold",
+                    font_color="neutral-600",
+                    min_width=7,
+                )
+                # HR_ZONE_NAMES indices 1..5 are the classifiable zones.
+                for i in range(1, 6):
+                    name = HR_ZONE_NAMES[i]
+                    with hd.scope(f"hr_{name}"):
+                        color_str = HR_ZONE_COLORS[i][0 if is_dark else 1]
+                        clicked = _intensity_chip(
+                            name=name,
+                            color_str=color_str,
+                            is_active=i in active_hr_bins,
+                            definition=HR_ZONE_DEFINITION_TEXT.get(i, ""),
+                            filter_rule=HR_ZONE_FILTER_TEXT.get(i, ""),
+                        )
+                        if clicked:
+                            sel = set(state.active_hr_bins)
+                            if i in sel:
+                                sel.discard(i)
+                            else:
+                                sel.add(i)
+                            state.active_hr_bins = tuple(sorted(sel))
 
-        active_hr_bins: set[int] = set(state.active_hr_bins)
+        # ── Quality legend ──────────────────────────────────────────────────
+        active_quality: set[str] = set(state.active_quality)
         with hd.hbox(
             gap=0.75,
             align="center",
@@ -1011,31 +1117,36 @@ def _zone_filter_legends(state, max_hr: int | None) -> None:
             justify="center",
         ):
             hd.text(
-                "HR Intensity",
+                "Quality",
                 font_size="small",
                 font_weight="bold",
                 font_color="neutral-600",
                 min_width=7,
             )
-            # HR_ZONE_NAMES indices 1..5 are the classifiable zones.
-            for i in range(1, 6):
-                name = HR_ZONE_NAMES[i]
-                with hd.scope(f"hr_{name}"):
-                    color_str = HR_ZONE_COLORS[i][0 if is_dark else 1]
+            for label, _upper in QUALITY_THRESHOLDS:
+                with hd.scope(f"quality_{label}"):
+                    style = _QUALITY_STYLE[label]
+                    color_rgba = style["bg"]
+                    color_str = (
+                        f"rgba({color_rgba[0]},{color_rgba[1]},{color_rgba[2]},"
+                        f"{color_rgba[3]})"
+                    )
                     clicked = _intensity_chip(
-                        name=name,
+                        name=label,
                         color_str=color_str,
-                        is_active=i in active_hr_bins,
-                        definition=HR_ZONE_DEFINITION_TEXT.get(i, ""),
-                        filter_rule=HR_ZONE_FILTER_TEXT.get(i, ""),
+                        is_active=label in active_quality,
+                        definition=_QUALITY_DEFINITION_TEXT[label],
+                        filter_rule=_QUALITY_FILTER_TEXT[label],
                     )
                     if clicked:
-                        sel = set(state.active_hr_bins)
-                        if i in sel:
-                            sel.discard(i)
+                        sel = set(state.active_quality)
+                        if label in sel:
+                            sel.discard(label)
                         else:
-                            sel.add(i)
-                        state.active_hr_bins = tuple(sorted(sel))
+                            sel.add(label)
+                        state.active_quality = tuple(
+                            sorted(sel, key=lambda q: QUALITY_ORDER[q])
+                        )
 
 
 def _grid_browser(zone_workouts: list[dict], state) -> None:
@@ -1327,25 +1438,15 @@ def _render_intensity_cell(
 # ---------------------------------------------------------------------------
 
 
-def intervals_page(ctx, global_state, excluded_seasons=(), machine="All") -> None:
+def intervals_page(ctx) -> None:
     """Top-level HyperDiv component for the Interval Workouts tab."""
 
     print("syncing from intervals page")
-    result = sync_from_context(ctx)
+    result = get_all_workouts(ctx)
     if result is None:
         hd.box(padding=2, min_height="80vh")
         return
     _workouts_dict, all_workouts = result
-
-    # Apply global filters
-    if excluded_seasons:
-        all_workouts = [
-            w
-            for w in all_workouts
-            if get_season(w.get("date", "")) not in set(excluded_seasons)
-        ]
-    if machine != "All":
-        all_workouts = [w for w in all_workouts if w.get("type") == machine]
 
     profile = get_profile_from_context(ctx) or {}
     max_hr, _max_hr_estimated = resolve_max_hr(profile, all_workouts)
@@ -1388,6 +1489,7 @@ def intervals_page(ctx, global_state, excluded_seasons=(), machine="All") -> Non
         active_cells=tuple(),  # tuple[str] — "col,row" keys of selected cells
         active_bins=tuple(),  # tuple[int] — pace bin indices (1–6) for OR filter
         active_hr_bins=tuple(),  # tuple[int] — HR bin indices (1–5) for OR filter
+        active_quality=tuple(),  # tuple[str] — quality buckets (Low/Medium/High/Ultra) for OR filter
         structure_filter=None,  # str | None — filter table to this structure key
     )
 
@@ -1588,7 +1690,7 @@ def intervals_page(ctx, global_state, excluded_seasons=(), machine="All") -> Non
     with hd.box(align="center", gap=1, padding=2, min_height="80vh"):
         with hd.box(gap=0.2, align="center"):
             hd.h1(f"Review {your(ctx)} Fondest Interval Sessions")
-            global_filter_ui(global_state, ctx)
+            global_filter_ui(ctx)
 
         with hd.box(width="100%", gap=2):
             # Pre-compute non-cell filters so the grid counts stay in sync with
@@ -1605,6 +1707,11 @@ def intervals_page(ctx, global_state, excluded_seasons=(), machine="All") -> Non
                 hr_bin_passes,
                 "_hr_bin_meters",
             )
+            if state.active_quality:
+                sel_quality = set(state.active_quality)
+                pre_filtered = [
+                    r for r in pre_filtered if r.get("_quality") in sel_quality
+                ]
             if state.structure_filter:
                 pre_filtered = [
                     r
@@ -1615,8 +1722,13 @@ def intervals_page(ctx, global_state, excluded_seasons=(), machine="All") -> Non
             # 2D grid browser — counts reflect pace/HR/structure filters
             _grid_browser(pre_filtered, state)
 
-            # Dual labelled legends (Pace + HR) with rich chip tooltips
-            _zone_filter_legends(state, max_hr)
+            # Dual labelled legends (Pace + HR) with rich chip tooltips.
+            # ref_watts dates to the most recent workout so the (?) tooltip
+            # under "Power Intensity" reflects current fitness.
+            today_ref_watts = (
+                _ref_watts_for(all_intervals[0]) if all_intervals else None
+            )
+            _zone_filter_legends(state, max_hr, today_ref_watts)
 
             # Apply cell filter on top of already pace/HR/structure filtered
             active_cells = frozenset(state.active_cells)
@@ -1650,6 +1762,7 @@ def intervals_page(ctx, global_state, excluded_seasons=(), machine="All") -> Non
                 f"{state.structure_filter or 'all'}"
                 f"_{sorted(list(state.active_bins))}"
                 f"_{sorted(list(state.active_hr_bins))}"
+                f"_{sorted(list(state.active_quality))}"
                 f"_{sorted(list(state.active_cells))}"
             )
             with hd.scope(filter_key):
