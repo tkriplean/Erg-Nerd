@@ -38,6 +38,7 @@ from services.local_storage_compression import (
     compress_strokes_cache,
     decompress_strokes_cache,
 )
+from services.data_integrity import normalize_workouts_dict
 from services.concept2_records import (
     age_category as wr_age_category,
     weight_class_str as wr_weight_class_str,
@@ -143,6 +144,22 @@ def concept2_sync(client) -> tuple | None:
     # ── Step 3: handle result ────────────────────────────────────────────────
     if task.done and not task.error:
         workouts_dict, sorted_workouts = task.result
+        # Data-integrity pass: drop bogus HR readings and repair corrupt splits
+        # before anything is persisted or returned to consumers.  Idempotent so
+        # legacy entries already in localStorage get fixed on next sync too.
+        try:
+            profile = (
+                json.loads(sync_state.profile_blob)
+                if sync_state.profile_blob
+                else {}
+            )
+        except Exception:
+            profile = {}
+        max_hr = profile.get("max_heart_rate")
+        workouts_dict = normalize_workouts_dict(workouts_dict, max_hr=max_hr)
+        sorted_workouts = sorted(
+            workouts_dict.values(), key=lambda r: r.get("date", ""), reverse=True
+        )
         if not sync_state.written:
             # Write real data only — synthetic workouts must never reach localStorage.
             hd.local_storage.set_item("workouts", compress_workouts(workouts_dict))
