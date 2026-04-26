@@ -1027,6 +1027,39 @@ def rank_in_pool(
     return rank, total, pct
 
 
+def entry_watts(entry: dict, event_kind: str, event_value: int) -> Optional[float]:
+    """Convert one ranking entry's ``value_tenths`` to watts.
+
+    Returns ``None`` if the entry has no usable value or watts cannot be
+    computed. Distance events: ``value_tenths`` is tenths-of-a-second for
+    ``event_value`` metres. Time events: ``value_tenths`` is metres rowed in
+    ``event_value`` tenths-of-a-second.
+    """
+    from services.rowing_utils import compute_watts
+
+    v = entry.get("value_tenths")
+    if v is None or v <= 0:
+        return None
+    if event_kind == "dist":
+        t_sec = v / 10.0
+        dist_m = event_value
+    else:
+        t_sec = event_value / 10.0
+        dist_m = v
+    if dist_m <= 0 or t_sec <= 0:
+        return None
+    pace = t_sec / (dist_m / 500.0)
+    w = compute_watts(pace)
+    if w is None:
+        return None
+    try:
+        if not (w > 0):
+            return None
+    except TypeError:
+        return None
+    return float(w)
+
+
 def histogram_watts(
     pool: list[dict], event_kind: str, event_value: int, bins: int = 30
 ) -> tuple[list[int], float, float]:
@@ -1035,33 +1068,12 @@ def histogram_watts(
     Converts each entry's ``value_tenths`` → pace → watts via
     ``services.rowing_utils.compute_watts``. Returns zeros + (0,0) on empty.
     """
-    from services.rowing_utils import compute_watts
-
     watts_list: list[float] = []
     for e in pool:
-        v = e.get("value_tenths")
-        if v is None or v <= 0:
-            continue
-        if event_kind == "dist":
-            # v = tenths of a second for event_value meters
-            t_sec = v / 10.0
-            dist_m = event_value
-        else:
-            # v = meters covered in event_value tenths
-            t_sec = event_value / 10.0
-            dist_m = v
-        if dist_m <= 0 or t_sec <= 0:
-            continue
-        pace = t_sec / (dist_m / 500.0)
-        w = compute_watts(pace)
+        w = entry_watts(e, event_kind, event_value)
         if w is None:
             continue
-        try:
-            if not (w > 0):
-                continue
-        except TypeError:
-            continue
-        watts_list.append(float(w))
+        watts_list.append(w)
 
     if not watts_list:
         return [0] * bins, 0.0, 0.0

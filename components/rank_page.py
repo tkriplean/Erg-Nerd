@@ -77,7 +77,10 @@ from services.concept2_rankings import (
     rankings_age_band,
     RankingModifiers,
 )
-from services.concept2_rankings_index import load_event_index
+from services.concept2_rankings_index import (
+    iter_event_entries,
+    load_event_slices,
+)
 
 from components.concept2_sync import get_all_workouts
 from components.profile_page import get_profile_from_context
@@ -185,13 +188,12 @@ def _load_name_counts() -> dict:
     counts: dict = {}
     for et, ev, _ in _EVENT_ORDER:
         try:
-            entries = load_event_index(et, ev) or []
+            for e in iter_event_entries(et, ev):
+                n = e.get("name")
+                if n:
+                    counts[n] = counts.get(n, 0) + 1
         except Exception:
-            entries = []
-        for e in entries:
-            n = e.get("name")
-            if n:
-                counts[n] = counts.get(n, 0) + 1
+            pass
     _NAME_AGG_CACHE["counts"] = counts
     return counts
 
@@ -204,21 +206,20 @@ def _load_name_event_sets(required: frozenset) -> dict:
         return _NAME_AGG_CACHE[key]
     tmp: dict[str, set] = {}
     for et, ev in required:
-        try:
-            entries = load_event_index(et, ev) or []
-        except Exception:
-            entries = []
         seen: set = set()
-        for e in entries:
-            n = e.get("name")
-            if not n or n in seen:
-                continue
-            seen.add(n)
-            s = tmp.get(n)
-            if s is None:
-                s = set()
-                tmp[n] = s
-            s.add((et, ev))
+        try:
+            for e in iter_event_entries(et, ev):
+                n = e.get("name")
+                if not n or n in seen:
+                    continue
+                seen.add(n)
+                s = tmp.get(n)
+                if s is None:
+                    s = set()
+                    tmp[n] = s
+                s.add((et, ev))
+        except Exception:
+            pass
     frozen = {n: frozenset(s) for n, s in tmp.items()}
     _NAME_AGG_CACHE[key] = frozen
     return frozen
@@ -286,8 +287,17 @@ def _build_rows(
     weight_kg = _weight_kg_from_profile(profile)
     dob = profile.get("dob", "")
 
-    indices_cache: dict[str, list] = {}
+    indices_cache: dict[tuple, list] = {}
     modifiers = _build_modifiers(state)
+
+    # Determine how wide an age window each row's slice load needs to cover.
+    # ``c2_age_matched`` widens the load by ``k_age_match`` so adjacent age
+    # bands are included when the window crosses a band boundary.
+    if state.ranking_focus == "c2_age_matched":
+        load_k = int(state.k_age_match or 0)
+    else:
+        load_k = 0
+    needs_entries = state.ranking_focus in ("c2_age_matched", "c2_age_group")
 
     rows: list[dict] = []
     for w in qualifying:
@@ -312,13 +322,27 @@ def _build_rows(
 
         ev_key = _event_key(etype, evalue)
         row_id = f"{ev_key}|{w.get('id') or w.get('date', '')}"
-        entries = indices_cache.get(ev_key)
+        cache_key = (etype, evalue, age, w_class)
+        entries = indices_cache.get(cache_key)
         if entries is None:
-            try:
-                entries = load_event_index(etype, evalue) or []
-            except Exception:
+            if needs_entries:
+                try:
+                    entries = (
+                        load_event_slices(
+                            etype,
+                            evalue,
+                            gender=gender_api,
+                            target_age=age,
+                            k=load_k,
+                            weight=w_class,
+                        )
+                        or []
+                    )
+                except Exception:
+                    entries = []
+            else:
                 entries = []
-            indices_cache[ev_key] = entries
+            indices_cache[cache_key] = entries
 
         pace = compute_pace(w)
         watts = compute_watts(pace) if pace else None
