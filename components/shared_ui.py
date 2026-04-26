@@ -4,6 +4,7 @@ from services.formatters import machine_label
 from services.rowing_utils import get_season
 from components.concept2_sync import sync_from_context
 from services.global_state import GlobalFilters
+from config import SYNTHETIC_MODE
 
 
 def global_filter_ui(ctx) -> None:
@@ -23,12 +24,14 @@ def global_filter_ui(ctx) -> None:
     # the full data load.
 
     gstate = GlobalFilters()
+
+    # if len(gstate.all_seasons) == 0:
     _ls_wkts_meta = hd.local_storage.get_item("workouts")
 
     all_seasons: list = []
     machine_types: list = []
-    if _ls_wkts_meta.done and _ls_wkts_meta.result:
-        try:
+    if len(all_seasons) == 0:
+        if _ls_wkts_meta.done and _ls_wkts_meta.result:
             _wkts = decompress_workouts(_ls_wkts_meta.result)
             _season_set: set = set()
             _mtype_set: set = set()
@@ -45,8 +48,12 @@ def global_filter_ui(ctx) -> None:
             if SYNTHETIC_MODE:
                 _mtype_set.update({"skierg", "bike"})
             machine_types = sorted(_mtype_set)
-        except Exception:
-            pass
+
+            gstate.all_seasons = all_seasons
+            gstate.all_machines = machine_types
+
+    machine_types = gstate.all_machines
+    all_seasons = gstate.all_seasons
 
     with hd.hbox(gap=1, align="center", min_height="30px"):
         # ── Season dropdown ────────────────────────────────────────────────────
