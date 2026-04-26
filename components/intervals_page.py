@@ -98,7 +98,6 @@ cell again, or the ×-chip above the table, clears it.
 from __future__ import annotations
 
 import statistics
-import time
 
 import hyperdiv as hd
 
@@ -136,20 +135,6 @@ from components.workout_table import (
 from components.profile_page import get_profile_from_context
 from components.shared_ui import global_filter_ui
 from components.spread_quality_legends import spread_quality_legends
-
-# ---------------------------------------------------------------------------
-# Timing instrumentation (toggle to find render bottlenecks)
-# ---------------------------------------------------------------------------
-
-DEBUG_INTERVALS_TIMING = True
-_render_counter = 0
-
-
-def _log_phase(phase: str, ms: float, extra: str = "") -> None:
-    if DEBUG_INTERVALS_TIMING:
-        suffix = f" ({extra})" if extra else ""
-        print(f"[intervals render #{_render_counter}] {phase}={ms:.0f}ms{suffix}")
-
 
 # ---------------------------------------------------------------------------
 # color helpers
@@ -644,11 +629,6 @@ def _enrich_workouts(
                                          ("Other" when cell is n/a)
     """
     result = []
-    bin_ms = 0.0
-    structure_ms = 0.0
-    placement_ms = 0.0
-    cache_hits = 0
-    cache_misses = 0
     for r in workouts:
         if r.get("workout_type") not in INTERVAL_WORKOUT_TYPES:
             continue
@@ -666,13 +646,10 @@ def _enrich_workouts(
         cache_key = (wid, max_hr) if wid is not None else None
         if cache_key is not None and cache_key in _workout_enrich_cache:
             result.append(_workout_enrich_cache[cache_key])
-            cache_hits += 1
             continue
 
-        cache_misses += 1
         r = dict(r)  # shallow copy
 
-        t0 = time.perf_counter()
         attach_spread_and_quality(
             [r],
             workouts,
@@ -680,20 +657,15 @@ def _enrich_workouts(
             thresholds_for=thresholds_for,
             ref_watts_for=ref_watts_for,
         )
-        bin_ms += (time.perf_counter() - t0) * 1000.0
         bm = r["_bin_meters"]
         work_total = sum(bm[1:])
         r["_z3"] = sum(bm[i] for i in Z3_BINS) / work_total if work_total else 0.0
 
-        t0 = time.perf_counter()
         r["_structure_key"] = interval_structure_key(r, compact=True)
-        structure_ms += (time.perf_counter() - t0) * 1000.0
         r["_reps"] = reps
         r["_work_pace"] = avg_workpace_tenths(r)
         r["_work_spm"] = avg_work_spm(r)
-        t0 = time.perf_counter()
         col, row = _compute_grid_placement(r)
-        placement_ms += (time.perf_counter() - t0) * 1000.0
         r["_grid_col"] = col
         r["_grid_row"] = row
         r["_stimulus"] = _cell_name(row, col)
@@ -704,13 +676,6 @@ def _enrich_workouts(
             _workout_enrich_cache[cache_key] = r
         result.append(r)
     result.sort(key=lambda x: x.get("date", ""), reverse=True)
-    if DEBUG_INTERVALS_TIMING:
-        print(
-            f"[intervals render #{_render_counter}] enrich-internal "
-            f"(spread+quality={bin_ms:.0f}ms structure={structure_ms:.0f}ms "
-            f"placement={placement_ms:.0f}ms "
-            f"hits={cache_hits} misses={cache_misses} n={len(result)})"
-        )
     return result
 
 
@@ -814,16 +779,10 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
     is_dark = hd.theme().is_dark
 
     # Pre-compute per-cell data
-    _t0 = time.perf_counter()
     cell_workouts: dict[str, list[dict]] = {}
     for r in zone_workouts:
         k = _cell_key(r["_grid_col"], r["_grid_row"])
         cell_workouts.setdefault(k, []).append(r)
-    _log_phase(
-        "grid_precompute",
-        (time.perf_counter() - _t0) * 1000.0,
-        extra=f"n={len(zone_workouts)}",
-    )
 
     active_cells: frozenset[str] = frozenset(state.active_cells)
 
@@ -1020,13 +979,8 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
 def intervals_page(ctx) -> None:
     """Top-level HyperDiv component for the Interval Workouts tab."""
 
-    global _render_counter
-    _render_counter += 1
-
     print("syncing from intervals page")
-    _t0 = time.perf_counter()
     result = get_all_workouts(ctx)
-    _log_phase("get_all_workouts", (time.perf_counter() - _t0) * 1000.0)
     if result is None:
         hd.box(padding=2, min_height="80vh")
         return
@@ -1038,24 +992,16 @@ def intervals_page(ctx) -> None:
     # Time-aware thresholds: block on the reference-watts loader so the
     # first-time index build shows a progress bar rather than spawning a
     # synchronous build inside _enrich_workouts.
-    _t0 = time.perf_counter()
     if not reference_watts_loader(all_workouts):
         return
-    _log_phase("reference_watts_loader", (time.perf_counter() - _t0) * 1000.0)
 
     # Per-date cache so we don't recompute thresholds when many workouts
     # share a date.  Both the ref-watts dict (for Quality) and the derived
     # bin thresholds are cached.
     _thresholds_for, _ref_watts_for = make_thresholds_resolver(all_workouts)
 
-    _t0 = time.perf_counter()
     all_intervals = _enrich_workouts(
         all_workouts, _thresholds_for, _ref_watts_for, max_hr
-    )
-    _log_phase(
-        "enrich_workouts",
-        (time.perf_counter() - _t0) * 1000.0,
-        extra=f"in={len(all_workouts)} out={len(all_intervals)}",
     )
 
     if not all_intervals:

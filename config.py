@@ -7,3 +7,7 @@
 # never modified, so your real Concept2 data is always safe.
 # See services/synthetic_data.py for generation details.
 SYNTHETIC_MODE = False
+
+# Set to True to record per-render call trees + a combined session report
+# under .profiles/ via pyinstrument. See services/profiling.py for details.
+PROFILE_ENABLE = True

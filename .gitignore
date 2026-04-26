@@ -192,6 +192,9 @@ workouts_example.json
 # Public Concept2 rankings cache (public data but large; regenerable via bin/sync_c2_rankings.py)
 .c2_rankings*
 
+# pyinstrument profiling output (services/profiling.py — config.PROFILE_ENABLE)
+.profiles/
+
 
 .cache/
 .claude/

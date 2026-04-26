@@ -7,7 +7,7 @@ The app opens at http://localhost:8888
 
 import json
 import os
-from config import SYNTHETIC_MODE
+from config import SYNTHETIC_MODE, PROFILE_ENABLE
 
 
 # Load .env before importing services so credentials are available.
@@ -27,6 +27,7 @@ def _load_dotenv(path: str = ".env") -> None:
 _load_dotenv()
 
 import hyperdiv as hd
+from services.profiling import profile_block
 from services.concept2 import (
     Concept2Client,
     clear_token,
@@ -518,6 +519,21 @@ def _public_404_view(user_id: str | None = None) -> None:
 
 
 def main() -> None:
+    from pyinstrument import Profiler
+
+    if False and PROFILE_ENABLE:
+        profiler = Profiler()
+        profiler.start()
+
+    with profile_block("main-render"):
+        _main_body()
+
+    if False and PROFILE_ENABLE:
+        profiler.stop()
+        profiler.print()
+
+
+def _main_body() -> None:
     app_state = hd.state(pending_user_id=None, pending_profile=None)
     loc = hd.location()
 
