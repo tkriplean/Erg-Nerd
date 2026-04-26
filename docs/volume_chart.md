@@ -6,10 +6,10 @@ The Volume Chart on the Volume page shows how many meters were rowed across time
 
 The chart supports two **zone modes**:
 
-- **Power Intensity mode** (default) — zones derived from watts thresholds, time-indexed to the rower's fitness on each workout's own date (see `services/reference_watts.py`).
+- **Power Spread mode** (default) — zones derived from watts thresholds, time-indexed to the rower's fitness on each workout's own date (see `services/reference_watts.py`).
 - **HR mode** — zones derived from percentage of HRmax, using per-split or per-interval HR data where available.
 
-A **Power Intensity / HR Intensity toggle** in the controls row switches between the two modes. Both modes share the same visual language (7-bin stacked bar, same draw order, same distribution table structure).
+A **Power Spread / HR Spread toggle** in the controls row switches between the two modes. Both modes share the same visual language (7-bin stacked bar, same draw order, same distribution table structure).
 
 ---
 
@@ -151,7 +151,7 @@ Distribution badge colors:
 
 ---
 
-## Architecture (Power Intensity Mode)
+## Architecture (Power Spread Mode)
 
 ### Service layer (`services/volume_bins.py` + `services/reference_watts.py`)
 
@@ -161,7 +161,7 @@ Distribution badge colors:
 | `compute_bin_thresholds(ref_watts)` | Build watts cutoffs from reference watts + log-log fallback          |
 | `classify_watts(watts, thresholds)` | Map a watts value → bin index 1–6 (inverted vs pace)                 |
 | `aggregate_workouts(bin_fn=)` | Accumulate meters by week/month/season × bin; `bin_fn` overrides default binning (used for per-workout thresholds) |
-| `workout_power_intensity(workout, all_workouts)` | Single-workout 0–100 power-intensity score using date-appropriate thresholds |
+| `workout_power_spread(workout, all_workouts)` | Single-workout 0–100 power-intensity score using date-appropriate thresholds |
 
 ### Chart builder (`components/volume_chart_builder.py`)
 
@@ -194,7 +194,7 @@ Registered as `VolumeChart` in the HyperDiv plugin system. Injects:
 
 ### Enabling HR Mode
 
-Toggle the **Power Intensity / HR Intensity** radio buttons in the controls row. The mode is stored in `state.zone_mode` (`"power_intensity"` | `"hr"`).
+Toggle the **Power Spread / HR Spread** radio buttons in the controls row. The mode is stored in `state.zone_mode` (`"power_spread"` | `"hr"`).
 
 ### Zone Definitions (% of HRmax)
 
@@ -267,7 +267,7 @@ A **Distribution** column is included. Classification uses the same thresholds a
 
 | File | Key functions |
 |---|---|
-| `services/volume_bins.py` | `compute_bin_thresholds()`, `classify_watts()`, `aggregate_workouts(bin_fn=)`, `workout_power_intensity()` |
+| `services/volume_bins.py` | `compute_bin_thresholds()`, `classify_watts()`, `aggregate_workouts(bin_fn=)`, `workout_power_spread()` |
 | `services/reference_watts.py` | `get_reference_watts()`, `build_reference_watts_index()` |
 | `services/heartrate_utils.py` | `is_valid_hr()`, `resolve_max_hr()`, `hr_zone_idx()`, `workout_hr_meters()`, `hr_coverage()` |
 

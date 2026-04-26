@@ -68,6 +68,18 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
       user-select: none;
     }
     .overview-wrap.dragging { cursor: grabbing; }
+    .brush-handle {
+      position: absolute;
+      top: 0;
+      width: 6px;
+      height: 100%;
+      cursor: ew-resize;
+      background: rgba(128,128,128,0.45);
+      border-radius: 1px;
+      z-index: 2;
+    }
+    .brush-handle:hover { background: rgba(128,128,128,0.75); }
+    .brush-handle.dragging { background: rgba(128,128,128,0.85); }
     canvas {
       display: block;
       width: 100% !important;
@@ -81,6 +93,16 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
   overviewWrap.className = "overview-wrap";
   const overviewCanvas = document.createElement("canvas");
   overviewWrap.appendChild(overviewCanvas);
+  // Two narrow drag handles overlaid on the brush left/right edges; positioned
+  // by the brushPlugin afterDatasetsDraw step.
+  const handleLeft = document.createElement("div");
+  handleLeft.className = "brush-handle";
+  handleLeft.style.display = "none";
+  overviewWrap.appendChild(handleLeft);
+  const handleRight = document.createElement("div");
+  handleRight.className = "brush-handle";
+  handleRight.style.display = "none";
+  overviewWrap.appendChild(handleRight);
   ctx.domElement.appendChild(overviewWrap);
 
   const mainWrap = document.createElement("div");
@@ -98,12 +120,21 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
   let brushStartMs = ctx.initialProps.target_window_start || 0;
   let brushEndMs   = ctx.initialProps.target_window_end   || 0;
   let changeId     = 0;
+  let clickSeq     = 0;
 
   let dragActive      = false;
   let dragAnchorPx    = 0;
   let dragAnchorStart = 0;
   let dragAnchorEnd   = 0;
   let pendingRebuild  = null;
+
+  // Brush-edge resize state.  Side is "left" | "right" | null.
+  let resizeSide = null;
+  let resizeAnchorPx = 0;
+  let resizeAnchorStart = 0;
+  let resizeAnchorEnd = 0;
+  // Minimum brush width — keep it from collapsing to nothing.
+  const _MIN_BRUSH_MS = 7 * 86_400_000;
 
   let mainChart     = null;
   let overviewChart = null;
@@ -292,7 +323,7 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
         type:             "scatter",
         label:            "_regular",
         data:             regPts.map(p => ({
-          x: p.x, y: p.y,
+          x: p.x, y: p.y, id: p.id,
           date_str: p.date_str, dist_str: p.dist_str, is_sb: p.sb,
         })),
         backgroundColor:  regPts.map(p => p.c33),   // 33% opacity fill
@@ -319,7 +350,7 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
         type:             "scatter",
         label:            "_ivl",
         data:             ivlPts.map(p => ({
-          x: p.x, y: p.y,
+          x: p.x, y: p.y, id: p.id,
           date_str: p.date_str, dist_str: p.dist_str,
           work_m: p.work_m, rest_m: p.rest_m,
           ivl_desc: p.ivl_desc, rest_desc: p.rest_desc,
@@ -501,7 +532,11 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
       const { left, right, top, bottom } = chart.chartArea;
       const x1 = Math.max(left,  xScale.getPixelForValue(brushStartMs));
       const x2 = Math.min(right, xScale.getPixelForValue(brushEndMs));
-      if (x2 <= x1) return;
+      if (x2 <= x1) {
+        handleLeft.style.display = "none";
+        handleRight.style.display = "none";
+        return;
+      }
 
       const ctx2d = chart.ctx;
       ctx2d.save();
@@ -516,6 +551,15 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
       ctx2d.beginPath(); ctx2d.moveTo(x2, top); ctx2d.lineTo(x2, bottom); ctx2d.stroke();
 
       ctx2d.restore();
+
+      // Position the resize-handle divs over the brush edges.  The brush is
+      // drawn in canvas pixels; the handles live in CSS pixels of the
+      // overview-wrap.  Canvas fills its wrap so the conversion is 1:1.
+      const HW = 6;  // matches .brush-handle width
+      handleLeft.style.display = "block";
+      handleLeft.style.left = `${x1 - HW / 2}px`;
+      handleRight.style.display = "block";
+      handleRight.style.left = `${x2 - HW / 2}px`;
     },
   };
 
@@ -721,6 +765,108 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
   document.addEventListener(      "touchmove",  (e) => { if (dragActive) { handleDragMove(clientXonCanvas(e)); e.preventDefault(); } }, { passive: false });
   document.addEventListener(      "touchend",   endDrag);
 
+  // ── Brush-edge resize ────────────────────────────────────────────────────
+  // Dragging the left/right handle resizes the brush from that edge,
+  // changing the time window in scope (and so the data shown in the main
+  // chart).  Width is clamped to [_MIN_BRUSH_MS, full data range].
+
+  function startResize(side, clientX) {
+    resizeSide        = side;
+    resizeAnchorPx    = clientX;
+    resizeAnchorStart = brushStartMs;
+    resizeAnchorEnd   = brushEndMs;
+    (side === "left" ? handleLeft : handleRight).classList.add("dragging");
+  }
+
+  function handleResizeMove(clientX) {
+    if (!resizeSide || !overviewChart) return;
+    const xScale  = overviewChart.scales.x;
+    const pxRange = xScale.getPixelForValue(xScale.max) - xScale.getPixelForValue(xScale.min);
+    const msRange = xScale.max - xScale.min;
+    const deltaMs = pxRange > 0 ? ((clientX - resizeAnchorPx) / pxRange) * msRange : 0;
+    const { minMs, maxMs } = dataRange();
+
+    let newStart = resizeAnchorStart;
+    let newEnd   = resizeAnchorEnd;
+    if (resizeSide === "left") {
+      newStart = Math.min(resizeAnchorEnd - _MIN_BRUSH_MS, Math.max(minMs, resizeAnchorStart + deltaMs));
+    } else {
+      newEnd = Math.max(resizeAnchorStart + _MIN_BRUSH_MS, Math.min(maxMs, resizeAnchorEnd + deltaMs));
+    }
+
+    brushStartMs = newStart;
+    brushEndMs   = newEnd;
+
+    if (mainChart) {
+      mainChart.options.scales.x.min = brushStartMs;
+      mainChart.options.scales.x.max = brushEndMs;
+      mainChart.update("none");
+    }
+    if (overviewChart) overviewChart.update("none");
+
+    clearTimeout(pendingRebuild);
+    pendingRebuild = setTimeout(() => {
+      pendingRebuild = null;
+      setWindow(brushStartMs, brushEndMs, { rebuild: true, report: false });
+    }, 100);
+  }
+
+  function endResize() {
+    if (!resizeSide) return;
+    const side = resizeSide;
+    resizeSide = null;
+    (side === "left" ? handleLeft : handleRight).classList.remove("dragging");
+    clearTimeout(pendingRebuild);
+    pendingRebuild = null;
+    setWindow(brushStartMs, brushEndMs, { rebuild: true, report: true });
+  }
+
+  handleLeft.addEventListener("mousedown",  (e) => { startResize("left",  e.clientX); e.preventDefault(); e.stopPropagation(); });
+  handleRight.addEventListener("mousedown", (e) => { startResize("right", e.clientX); e.preventDefault(); e.stopPropagation(); });
+  document.addEventListener("mousemove",    (e) => { if (resizeSide) handleResizeMove(e.clientX); });
+  document.addEventListener("mouseup",      endResize);
+
+  handleLeft.addEventListener("touchstart",  (e) => { startResize("left",  e.touches[0].clientX); e.preventDefault(); e.stopPropagation(); }, { passive: false });
+  handleRight.addEventListener("touchstart", (e) => { startResize("right", e.touches[0].clientX); e.preventDefault(); e.stopPropagation(); }, { passive: false });
+  document.addEventListener("touchmove",     (e) => { if (resizeSide) { handleResizeMove(e.touches[0].clientX); e.preventDefault(); } }, { passive: false });
+  document.addEventListener("touchend",      endResize);
+
+  // ── Click-to-open: clicking a dot in the main chart navigates to its workout ──
+  mainCanvas.addEventListener("click", (e) => {
+    if (!mainChart) return;
+    const els = mainChart.getElementsAtEventForMode(e, "nearest", { intersect: true }, false);
+    if (!els || !els.length) return;
+    for (const el of els) {
+      const ds = mainChart.data.datasets[el.datasetIndex];
+      if (!ds || !ds.label) continue;
+      if (ds.label !== "_regular" && ds.label !== "_ivl") continue;
+      const raw = ds.data[el.index];
+      if (raw && raw.id) {
+        clickSeq++;
+        ctx.updateProp("clicked_workout_id", raw.id);
+        ctx.updateProp("click_seq", clickSeq);
+        return;
+      }
+    }
+  });
+
+  // Pointer cursor while hovering an interactive dot in the main chart.
+  mainCanvas.addEventListener("mousemove", (e) => {
+    if (!mainChart) return;
+    const els = mainChart.getElementsAtEventForMode(e, "nearest", { intersect: true }, false);
+    let hit = false;
+    if (els && els.length) {
+      for (const el of els) {
+        const ds = mainChart.data.datasets[el.datasetIndex];
+        if (ds && (ds.label === "_regular" || ds.label === "_ivl")) {
+          hit = true;
+          break;
+        }
+      }
+    }
+    mainCanvas.style.cursor = hit ? "pointer" : "default";
+  });
+
   // ── Initial render ────────────────────────────────────────────────────────
 
   initCharts();
@@ -731,10 +877,6 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
     if (propName === "points") {
       points = propValue || [];
       initCharts();
-    } else if (propName === "target_window_start") {
-      setWindow(propValue, brushEndMs, { rebuild: true, report: false });
-    } else if (propName === "target_window_end") {
-      setWindow(brushStartMs, propValue, { rebuild: true, report: false });
     } else if (propName === "is_dark") {
       isDark = !!propValue;
       initCharts();
@@ -742,5 +884,8 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
       showWatts = !!propValue;
       initCharts();
     }
+    // target_window_start / target_window_end are used only from ctx.initialProps
+    // (initial brush position).  JS owns the brush state after that; ignoring
+    // Python's echoed-back values prevents snap-back after a resize or pan.
   });
 });

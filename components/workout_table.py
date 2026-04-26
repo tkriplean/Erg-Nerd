@@ -7,7 +7,14 @@ Exported:
 
 Pre-defined column constants (import and compose into column lists):
   COL_DATE, COL_TYPE, COL_DISTANCE, COL_TIME, COL_PACE, COL_WATTS,
-  COL_DRAG, COL_SPM, COL_HR, COL_SEASON, COL_LINK
+  COL_DRAG, COL_SPM, COL_HR, COL_SEASON, COL_LINK,
+  COL_POWER_SPREAD, COL_HR_SPREAD, COL_QUALITY
+
+Shared cell-renderer helpers (also used outside the table — e.g. by
+workout_page summary cells):
+  always_white(is_dark)               — Shoelace neutral token reading white
+  render_spread_cell(...)             — score + zone-bar + tooltip cell
+  render_quality_cell(workout, is_dark)— colored quality pill with tooltip
 
 Design
 ------
@@ -48,6 +55,9 @@ from services.rowing_utils import (
     compute_pace,
     compute_watts as _compute_watts,
 )
+from services.volume_bins import BIN_NAMES, BIN_COLORS
+from services.heartrate_utils import HR_ZONE_NAMES, HR_ZONE_COLORS
+from services.workout_quality import QUALITY_STYLE
 
 
 _ROWS_PER_PAGE = 25
@@ -253,6 +263,202 @@ COL_LINK = ColumnDef(
     render_cell=_link_cell,
     sortable=False,
     align="center",
+)
+
+
+# ---------------------------------------------------------------------------
+# Spread + Quality cell renderers (shared by the Intervals page, Sessions
+# page, and Workout page summary)
+# ---------------------------------------------------------------------------
+
+# Width (in HyperDiv units) of the small zone bar rendered inside each
+# spread cell — half the full zone-bar width so the score reads as the
+# dominant signal.
+_SPREAD_BAR_WIDTH = 5.0
+_SPREAD_BAR_HEIGHT = 0.5
+
+
+def always_white(is_dark: bool) -> str:
+    """Return a Shoelace neutral token that renders as white in either theme."""
+    return "neutral-1000" if is_dark else "neutral-0"
+
+
+def render_spread_cell(
+    score: float | None,
+    bar_uri: str | None,
+    bin_meters: list | None,
+    zone_names: list[str],
+    zone_colors: list[tuple[str, str]],
+    is_dark: bool,
+    *,
+    skip_indices: tuple[int, ...] = (0,),
+) -> None:
+    """
+    Cell renderer for Power Spread / HR Spread columns.
+
+    Layout: score (bold) on top, a small stacked zone bar (half-width)
+    underneath, and a rich content-slot tooltip listing each non-empty zone
+    with its swatch and percentage.  Workouts with no meaningful meters
+    (score is None) render as a single "—" with no bar.
+
+    skip_indices — zone indices to exclude entirely from the tooltip (e.g.
+    Rest, or Rest + No HR).  They are also excluded from the percentage
+    denominator so the zone percentages sum to 100%.
+    """
+    # Lazy import — avoid hard dependency on swatch_svg at module load.
+    from services.volume_bins import swatch_svg
+
+    if score is None or bin_meters is None:
+        hd.text("—", font_size="medium", font_color="neutral-400")
+        return
+
+    skip_set = set(skip_indices)
+    total = sum(m for idx, m in enumerate(bin_meters) if idx not in skip_set)
+    with hd.tooltip() as tt:
+        with hd.box(slot=tt.content_slot, padding=0.4, gap=0.2, min_width=12):
+            for idx, name in enumerate(zone_names):
+                with hd.scope(f"{idx} {name}"):
+                    if idx in skip_set:
+                        continue
+                    meters = bin_meters[idx] if idx < len(bin_meters) else 0
+                    if meters <= 0:
+                        continue
+                    pct = (meters / total) if total > 0 else 0.0
+                    if pct < 0.005:
+                        continue
+                    color_str = zone_colors[idx][0 if is_dark else 1]
+                    with hd.hbox(gap=0.4, align="center"):
+                        hd.image(
+                            src=swatch_svg(color_str, size=10, radius=2),
+                            width=0.6,
+                            height=0.6,
+                        )
+                        hd.text(
+                            f"{pct:.0%}",
+                            font_size="x-small",
+                            font_weight="bold",
+                        )
+        with hd.box(align="start", gap=0.2):
+            hd.text(f"{score:.0f}", font_size="medium", font_weight="bold")
+            if bar_uri:
+                hd.image(
+                    src=bar_uri,
+                    width=_SPREAD_BAR_WIDTH,
+                    height=_SPREAD_BAR_HEIGHT,
+                )
+
+
+def render_quality_cell(workout: dict, is_dark: bool) -> None:
+    """Colored quality pill with score + top-3 contributing categories tooltip."""
+    q = workout.get("_quality")
+    if q is None:
+        hd.text("—", font_size="small", font_color="neutral-400")
+        return
+    score = workout.get("_quality_score") or 0.0
+    energy = workout.get("_quality_energy") or {}
+    style = QUALITY_STYLE[q]
+    top_cats = sorted(
+        ((cat, e) for cat, e in energy.items() if e > 0),
+        key=lambda p: p[1],
+        reverse=True,
+    )[:3]
+    if q == "Low":
+        headline = (
+            f"Quality score {score:.2f} — below the 0.50 threshold for a "
+            f"Medium session."
+        )
+    elif q == "Medium":
+        headline = (
+            f"Quality score {score:.2f} — clears the 0.50 Medium threshold, "
+            f"below the 0.75 cutoff for High."
+        )
+    elif q == "High":
+        headline = f"Quality score {score:.2f} — clears the 0.75 High threshold."
+    else:  # Ultra
+        headline = f"Quality score {score:.2f} — beyond reference power."
+    with hd.tooltip() as tt:
+        with hd.box(slot=tt.content_slot, padding=0.4, gap=0.3, max_width=24):
+            hd.text(f"{q} quality", font_size="small", font_weight="bold")
+            hd.text(headline, font_size="x-small")
+            if top_cats:
+                total = sum(e for _, e in top_cats) or 1.0
+                hd.text(
+                    "Top contributions:",
+                    font_size="x-small",
+                    font_color="neutral-500",
+                )
+                for cat, e in top_cats:
+                    with hd.scope(f"{cat} {e}"):
+                        hd.text(
+                            f"  • {cat}: {100.0 * e / total:.0f}%",
+                            font_size="x-small",
+                        )
+        with hd.box(
+            padding=(0.15, 0.5, 0.15, 0.5),
+            border_radius="medium",
+            background_color=style["bg"],
+            align="center",
+            justify="center",
+        ):
+            hd.text(
+                style["label"],
+                font_size="x-small",
+                font_weight="bold",
+                font_color=always_white(is_dark),
+            )
+
+
+def _spread_cell_factory(zone_names, zone_colors, score_field, bar_field, bin_field, skip):
+    def _render(w):
+        render_spread_cell(
+            score=w.get(score_field),
+            bar_uri=w.get(bar_field),
+            bin_meters=w.get(bin_field),
+            zone_names=zone_names,
+            zone_colors=zone_colors,
+            is_dark=hd.theme().is_dark,
+            skip_indices=skip,
+        )
+    return _render
+
+
+COL_POWER_SPREAD = ColumnDef(
+    key="power_spread",
+    header="Power Spread",
+    width="8rem",
+    render_cell=_spread_cell_factory(
+        BIN_NAMES, BIN_COLORS, "_power_spread_score", "_bar_uri", "_bin_meters", (0,)
+    ),
+    sort_value=lambda w: w.get("_power_spread_score")
+    if w.get("_power_spread_score") is not None
+    else -1.0,
+)
+
+COL_HR_SPREAD = ColumnDef(
+    key="hr_spread",
+    header="HR Spread",
+    width="8rem",
+    render_cell=_spread_cell_factory(
+        HR_ZONE_NAMES,
+        HR_ZONE_COLORS,
+        "_hr_spread_score",
+        "_hr_bar_uri",
+        "_hr_bin_meters",
+        (0, 6),
+    ),
+    sort_value=lambda w: w.get("_hr_spread_score")
+    if w.get("_hr_spread_score") is not None
+    else -1.0,
+)
+
+COL_QUALITY = ColumnDef(
+    key="quality",
+    header="Quality",
+    width="6rem",
+    render_cell=lambda w: render_quality_cell(w, hd.theme().is_dark),
+    sort_value=lambda w: w.get("_quality_score")
+    if w.get("_quality_score") is not None
+    else -1.0,
 )
 
 

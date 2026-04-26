@@ -6,9 +6,9 @@ The Intervals tab is a dedicated browser for Concept2 interval workouts. Interva
 
 The tab has three regions:
 
-1. **2D grid browser** — maps every interval workout onto a physiologically meaningful grid so training coverage gaps are immediately visible. Each row is coloured by the *expected* power intensity of a quality session at that work:rest ratio, giving an at-a-glance map of what "hard" should look like.
+1. **2D grid browser** — maps every interval workout onto a physiologically meaningful grid so training coverage gaps are immediately visible. Each row is coloured by the *expected* power spread of a quality session at that work:rest ratio, giving an at-a-glance map of what "hard" should look like.
 2. **Persistent info panel** — sits directly below the grid and describes *every* currently selected stimulus (name, axis coordinates, physiological description, example workout). Useful for comparing several stimuli side by side.
-3. **Sortable data table** — lists individual workouts with full detail; includes a Quality column grading each session against its row's expected intensity/volume; filtered by the grid cells, the Power Intensity legend, the HR Intensity legend, and any active Structure filter.
+3. **Sortable data table** — lists individual workouts with full detail; includes a Quality column grading each session against its row's expected intensity/volume; filtered by the grid cells, the Power Spread legend, the HR Spread legend, and any active Structure filter.
 
 ---
 
@@ -18,10 +18,10 @@ The tab has three regions:
 |---|---|
 | `components/intervals_page.py` | All HyperDiv UI: grid, info panel, legends, table, entry point `intervals_page()` |
 | `services/interval_utils.py` | Pure-Python helpers: structure label generation, pace computation, SPM weighting |
-| `services/volume_bins.py` | Power-zone infrastructure: `workout_bin_meters()`, `bin_bar_svg()`, `swatch_svg()`, `BIN_NAMES`, `BIN_COLORS`, `POWER_INTENSITY_WEIGHTS`, `power_intensity_score()`, `power_bin_passes()`, `POWER_ZONE_DEFINITION_TEXT`, `POWER_ZONE_FILTER_TEXT`, `compute_bin_thresholds()`, `workout_power_intensity()` |
+| `services/volume_bins.py` | Power-zone infrastructure: `workout_bin_meters()`, `bin_bar_svg()`, `swatch_svg()`, `BIN_NAMES`, `BIN_COLORS`, `POWER_SPREAD_WEIGHTS`, `power_spread_score()`, `power_bin_passes()`, `POWER_ZONE_DEFINITION_TEXT`, `POWER_ZONE_FILTER_TEXT`, `compute_bin_thresholds()`, `workout_power_spread()` |
 | `services/reference_watts.py` | Time-indexed reference-watts index: `get_reference_watts(when, all_workouts)` and the loader-only `build_reference_watts_index()` |
 | `components/reference_watts_loader.py` | localStorage + progress-bar shell around `reference_watts.py` |
-| `services/heartrate_utils.py` | HR-zone infrastructure: `workout_hr_meters()`, `resolve_max_hr()`, `HR_ZONE_NAMES`, `HR_ZONE_COLORS`, `HR_INTENSITY_WEIGHTS`, `hr_intensity_score()`, `hr_bin_passes()`, `HR_ZONE_DEFINITION_TEXT`, `HR_ZONE_FILTER_TEXT` |
+| `services/heartrate_utils.py` | HR-zone infrastructure: `workout_hr_meters()`, `resolve_max_hr()`, `HR_ZONE_NAMES`, `HR_ZONE_COLORS`, `HR_SPREAD_WEIGHTS`, `hr_spread_score()`, `hr_bin_passes()`, `HR_ZONE_DEFINITION_TEXT`, `HR_ZONE_FILTER_TEXT` |
 | `services/rowing_utils.py` | `INTERVAL_WORKOUT_TYPES` — the set of `workout_type` strings that qualify as interval sessions |
 | `services/formatters.py` | Shared formatters: `fmt_date`, `fmt_distance`, `fmt_split`, `format_time` |
 | `components/workout_table.py` | Generic `WorkoutTable` + `ColumnDef` renderer used by the data table |
@@ -42,10 +42,10 @@ _enrich_workouts(all_workouts, thresholds, max_hr)
     → filters to INTERVAL_WORKOUT_TYPES (skipping single-rep sessions)
     → workout_bin_meters() per workout           (power bins, per-workout thresholds)
     → bin_bar_svg() for power                   (stacked bar SVG)
-    → power_intensity_score()                   (0–100 weighted score)
+    → power_spread_score()                   (0–100 weighted score)
     → workout_hr_meters() if max_hr set         (HR bins)
     → bin_bar_svg() for HR
-    → hr_intensity_score()                      (0–100 weighted score)
+    → hr_spread_score()                      (0–100 weighted score)
     → interval_structure_key(), avg_workpace_tenths(), avg_work_spm()
     → _compute_grid_placement() → (col, row)
     → _cell_name(row, col)                      (stimulus label)
@@ -65,7 +65,7 @@ WorkoutTable(filtered, interval_columns, …)
 
 Each workout row is classified against `compute_bin_thresholds(get_reference_watts(workout_date, all_workouts))` — the rower's *own* reference watts on that workout's date. A 2010 interval session is graded against 2010 fitness, not today's. The quarterly reference-watts index is built once per unique workout-set (first render shows a progress bar), persisted in `localStorage` under `reference_watts_v1`, and interpolated at render time; see `services/reference_watts.py` and `components/reference_watts_loader.py`.
 
-**Intentional asymmetry** between the row and the cell: each *row's* Power Intensity score and chip filter use the workout's own-date thresholds (so old sessions are scored against their era's fitness). Each *cell's* `expected_score` stays anchored to the user's **current** fitness — the grid is a "what should I be hitting now" view. A 2010 threshold session therefore reads as a high-intensity row even though today's stimulus rubric grades it by current standards.
+**Intentional asymmetry** between the row and the cell: each *row's* Power Spread score and chip filter use the workout's own-date thresholds (so old sessions are scored against their era's fitness). Each *cell's* `expected_score` stays anchored to the user's **current** fitness — the grid is a "what should I be hitting now" view. A 2010 threshold session therefore reads as a high-intensity row even though today's stimulus rubric grades it by current standards.
 
 ---
 
@@ -97,7 +97,7 @@ HR zones (`services/heartrate_utils.py`) — 7 bins (index 0 = Rest, 6 = No HR):
 
 ### Intensity Score (0–100)
 
-Both power and HR intensity are linear weighted averages of the per-bin meter fractions:
+Both power and HR spread are linear weighted averages of the per-bin meter fractions:
 
 ```
 score = Σ (meters_in_bin / meaningful_meters × weight_per_bin)
@@ -183,12 +183,12 @@ Directly below the grid, above the legends. Fixed `min-height: 6rem` prevents la
 
 ---
 
-## Power & HR Intensity Legends
+## Power & HR Spread Legends
 
 Below the info panel, two labelled chip rows:
 
-- **Power Intensity** — 6 chips: Fast · 2k · 5k · Threshold · Fast Aerobic · Slow Aerobic.
-- **HR Intensity** — 5 chips: Z5 Max · Z4 Threshold · Z3 Tempo · Z2 Aerobic · Z1 Recovery. Rendered only when `resolve_max_hr(profile, all_workouts)` returns a usable value. Otherwise the row shows a short note pointing at the Profile page.
+- **Power Spread** — 6 chips: Fast · 2k · 5k · Threshold · Fast Aerobic · Slow Aerobic.
+- **HR Spread** — 5 chips: Z5 Max · Z4 Threshold · Z3 Tempo · Z2 Aerobic · Z1 Recovery. Rendered only when `resolve_max_hr(profile, all_workouts)` returns a usable value. Otherwise the row shows a short note pointing at the Profile page.
 
 ### Filter Logic — Disjunctive (OR) Within Each Group
 
@@ -241,8 +241,8 @@ Each chip carries an `hd.tooltip` whose `content_slot` box contains: bold zone h
 | Reps | `r["_reps"]` | Count of non-rest intervals |
 | Structure | `r["_structure_key"]` | Rep-stripped; click to toggle structure filter |
 | Stimulus | `r["_stimulus"]` | Grid cell label, italic |
-| Power Intensity | `r["_power_score"]` + `r["_bar_uri"]` | Bold 0–100 score above a small stacked power-zone bar. Rich tooltip lists each non-empty zone (swatch · name · percentage). "—" when no work meters. |
-| HR Intensity | `r["_hr_score"]` + `r["_hr_bar_uri"]` | Same layout as Power Intensity, using HR zones. "—" when the workout has no usable HR data or the user has no max HR. |
+| Power Spread | `r["_power_spread_score"]` + `r["_bar_uri"]` | Bold 0–100 score above a small stacked power-zone bar. Rich tooltip lists each non-empty zone (swatch · name · percentage). "—" when no work meters. |
+| HR Spread | `r["_hr_spread_score"]` + `r["_hr_bar_uri"]` | Same layout as Power Spread, using HR zones. "—" when the workout has no usable HR data or the user has no max HR. |
 | Quality | `r["_quality"]` + `r["_quality_score"]` | Low / Medium / High pill derived from a reference-watts-based quality score (see Quality Grade). Rich tooltip shows the raw score and the top category contributions. "—" when the reference-watts index is missing anchors. |
 | Work | `r["distance"]` | Work-only meters (C2 API excludes rest from `distance` on interval workouts) |
 | Avg Split | `r["_work_pace"]` | `r["time"] * 500 / r["distance"]`; work-only |
@@ -250,11 +250,11 @@ Each chip carries an `hd.tooltip` whose `content_slot` box contains: bold zone h
 | SPM | `r["_work_spm"]` | Work-weighted average |
 | ↗ | — | Open-workout link (`COL_LINK`) |
 
-Sort direction flips on repeated header clicks; split defaults ascending (fastest = lowest number). Power / HR Intensity sort descending by score, with `None` sorting last. Quality sorts by the raw `_quality_score` (continuous within each Low/Medium/High bucket).
+Sort direction flips on repeated header clicks; split defaults ascending (fastest = lowest number). Power / HR Spread sort descending by score, with `None` sorting last. Quality sorts by the raw `_quality_score` (continuous within each Low/Medium/High bucket).
 
 ### Quality Grade
 
-`compute_workout_quality(workout, ref_watts, thresholds)` from `services/workout_quality.py` computes a scalar quality score against the rower's **date-aware reference watts** (same curve used for the Power Intensity zones). It works for both interval and steady-state workouts — the interval-only rest penalty is the only branching.
+`compute_workout_quality(workout, ref_watts, thresholds)` from `services/workout_quality.py` computes a scalar quality score against the rower's **date-aware reference watts** (same curve used for the Power Spread zones). It works for both interval and steady-state workouts — the interval-only rest penalty is the only branching.
 
 Per split or work interval:
 
@@ -356,6 +356,6 @@ all_intervals
 
 **To change power-zone definitions** (what watts qualifies as "2k power" etc.): see `compute_bin_thresholds()` in `services/volume_bins.py`. Reference watts per date come from `services/reference_watts.py`; all power-intensity tabs share them.
 
-**To change intensity weightings**: edit `POWER_INTENSITY_WEIGHTS` / `HR_INTENSITY_WEIGHTS`. Keep the scale 0–100 — the UI labels it as a 0–100 score.
+**To change intensity weightings**: edit `POWER_SPREAD_WEIGHTS` / `HR_SPREAD_WEIGHTS`. Keep the scale 0–100 — the UI labels it as a 0–100 score.
 
 **To add a table column**: append a `ColumnDef` to `interval_columns` inside `intervals_page()`.

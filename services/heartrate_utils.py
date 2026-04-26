@@ -14,7 +14,7 @@ Exported:
     HR_Z1_BINS                  — frozenset of bin indices for easy zone (4, 5)
     HR_Z2_BINS                  — frozenset of bin indices for tempo zone (3)
     HR_Z3_BINS                  — frozenset of bin indices for hard zone (1, 2)
-    HR_INTENSITY_WEIGHTS        — 7-element per-bin weights for the 0–100 score
+    HR_SPREAD_WEIGHTS           — 7-element per-bin weights for the 0–100 score
     HR_ZONE_DEFINITION_TEXT     — one-line human definition per bin index
     HR_ZONE_FILTER_TEXT         — one-line description of the filter threshold
 
@@ -23,7 +23,7 @@ Exported:
     resolve_max_hr(profile, workouts) → (int | None, bool)  # (max_hr, is_estimated)
     hr_zone_idx(avg_hr, max_hr)     → int 1–5
     workout_hr_meters(workout, max_hr) → list[float]  (7 bins, same shape as workout_bin_meters)
-    hr_intensity_score(hr_bin_meters) → float | None  (0–100 weighted average)
+    hr_spread_score(hr_bin_meters) → float | None  (0–100 weighted average)
     hr_bin_passes(hr_bin_meters, idx) → bool  (filter-threshold test)
     hr_coverage(workouts)           → (int, int)  # (with_hr, total)
 
@@ -86,14 +86,14 @@ HR_Z1_BINS: frozenset = frozenset({4, 5})  # Z2 Aerobic + Z1 Recovery  (easy)
 HR_Z2_BINS: frozenset = frozenset({3})  # Z3 Tempo                  (moderate)
 HR_Z3_BINS: frozenset = frozenset({1, 2})  # Z5 Max + Z4 Threshold     (hard)
 
-# Linear weights per bin index for the 0–100 HR-intensity score.
+# Linear weights per bin index for the 0–100 HR-spread score.
 # Score = Σ (meters_in_bin / meaningful_meters × weight); Rest and No-HR
 # are excluded from both the weights and the denominator.
-HR_INTENSITY_WEIGHTS: list[int] = [0, 100, 75, 50, 25, 0, 0]
+HR_SPREAD_WEIGHTS: list[int] = [0, 100, 75, 50, 25, 0, 0]
 
 # One-line definition per bin index.  Consumed by chip tooltips.
 HR_ZONE_DEFINITION_TEXT: dict[int, str] = {
-    0: "Interval rest — not counted toward intensity.",
+    0: "Interval rest — not counted toward spread.",
     1: "Above 90% of your max HR.",
     2: "80–90% of your max HR.",
     3: "70–80% of your max HR.",
@@ -346,9 +346,9 @@ def workout_hr_meters(workout: dict, max_hr: int) -> list[float]:
 # ---------------------------------------------------------------------------
 
 
-def hr_intensity_score(hr_bin_meters: Optional[list]) -> Optional[float]:
+def hr_spread_score(hr_bin_meters: Optional[list]) -> Optional[float]:
     """
-    Return a 0–100 weighted-average HR-intensity score for a workout.
+    Return a 0–100 weighted-average HR-spread score for a workout.
 
     Bins 0 (Rest) and 6 (No HR) are excluded from both the weights and the
     denominator so a workout with partial HR coverage is scored on the
@@ -361,7 +361,7 @@ def hr_intensity_score(hr_bin_meters: Optional[list]) -> Optional[float]:
     total = sum(classified)
     if total <= 0:
         return None
-    weights = HR_INTENSITY_WEIGHTS[1:6]
+    weights = HR_SPREAD_WEIGHTS[1:6]
     return sum((m / total) * w for m, w in zip(classified, weights))
 
 

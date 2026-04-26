@@ -1,13 +1,19 @@
 """
-Volume tab — stacked intensity-zone bar chart + distribution data table.
+Volume tab — stacked spread-zone bar chart + distribution data table.
 
 Volume chart:
-  - Stacked bar chart showing meters per intensity zone per week / month / season.
-  - Zone mode toggle: Power | HR
-      Power mode: zones derived from time-aware reference watts (each workout
-                  classified against the rower's fitness at the workout's own
-                  date via services/reference_watts.py → volume_bins.py).
-      HR mode:    zones derived from % of HRmax (heartrate_utils.py).
+  - Stacked bar chart showing meters per zone per week / month / season.
+  - Zone mode toggle: Power Spread | HR Spread | Workout Quality
+      Power Spread mode: zones derived from time-aware reference watts (each
+                  workout classified against the rower's fitness at the
+                  workout's own date via services/reference_watts.py →
+                  volume_bins.py).
+      HR Spread mode:    zones derived from % of HRmax (heartrate_utils.py).
+      Workout Quality:   one bucket per workout's overall Quality category
+                  (Low/Medium/High/Ultra) plus an Unrated bucket for
+                  workouts whose reference-watts index can't resolve them.
+                  Interval rest_distance is still counted as Rest, never
+                  coloured with the workout's quality.
   - Toggle: Weekly | Monthly | Seasonal  (radio button group)
   - Season and machine filters are applied globally (from app.py gfilter)
     before this component receives workouts; no page-level filter UI for these.
@@ -27,17 +33,21 @@ from datetime import date
 import hyperdiv as hd
 
 import json
+import sys
 
 from components.concept2_sync import get_all_workouts
 from components.reference_watts_loader import reference_watts_loader
 from components.view_context import your
-from services.reference_watts import get_reference_watts
-from services.rowing_utils import get_season, parse_date, profile_complete
+from services.formatters import fmt_meters
+from services.rowing_utils import get_season, profile_complete
+from services.threshold_cache import make_thresholds_resolver
+from services.workout_enrichment import attach_spread_and_quality
 
 from services.volume_bins import (
+    QUALITY_BIN_NAMES,
     aggregate_workouts,
-    compute_bin_thresholds,
     workout_bin_meters,
+    workout_quality_bin_meters,
 )
 from services.heartrate_utils import (
     resolve_max_hr,
@@ -51,6 +61,7 @@ from services.heartrate_utils import (
     HR_Z3_BINS,
     is_valid_hr,
 )
+from services.workout_quality import QUALITY_STYLE
 from components.profile_page import get_profile_from_context
 from components.volume_chart_builder import build_volume_chart_config, get_period_rows
 from components.volume_chart_plugin import VolumeChart
@@ -61,6 +72,95 @@ from components.shared_ui import global_filter_ui
 _HR_Z3A_BINS = frozenset({2})  # Threshold
 _HR_Z3B_BINS = frozenset({1})  # Max
 _HR_NO_DATA_BINS = frozenset({6})  # "No HR" — excluded from classification denominator
+
+
+# ---------------------------------------------------------------------------
+# Quality-mode bin colors
+# ---------------------------------------------------------------------------
+# QUALITY_BIN_NAMES = ["Rest", "Low", "Medium", "High", "Ultra", "Unrated"]
+# build_volume_chart_config wants (dark_rgba, light_rgba) tuples.  Quality
+# styles are single-themed (only one rgba), so we use the same colour for
+# both themes.  Rest re-uses the standard Rest grey; Unrated picks a neutral
+# grey that visually reads as "no signal".
+
+def _quality_rgba(category: str) -> str:
+    r, g, b, a = QUALITY_STYLE[category]["bg"]
+    return f"rgba({r},{g},{b},{a})"
+
+
+_QUALITY_BIN_COLORS: list[tuple[str, str]] = [
+    ("rgba(120,120,120,1)", "rgba(155,155,155,1)"),  # 0 Rest
+    (_quality_rgba("Low"), _quality_rgba("Low")),  # 1 Low
+    (_quality_rgba("Medium"), _quality_rgba("Medium")),  # 2 Medium
+    (_quality_rgba("High"), _quality_rgba("High")),  # 3 High
+    (_quality_rgba("Ultra"), _quality_rgba("Ultra")),  # 4 Ultra
+    ("rgba(195,195,195,0.45)", "rgba(210,210,210,0.55)"),  # 5 Unrated
+]
+# Bottom → top stacking order: Ultra, High, Medium, Low, Rest, Unrated.
+# Highest quality at the base so the "good" colours anchor the bar.
+_QUALITY_DRAW_ORDER: list[int] = [4, 3, 2, 1, 0, 5]
+
+
+def _quality_period_rows(aggregated: dict, view: str) -> list:
+    """Return one dict per period for the Workout Quality distribution table.
+
+    Each dict has the labels and pre-formatted strings the table needs.
+    """
+    if view == "weekly":
+        raw_data = aggregated.get("weeks", {})
+    elif view == "monthly":
+        raw_data = aggregated.get("months", {})
+    else:
+        raw_data = aggregated.get("seasons", {})
+
+    # Reuse the chart builder's existing helpers for label formatting.
+    from components.volume_chart_builder import (
+        _filter_and_sort_keys,
+        _month_label,
+        _week_label,
+    )
+
+    keys = _filter_and_sort_keys(list(raw_data.keys()), view, "all_time", date.today())
+    rows = []
+    for k in reversed(keys):
+        b = raw_data[k]["bins"]
+        rest, low_m, med_m, high_m, ultra_m, unrated_m = b[:6]
+        total = sum(b)
+        if view == "weekly":
+            label = _week_label(k)
+        elif view == "monthly":
+            label = _month_label(k)
+        else:
+            label = k
+
+        def _pct(part):
+            return f"{round(part / total * 100)}%" if total > 0 else "0%"
+
+        rows.append(
+            {
+                "label": label,
+                "total": fmt_meters(total),
+                "rest": fmt_meters(rest),
+                "low_m": fmt_meters(low_m),
+                "low_pct": _pct(low_m),
+                "med_m": fmt_meters(med_m),
+                "med_pct": _pct(med_m),
+                "high_m": fmt_meters(high_m),
+                "high_pct": _pct(high_m),
+                "ultra_m": fmt_meters(ultra_m),
+                "ultra_pct": _pct(ultra_m),
+                "unrated_m": fmt_meters(unrated_m),
+                "unrated_pct": _pct(unrated_m),
+                "total_raw": total,
+                "rest_raw": rest,
+                "low_raw": low_m,
+                "med_raw": med_m,
+                "high_raw": high_m,
+                "ultra_raw": ultra_m,
+                "unrated_raw": unrated_m,
+            }
+        )
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -75,18 +175,21 @@ _PERIOD_HEADERS = {
 
 
 def _distribution_table(
-    rows: list, view: str, zone_mode: str = "power_intensity"
+    rows: list, view: str, zone_mode: str = "power_spread"
 ) -> None:
     """
     Render a sortable CSS Grid table with one row per period showing zone
     breakdowns and a training distribution classification.
 
-    Power mode columns:
+    Power Spread mode columns:
       Period | Total | Rest | Z1 Easy | Z2 Threshold | Z3 Hard | Distribution
 
-    HR mode columns:
+    HR Spread mode columns:
       Period | Total | Rest | Easy (<70%) | Tempo (70–80%)
       | Threshold (80–90%) | Max (90%+) | Distribution
+
+    Workout Quality mode columns:
+      Period | Total | Rest | Low | Medium | High | Ultra | Unrated
 
     Sort state resets when view or zone_mode changes (via scope key).
     """
@@ -94,7 +197,43 @@ def _distribution_table(
 
     # Column definitions: (header_label, sort_key, css_width, render_fn)
     # render_fn=None → Distribution badge rendered specially
-    if zone_mode == "hr":
+    if zone_mode == "quality":
+        col_defs = [
+            (period_col, "idx", "9rem", lambda r: r["label"]),
+            ("Total", "total", "7rem", lambda r: r["total"]),
+            ("Rest", "rest", "7rem", lambda r: r["rest"]),
+            (
+                "Low",
+                "low",
+                "minmax(8rem,1fr)",
+                lambda r: f"{r['low_m']}  ({r['low_pct']})",
+            ),
+            (
+                "Medium",
+                "med",
+                "minmax(8rem,1fr)",
+                lambda r: f"{r['med_m']}  ({r['med_pct']})",
+            ),
+            (
+                "High",
+                "high",
+                "minmax(8rem,1fr)",
+                lambda r: f"{r['high_m']}  ({r['high_pct']})",
+            ),
+            (
+                "Ultra",
+                "ultra",
+                "minmax(8rem,1fr)",
+                lambda r: f"{r['ultra_m']}  ({r['ultra_pct']})",
+            ),
+            (
+                "Unrated",
+                "unrated",
+                "minmax(8rem,1fr)",
+                lambda r: f"{r['unrated_m']}  ({r['unrated_pct']})",
+            ),
+        ]
+    elif zone_mode == "hr":
         col_defs = [
             (period_col, "idx", "9rem", lambda r: r["label"]),
             ("Total", "total", "7rem", lambda r: r["total"]),
@@ -170,6 +309,11 @@ def _distribution_table(
             "z3a": lambda i, r: r.get("z3a_raw", 0),
             "z3b": lambda i, r: r.get("z3b_raw", 0),
             "dist": lambda i, r: r.get("distribution", ""),
+            "low": lambda i, r: r.get("low_raw", 0),
+            "med": lambda i, r: r.get("med_raw", 0),
+            "high": lambda i, r: r.get("high_raw", 0),
+            "ultra": lambda i, r: r.get("ultra_raw", 0),
+            "unrated": lambda i, r: r.get("unrated_raw", 0),
         }
         key_fn = _SORT_KEYS.get(sort.col, _SORT_KEYS["idx"])
         indexed = list(enumerate(rows))
@@ -317,9 +461,10 @@ def _volume_section(
 
     state = hd.state(
         view="monthly",
-        zone_mode="power_intensity",  # "power_intensity" | "hr"
+        zone_mode="power_spread",  # "power_spread" | "hr" | "quality"
     )
     view = state.view
+    zone_mode = state.zone_mode  # captured before any mid-render mutations
 
     with hd.box(gap=1, align="center"):
         with hd.box(gap=0.2, align="center"):
@@ -330,10 +475,10 @@ def _volume_section(
         max_hr, is_estimated = resolve_max_hr(profile, all_workouts)
 
         # ── Compute chart data ────────────────────────────────────────────────────
-        if state.zone_mode == "hr" and not max_hr:
+        if zone_mode == "hr" and not max_hr:
             # No max HR — skip chart and table; callout already rendered above.
             return
-        elif state.zone_mode == "hr":
+        elif zone_mode == "hr":
             aggregated = aggregate_workouts(
                 all_workouts,
                 bin_fn=lambda w: workout_hr_meters(w, max_hr),
@@ -359,6 +504,37 @@ def _volume_section(
                 z3b_bins=_HR_Z3B_BINS,
                 no_data_bins=_HR_NO_DATA_BINS,
             )
+        elif zone_mode == "quality":
+            # Quality requires per-date reference watts + thresholds.
+            if not reference_watts_loader(all_workouts):
+                return
+            # Attach _quality to each workout so we can read it from the bin_fn.
+            attach_spread_and_quality(all_workouts, all_workouts, max_hr)
+            unrated_count = sum(
+                1 for w in all_workouts if w.get("_quality") is None
+            )
+            if unrated_count:
+                # An unrated workout is generally a bug — flag it once per
+                # render so the underlying reference-watts gap stays visible.
+                print(
+                    f"[volume_page] {unrated_count} workouts have no quality "
+                    "rating (missing reference watts at their date)",
+                    file=sys.stderr,
+                )
+            aggregated = aggregate_workouts(
+                all_workouts,
+                bin_fn=lambda w: workout_quality_bin_meters(w, w.get("_quality")),
+            )
+            chart_config = build_volume_chart_config(
+                aggregated,
+                view=view,
+                scope="all_time",
+                today=date.today(),
+                bin_names=QUALITY_BIN_NAMES,
+                bin_colors=_QUALITY_BIN_COLORS,
+                draw_order=_QUALITY_DRAW_ORDER,
+            )
+            rows = _quality_period_rows(aggregated, view)
         else:
             # Time-aware thresholds: each workout is classified against the
             # rower's fitness at the workout's own date.  Gate on the
@@ -367,15 +543,7 @@ def _volume_section(
             if not reference_watts_loader(all_workouts):
                 return
 
-            # Cache per-date so we don't recompute when many workouts share a date.
-            th_cache: dict = {}
-
-            def _thresholds_for(w):
-                d = parse_date(w.get("date", ""))
-                if d not in th_cache:
-                    ref = get_reference_watts(d, all_workouts)
-                    th_cache[d] = compute_bin_thresholds(ref)
-                return th_cache[d]
+            _thresholds_for, _ = make_thresholds_resolver(all_workouts)
 
             aggregated = aggregate_workouts(
                 all_workouts,
@@ -415,23 +583,24 @@ def _volume_section(
             if view_rg.changed:
                 state.view = view_rg.value.lower()
 
-            # Zone mode radio group (Power / HR)
+            # Zone mode radio group
             with hd.radio_buttons(
                 value=state.zone_mode,
                 font_size="small",
             ) as mode_rg:
-                hd.radio_button("Power Intensity", value="power_intensity")
-                hd.radio_button("HR Intensity", value="hr")
+                hd.radio_button("Power Spread", value="power_spread")
+                hd.radio_button("HR Spread", value="hr")
+                hd.radio_button("Workout Quality", value="quality")
 
             if mode_rg.changed:
                 state.zone_mode = mode_rg.value
 
-        if state.zone_mode == "hr":
+        if zone_mode == "hr":
             _hr_callout(all_workouts, profile, is_owner=is_owner)
 
         # ── Distribution table ───────────────────────────────────────────────────
         if rows:
-            _distribution_table(rows, view, zone_mode=state.zone_mode)
+            _distribution_table(rows, view, zone_mode=zone_mode)
 
 
 # ---------------------------------------------------------------------------

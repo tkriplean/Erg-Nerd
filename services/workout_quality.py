@@ -16,7 +16,7 @@ scalar is bucketed into Low / Medium / High.
 
 The algorithm is deliberately simple and pure-Python; it reuses the existing
 watts-based power bin thresholds (see :mod:`services.volume_bins`), so quality
-categories line up with the Power Intensity zones shown elsewhere in the app.
+categories line up with the Power Spread zones shown elsewhere in the app.
 
 Reference events per category:
 
@@ -89,6 +89,58 @@ QUALITY_THRESHOLDS: list[tuple[str, float | None]] = [
 ]
 
 QUALITY_ORDER: dict[str, int] = {"Low": 0, "Medium": 1, "High": 2, "Ultra": 3}
+
+
+# Per-category visual style for table cells, legend chips, and chart coloring.
+# bg is an (R, G, B, A) tuple; UI helpers convert to the appropriate CSS form.
+QUALITY_STYLE: dict[str, dict] = {
+    "Low": {
+        "label": "Low",
+        "bg": (215, 55, 55, 0.85),  # red — same family as BIN_COLORS[1]
+        "fg_on_dark_theme": "neutral-1000",
+        "fg_on_light_theme": "neutral-0",
+    },
+    "Medium": {
+        "label": "Medium",
+        "bg": (225, 125, 35, 0.85),  # orange
+        "fg_on_dark_theme": "neutral-1000",
+        "fg_on_light_theme": "neutral-0",
+    },
+    "High": {
+        "label": "High",
+        "bg": (25, 150, 50, 0.90),  # green
+        "fg_on_dark_theme": "neutral-1000",
+        "fg_on_light_theme": "neutral-0",
+    },
+    "Ultra": {
+        "label": "Ultra",
+        "bg": (25, 150, 50, 1),  # green, full opacity
+        "fg_on_dark_theme": "neutral-1000",
+        "fg_on_light_theme": "neutral-0",
+    },
+}
+
+
+# One-line category descriptions and filter rules — used by legend chip tooltips.
+QUALITY_DEFINITION_TEXT: dict[str, str] = {
+    "Low": "Quality score below 0.50 — junk-mile / easy-day session.",
+    "Medium": "Quality score 0.50–0.75 — solid moderate session.",
+    "High": "Quality score 0.75–1.0 — sharp session with most splits at category-reference watts.",
+    "Ultra": "Quality score > 1.0 — rare, top-end session at or beyond reference power.",
+}
+
+QUALITY_FILTER_TEXT: dict[str, str] = {
+    "Low": "Selected: workouts whose Quality score is Low.",
+    "Medium": "Selected: workouts whose Quality score is Medium.",
+    "High": "Selected: workouts whose Quality score is High.",
+    "Ultra": "Selected: workouts whose Quality score is Ultra.",
+}
+
+
+def quality_bg_css(category: str) -> str:
+    """Return an ``rgba(...)`` CSS color string for the given quality bucket."""
+    r, g, b, a = QUALITY_STYLE[category]["bg"]
+    return f"rgba({r},{g},{b},{a})"
 
 
 def _category_from_bin(bin_idx: int) -> Optional[str]:

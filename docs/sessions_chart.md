@@ -63,16 +63,66 @@ all_workouts (raw Concept2 API dicts)
     ▼  _apply_outlier_filter()
 filtered workouts  (removes warm-ups / aborted pieces)
     │
+    ▼  attach_spread_and_quality()   (services/workout_enrichment.py)
+workouts with _power_spread_score, _hr_spread_score, _quality fields attached
+    │
+    ▼  legend filters (active_bins / active_hr_bins / active_quality)
+    │  + structural filters (10k+, Intervals / Continuous)
+    │
     ├──▶  compute_sb_ids()        → set of IDs that are a season best
     │
-    └──▶  prepare_points()        → list of point dicts, sorted largest-dist first
+    └──▶  prepare_points(color_mode=…)  → list of point dicts (with `id` for click-to-open)
               │
               └──▶  SessionsChart(points=…)   HyperDiv plugin → JS
 ```
 
-Session-level filters (10k+, Intervals Only, No Intervals) are applied in
-`sessions_chart()` **after** the outlier filter and **before** SB detection and
-point preparation, so the SB set is always consistent with the visible data.
+Session-level filters (10k+, Intervals Only, Continuous, plus the Power Spread,
+HR Spread, and Quality legend chips) are applied in `sessions_chart()` **after**
+the outlier filter and **before** SB detection and point preparation, so the SB
+set is always consistent with the visible data.
+
+### Verb dropdown (color_mode)
+
+The h1 header includes a `header_dropdown(...)` (the same component used on the
+Race page) that toggles between two color modes via `state.color_mode`:
+
+- `"gander"` — **Take a Gander at** (default). Sessions are coloured by a
+  deterministic palette indexed off the session id.
+- `"quality"` — **Scrutinize the Quality of**. Each session is coloured by its
+  workout-quality category using `services.workout_quality.QUALITY_STYLE`.
+  Workouts without a resolvable quality value get a neutral grey.
+
+`prepare_points(color_mode=…)` derives the per-point HSL triple from the chosen
+mode; switching modes only changes colour, not which sessions are drawn.
+
+### Spread + Quality legend
+
+Between the chart and the in-window table, `spread_quality_legends(state, max_hr,
+ref_watts)` (from `components/spread_quality_legends.py`) renders the same Power
+Spread + HR Spread + Quality chip stack used on the Intervals page. Chips
+toggle disjunctively within their own legend and conjunctively across legends;
+filtering applies to both the chart points and the in-window table.
+
+### Click to open a workout
+
+Clicking a dot in the main chart opens that workout's detail page. The JS plugin
+attaches a `click` handler to the main canvas that resolves the nearest point via
+`getElementsAtEventForMode(...)` and writes its `id` back to Python via the
+`clicked_workout_id` and `click_seq` props. `sessions_chart()` watches
+`chart.click_seq` for changes and calls `hd.location().go(path=f"/session/{id}")`
+on a new click. The cursor switches to a pointer while hovering an interactive
+dot.
+
+### Resizable brush (in-scope window)
+
+The brush rectangle drawn on the overview chart has two narrow vertical drag
+handles overlaid on its left and right edges (CSS class `.brush-handle`,
+positioned by `brushPlugin.afterDatasetsDraw`). Dragging the left handle moves
+`brushStartMs`; dragging the right handle moves `brushEndMs`. Each rebuild path
+is the same as the existing pan code, so the main chart's data updates live;
+mouseup reports the new bounds back to Python via `brush_start` / `brush_end`
+(and bumps `change_id`). The handles set `cursor: ew-resize`. Width is clamped
+to `[7 days, full data range]`.
 
 ---
 
@@ -436,7 +486,8 @@ string).
 
 - Sorted descending by date (most recent first).
 - Capped at 250 rows (single-page; no pagination overflow).
-- Uses the shared `result_table()` renderer from `components/workout_table.py`.
+- Uses the shared `WorkoutTable()` renderer from `components/workout_table.py`.
+- Columns: Date · Distance · Time · Pace · Watts · Drag · SPM · HR · **Power Spread** · **HR Spread** · **Quality** · `view`-link.
 - The heading shows a count: `"Workouts in View  (N)"`.
 
 The table reflects all active user-facing filters but **not** the outlier filter

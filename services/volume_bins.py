@@ -18,17 +18,17 @@ Exported:
     Z1_BINS                     — frozenset of bin indices for easy zone (5, 6)
     Z2_BINS                     — frozenset of bin indices for threshold zone (4)
     Z3_BINS                     — frozenset of bin indices for hard zone (1, 2, 3)
-    POWER_INTENSITY_WEIGHTS     — 7-element per-bin weights for the 0–100 score
+    POWER_SPREAD_WEIGHTS        — 7-element per-bin weights for the 0–100 score
     POWER_ZONE_DEFINITION_TEXT  — one-line human definition per bin index
     POWER_ZONE_FILTER_TEXT      — one-line human description of each bin's
                                   filter-pass threshold
-    power_intensity_score()     — compute a workout's 0–100 power-intensity score
+    power_spread_score()        — compute a workout's 0–100 power-spread score
     power_bin_passes()          — true if a workout's bin meters pass the zone
                                   threshold used by the Intervals-page filter
     compute_bin_thresholds()    — build watts cutoffs from a reference-watts dict
     classify_watts()            — map a watts value → bin index
     workout_bin_meters()        — per-bin meter counts for a single workout
-    workout_power_intensity()   — single-workout score using date-appropriate
+    workout_power_spread()      — single-workout score using date-appropriate
                                   thresholds (for the sessions-page hook)
     bin_bar_svg()               — data-URI SVG stacked bar from bin meters
     swatch_svg()                — data-URI SVG color swatch for legends
@@ -85,16 +85,16 @@ Z3_BINS: frozenset = frozenset({1, 2, 3})  # Fast + 2k + 5k  (above LT2)
 Z2_BINS: frozenset = frozenset({4})  # Threshold        (LT1–LT2)
 Z1_BINS: frozenset = frozenset({5, 6})  # Fast+Slow Aero   (below LT1)
 
-# Linear weights per bin index for the 0–100 power-intensity score.
+# Linear weights per bin index for the 0–100 power-spread score.
 # Score = Σ (meters_in_bin / work_meters × weight), ignoring bin 0 (Rest).
 # Fastest zone → 100, slowest → 0.
-POWER_INTENSITY_WEIGHTS: list[int] = [0, 100, 80, 60, 40, 20, 0]
+POWER_SPREAD_WEIGHTS: list[int] = [0, 100, 80, 60, 40, 20, 0]
 
 # One-line definition per bin, indexed by bin index (0 = Rest).  Thresholds
 # are personalised via compute_bin_thresholds(); these strings describe the
 # midpoint-based rule without quoting the user's current numbers.
 POWER_ZONE_DEFINITION_TEXT: dict[int, str] = {
-    0: "Interval rest distance — not counted toward intensity.",
+    0: "Interval rest distance — not counted toward spread.",
     1: "Higher watts than the midpoint between your 1k and 2k watts.",
     2: "Between midpoint(1k, 2k) and midpoint(2k, 5k) — near 2k race power.",
     3: "Between midpoint(2k, 5k) and midpoint(5k, 60min) — near 5k race power.",
@@ -272,9 +272,9 @@ def workout_bin_meters(workout: dict, thresholds: Optional[dict]) -> list:
     return bins
 
 
-def power_intensity_score(bin_meters: list) -> Optional[float]:
+def power_spread_score(bin_meters: list) -> Optional[float]:
     """
-    Return a 0–100 weighted-average intensity score for a workout's power bins.
+    Return a 0–100 weighted-average spread score for a workout's power bins.
 
     Bin 0 (Rest) is excluded from both the weights and the denominator.
     Returns None when a workout has no classifiable work meters — callers
@@ -284,7 +284,7 @@ def power_intensity_score(bin_meters: list) -> Optional[float]:
     total = sum(work)
     if total <= 0:
         return None
-    weights = POWER_INTENSITY_WEIGHTS[1:]
+    weights = POWER_SPREAD_WEIGHTS[1:]
     return sum((m / total) * w for m, w in zip(work, weights))
 
 
@@ -313,9 +313,9 @@ def power_bin_passes(bm: list, bin_idx: int) -> bool:
     return False
 
 
-def workout_power_intensity(workout: dict, all_workouts: list) -> Optional[float]:
+def workout_power_spread(workout: dict, all_workouts: list) -> Optional[float]:
     """
-    Single-workout Power Intensity score using date-appropriate thresholds.
+    Single-workout Power Spread score using date-appropriate thresholds.
 
     Intended for the sessions-page quality metric.  Resolves reference watts
     at the workout's own date, derives thresholds, then scores that workout.
@@ -329,7 +329,72 @@ def workout_power_intensity(workout: dict, all_workouts: list) -> Optional[float
         return None
     ref = get_reference_watts(d, all_workouts)
     th = compute_bin_thresholds(ref)
-    return power_intensity_score(workout_bin_meters(workout, th))
+    return power_spread_score(workout_bin_meters(workout, th))
+
+
+# ---------------------------------------------------------------------------
+# Quality binning (used by the Volume page's "Workout Quality" mode)
+# ---------------------------------------------------------------------------
+# Bin layout (parallel to BIN_NAMES shape so the chart builder can treat them
+# identically):
+#     0  Rest        interval rest meters (grey, same as power-spread mode)
+#     1  Low         workout._quality == "Low"
+#     2  Medium      workout._quality == "Medium"
+#     3  High        workout._quality == "High"
+#     4  Ultra       workout._quality == "Ultra"
+#     5  Unrated     no resolvable quality (missing reference watts at date)
+
+QUALITY_BIN_NAMES: list[str] = ["Rest", "Low", "Medium", "High", "Ultra", "Unrated"]
+N_QUALITY_BINS = len(QUALITY_BIN_NAMES)
+_QUALITY_BIN_INDEX: dict[str, int] = {
+    "Low": 1,
+    "Medium": 2,
+    "High": 3,
+    "Ultra": 4,
+}
+
+
+def workout_quality_bin_meters(
+    workout: dict, quality_category: Optional[str]
+) -> list[float]:
+    """
+    Return ``[rest_m, low_m, medium_m, high_m, ultra_m, unrated_m]`` for one
+    workout.
+
+    Rest distance follows the same rule as :func:`workout_bin_meters` —
+    interval ``rest_distance`` lands in bin 0; non-interval workouts have 0
+    rest.  All work meters land in the single bucket matching
+    ``quality_category`` (Low/Medium/High/Ultra), or bin 5 (Unrated) when the
+    category is None.
+    """
+    bins = [0.0] * N_QUALITY_BINS
+
+    is_interval = workout.get("workout_type") in INTERVAL_WORKOUT_TYPES
+
+    if is_interval:
+        rest_dist = workout.get("rest_distance") or 0
+        if rest_dist > 0:
+            bins[0] += rest_dist
+        # Sum work meters from each non-rest interval.
+        intervals = (workout.get("workout") or {}).get("intervals") or []
+        work_m = 0.0
+        for iv in intervals:
+            if (iv.get("type") or "").lower() == "rest":
+                continue
+            iv_dist = iv.get("distance") or 0
+            if iv_dist > 0:
+                work_m += iv_dist
+        if work_m <= 0:
+            # Fall back to top-level distance if intervals didn't itemise work.
+            work_m = workout.get("distance") or 0
+    else:
+        work_m = workout.get("distance") or 0
+
+    if work_m > 0:
+        idx = _QUALITY_BIN_INDEX.get(quality_category or "", 5)
+        bins[idx] += work_m
+
+    return bins
 
 
 def bin_bar_svg(

@@ -2,11 +2,13 @@
 
 ## Overview
 
-The Volume tab provides a stacked bar chart of training meters broken down by physiological intensity zone, with a distribution data table beneath it. It supports two zone modes — **Power Intensity** and **HR** — that share the same chart widget, aggregation layer, and table structure but differ in how meters are classified.
+The Volume tab provides a stacked bar chart of training meters broken down per period, with a distribution data table beneath it. It supports three zone modes — **Power Spread**, **HR Spread**, and **Workout Quality** — that share the same chart widget, aggregation layer, and table structure but differ in how meters are classified.
+
+**Workout Quality mode** colours each workout's meters by its overall Quality category (Low / Medium / High / Ultra) plus an Unrated bucket for workouts whose reference-watts index can't resolve them. Interval `rest_distance` continues to land in the Rest band — never coloured by the workout's quality. An unrated workout is generally a bug (missing reference watts at that date); the page logs a one-line warning to stderr summarising how many fell into Unrated.
 
 ### Time-aware fitness reference
 
-Power Intensity uses a **time-indexed** fitness reference: each workout is classified against the rower's reference watts **on that workout's own date**, not today's snapshot. A 2010 row is graded against 2010 fitness, so the intensity distribution stays meaningful even over a 20-year history. The quarterly index is built once per unique workout-set (first render shows a progress bar), persisted to `localStorage` under `reference_watts_v1`, and interpolated at render time. See `services/reference_watts.py` for the predictor cascade (CP fit → Paul's Law regression → default k=5.0 → merge with actual PBs) and `components/reference_watts_loader.py` for the loader.
+Power Spread uses a **time-indexed** fitness reference: each workout is classified against the rower's reference watts **on that workout's own date**, not today's snapshot. A 2010 row is graded against 2010 fitness, so the intensity distribution stays meaningful even over a 20-year history. The quarterly index is built once per unique workout-set (first render shows a progress bar), persisted to `localStorage` under `reference_watts_v1`, and interpolated at render time. See `services/reference_watts.py` for the predictor cascade (CP fit → Paul's Law regression → default k=5.0 → merge with actual PBs) and `components/reference_watts_loader.py` for the loader.
 
 ### Files Involved
 
@@ -34,8 +36,8 @@ All controls live in a single `hd.hbox` row at the bottom of `_volume_section()`
 ### View (Weekly / Monthly / Seasonal)
 `hd.radio_buttons("Weekly", "Monthly", "Seasonal")` backed by `state.view` (lowercase). Determines which bucket from `aggregate_workouts()` output is used (`weeks` / `months` / `seasons`).
 
-### Zone Mode (Power Intensity / HR)
-`hd.radio_buttons("Power Intensity", "HR Intensity")` backed by `state.zone_mode` (`"power_intensity"` or `"hr"`). Switches between watts-based zone binning and HR-zone binning. See the _Aggregation Paths_ section below.
+### Zone Mode (Power Spread / HR Spread / Workout Quality)
+`hd.radio_buttons("Power Spread", "HR Spread", "Workout Quality")` backed by `state.zone_mode` (`"power_spread"` | `"hr"` | `"quality"`). Switches between watts-based zone binning, HR-zone binning, and workout-quality bucketing. See the _Aggregation Paths_ section below.
 
 **Note:** Season and machine filtering are applied globally (passed in from `app.py`). The volume page itself does not render a scope or machine dropdown — those controls live in the nav bar.
 
@@ -46,7 +48,7 @@ All controls live in a single `hd.hbox` row at the bottom of `_volume_section()`
 ```python
 state = hd.state(
     view="monthly",             # "weekly" | "monthly" | "seasonal"
-    zone_mode="power_intensity", # "power_intensity" | "hr"
+    zone_mode="power_spread", # "power_spread" | "hr"
 )
 ```
 
@@ -89,7 +91,7 @@ The Save button writes directly to `hd.local_storage.set_item("profile", ...)`, 
 
 ## Aggregation Paths
 
-### Power Intensity mode
+### Power Spread mode
 
 ```python
 # Block on the reference-watts loader; first-time build shows a progress bar.
@@ -140,7 +142,7 @@ The chart is rendered at `height="42vh"` in an `hd.box`. If `chart_config` is em
 
 `get_period_rows(aggregated, view, scope, ...)` returns one row per time period. `_distribution_table(rows, view, zone_mode)` renders it with a custom CSS Grid table.
 
-### Column layout — Power Intensity mode
+### Column layout — Power Spread mode
 
 | Column | Contents |
 |---|---|

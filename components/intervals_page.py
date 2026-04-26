@@ -48,21 +48,11 @@ Grid placement rules:
 
 Legends & filters
 -----------------
-Three labelled legend rows below the info panel:
-  • "Power Intensity" — 6 chips (Fast · 2k · 5k · Threshold · Fast Aero · Slow Aero)
-  • "HR Intensity"  — 5 chips (Z5 Max · Z4 Threshold · Z3 Tempo · Z2 Aerobic · Z1 Recovery)
-  • "Quality"        — 4 chips (Low · Medium · High · Ultra)
-
-All three legends are **disjunctive (OR)** within themselves: selecting two
-chips shows workouts touching _either_.  The four filter groups (grid cells,
-pace chips, HR chips, quality chips) combine conjunctively with each other.
-Each chip has a rich tooltip (content_slot) explaining zone definition and
-filter rule.
-
-The Power Intensity header carries a (?) icon whose tooltip renders a
-graphical scale showing each zone's reference event (1k / 2k / 5k / 60min /
-marathon) and the user's current watts at that event — boundaries are
-midpoints between adjacent reference watts.
+The Power Spread + HR Spread + Quality legend stack is shared with the
+Sessions page; see :mod:`components.spread_quality_legends` for the chip
+rendering and tooltip content.  The three legends combine **disjunctively
+(OR) within** themselves and **conjunctively across** with each other and
+with the grid-cell selection.
 
 The HR legend's chip row is hidden when the user has no max HR resolvable;
 a short note points to the Profile page.  The Quality legend always renders
@@ -74,22 +64,22 @@ WorkoutTable (CSS Grid) with interval-specific ColumnDef objects.
 Sortable headers (▲/▼), default sort: date descending.
 
 Columns: Date · Reps · Structure (rep-stripped) · Stimulus ·
-         Power Intensity (score + bar) · HR Intensity (score + bar) ·
+         Power Spread (score + bar) · HR Spread (score + bar) ·
          Quality (Low/Medium/High/Ultra pill) ·
          Work dist · Avg Split · Time · SPM · ↗
 
-The Power/HR Intensity columns each show a 0–100 weighted-average score
+The Power/HR Spread columns each show a 0–100 weighted-average score
 above a small stacked zone bar; hovering either cell opens a rich
 content-slot tooltip with per-zone swatch + name + percentage.  Weights
-come from services (POWER_INTENSITY_WEIGHTS / HR_INTENSITY_WEIGHTS).  Sort
+come from services (POWER_SPREAD_WEIGHTS / HR_SPREAD_WEIGHTS).  Sort
 is descending by score; workouts with no meaningful meters (or no HR)
 render as "—" and sort last.
 
-Time-aware thresholds: each row's Power Intensity score is computed
+Time-aware thresholds: each row's Power Spread score is computed
 against the rower's reference watts **on that row's own date** (via
 services/reference_watts.py), so a 2010 session is graded against 2010
 fitness, not today's.  The Quality column uses the same time-aware
-reference watts.
+reference watts — see :mod:`services.workout_enrichment`.
 
 The Quality column scores every work interval against the date-matched
 reference watts via :mod:`services.workout_quality`.  Each split accrues
@@ -108,10 +98,11 @@ cell again, or the ×-chip above the table, clears it.
 from __future__ import annotations
 
 import statistics
+import time
 
 import hyperdiv as hd
 
-from services.rowing_utils import INTERVAL_WORKOUT_TYPES, get_season, parse_date
+from services.rowing_utils import INTERVAL_WORKOUT_TYPES, get_season
 from components.concept2_sync import get_all_workouts
 from components.reference_watts_loader import reference_watts_loader
 from components.view_context import your
@@ -120,40 +111,45 @@ from services.interval_utils import (
     avg_work_spm,
     interval_structure_key,
 )
-from services.reference_watts import get_reference_watts
-from services.workout_quality import (
-    compute_workout_quality,
-    QUALITY_ORDER,
-    QUALITY_THRESHOLDS,
-)
+from services.threshold_cache import make_thresholds_resolver
+from services.workout_enrichment import attach_spread_and_quality
 from services.volume_bins import (
-    BIN_NAMES,
     BIN_COLORS,
     Z3_BINS,
-    POWER_ZONE_DEFINITION_TEXT,
-    POWER_ZONE_FILTER_TEXT,
-    compute_bin_thresholds,
-    workout_bin_meters,
-    power_intensity_score,
     power_bin_passes,
-    bin_bar_svg,
-    swatch_svg,
 )
 from services.heartrate_utils import (
-    HR_ZONE_NAMES,
-    HR_ZONE_COLORS,
-    HR_ZONE_DEFINITION_TEXT,
-    HR_ZONE_FILTER_TEXT,
-    resolve_max_hr,
-    workout_hr_meters,
-    hr_intensity_score,
     hr_bin_passes,
+    resolve_max_hr,
 )
 from services.formatters import fmt_date, fmt_distance, fmt_split, format_time
 from components.hyperdiv_extensions import aligned_button, grid_box
-from components.workout_table import WorkoutTable, ColumnDef, COL_LINK
+from components.workout_table import (
+    COL_HR_SPREAD,
+    COL_LINK,
+    COL_POWER_SPREAD,
+    COL_QUALITY,
+    ColumnDef,
+    WorkoutTable,
+    always_white,
+)
 from components.profile_page import get_profile_from_context
 from components.shared_ui import global_filter_ui
+from components.spread_quality_legends import spread_quality_legends
+
+# ---------------------------------------------------------------------------
+# Timing instrumentation (toggle to find render bottlenecks)
+# ---------------------------------------------------------------------------
+
+DEBUG_INTERVALS_TIMING = True
+_render_counter = 0
+
+
+def _log_phase(phase: str, ms: float, extra: str = "") -> None:
+    if DEBUG_INTERVALS_TIMING:
+        suffix = f" ({extra})" if extra else ""
+        print(f"[intervals render #{_render_counter}] {phase}={ms:.0f}ms{suffix}")
+
 
 # ---------------------------------------------------------------------------
 # color helpers
@@ -260,69 +256,6 @@ def _cell_background_rgba(row_idx: int, col_idx: int, is_dark: bool) -> tuple:
     bin_idx = _intensity_to_bin(info.get("expected_score", 0))
     return _parse_rgba(BIN_COLORS[bin_idx][0 if is_dark else 1])
 
-
-def _always_white(is_dark: bool) -> str:
-    """Return a Shoelace neutral token that renders as white in either theme."""
-    # In light theme neutral-0 is white; in dark theme it flips to dark, so
-    # we swap to neutral-1000 which ends up white under the dark palette.
-    return "neutral-1000" if is_dark else "neutral-0"
-
-
-# ---------------------------------------------------------------------------
-# Session quality
-# ---------------------------------------------------------------------------
-#
-# Each session is rated Low / Medium / High / Ultra by scoring every split/interval
-# against the rower's date-aware reference watts (see
-# :mod:`services.workout_quality`).  Each split contributes "quality energy"
-# weighted by how hard it was vs. the reference for its power-intensity
-# category; interval sessions additionally discount that energy by preceding
-# rest ratio.  Summed across categories and normalized by a per-category
-# reference target, the result is a scalar bucketed by the thresholds in
-# :mod:`services.workout_quality` (currently 0.5 / 0.75 / 1.0).  Workouts whose
-# reference-watts index is missing anchor events return None and render as "—".
-
-
-_QUALITY_DEFINITION_TEXT: dict[str, str] = {
-    "Low": "Quality score below 0.50 — junk-mile / easy-day session.",
-    "Medium": "Quality score 0.50–0.75 — solid moderate session.",
-    "High": "Quality score 0.75–1.0 — sharp session with most splits at category-reference watts.",
-    "Ultra": "Quality score > 1.0 — rare, top-end session at or beyond reference power.",
-}
-_QUALITY_FILTER_TEXT: dict[str, str] = {
-    "Low": "Selected: workouts whose Quality score is Low.",
-    "Medium": "Selected: workouts whose Quality score is Medium.",
-    "High": "Selected: workouts whose Quality score is High.",
-    "Ultra": "Selected: workouts whose Quality score is Ultra.",
-}
-
-
-_QUALITY_STYLE: dict[str, dict] = {
-    "Low": {
-        "label": "Low",
-        "bg": (215, 55, 55, 0.85),  # BIN_COLORS[1] dark (red)
-        "fg_on_dark_theme": "neutral-1000",
-        "fg_on_light_theme": "neutral-0",
-    },
-    "Medium": {
-        "label": "Medium",
-        "bg": (225, 125, 35, 0.85),  # orange
-        "fg_on_dark_theme": "neutral-1000",
-        "fg_on_light_theme": "neutral-0",
-    },
-    "High": {
-        "label": "High",
-        "bg": (25, 150, 50, 0.90),  # green
-        "fg_on_dark_theme": "neutral-1000",
-        "fg_on_light_theme": "neutral-0",
-    },
-    "Ultra": {
-        "label": "Ultra",
-        "bg": (25, 150, 50, 1),  # green
-        "fg_on_dark_theme": "neutral-1000",
-        "fg_on_light_theme": "neutral-0",
-    },
-}
 
 # ---------------------------------------------------------------------------
 # Stimulus matrix (grid + info panel source of truth)
@@ -603,12 +536,6 @@ def _cell_name(row_idx: int, col_idx: int) -> str:
 
 _ROWS_PER_PAGE = 200
 
-# Width (in HyperDiv units) of the small zone bar rendered inside each of
-# the Pace/HR Intensity cells — half the full zone-bar width so the score
-# reads as the dominant signal.
-_INTENSITY_BAR_WIDTH = 5.0
-_INTENSITY_BAR_HEIGHT = 0.5
-
 # Grid cell sizing
 _CELL_H = 4.0  # HyperDiv units per data cell
 _HEADER_H = 2.0  # HyperDiv units for column header
@@ -668,6 +595,18 @@ def _compute_grid_placement(r: dict) -> tuple[int, int]:
 # Data enrichment
 # ---------------------------------------------------------------------------
 
+# Per-workout cache for the heavy enrichment fields (especially the bin-meters
+# pass).  Each render rebuilds the filtered workout list from scratch, so we
+# can't memoize at the list level — but the per-workout enrichment is a pure
+# function of (workout content, max_hr), so cache by stable workout id.
+#
+# Toggling a UI chip or grid cell triggers a full page re-render: with this
+# cache, every workout is a hit and enrichment drops from ~370ms to ~1ms.
+# Bound the cache so a long session with many imports can't grow without
+# limit; on overflow we drop everything (simple, no LRU bookkeeping).
+_workout_enrich_cache: dict[tuple, dict] = {}
+_WORKOUT_ENRICH_CACHE_MAX = 5000
+
 
 def _enrich_workouts(
     workouts: list[dict],
@@ -687,14 +626,14 @@ def _enrich_workouts(
 
     Fields attached:
 
-      _bin_meters       list[float]    Per-power-bin meter counts (index 0 = Rest)
-      _bar_uri          str            Data-URI SVG stacked power-zone bar
-      _z3               float          Fraction of work meters in Z3 (grid colour)
-      _power_score      float | None   0–100 weighted power intensity
-      _hr_bin_meters    list[float] | None  Per-HR-bin meter counts, or None
-                                         when max_hr is unknown
-      _hr_bar_uri       str | None     Data-URI SVG stacked HR-zone bar, or None
-      _hr_score         float | None   0–100 weighted HR intensity
+      _bin_meters         list[float]    Per-power-bin meter counts (index 0 = Rest)
+      _bar_uri            str            Data-URI SVG stacked power-zone bar
+      _z3                 float          Fraction of work meters in Z3 (grid colour)
+      _power_spread_score float | None   0–100 weighted power spread
+      _hr_bin_meters      list[float] | None  Per-HR-bin meter counts, or None
+                                              when max_hr is unknown
+      _hr_bar_uri         str | None     Data-URI SVG stacked HR-zone bar, or None
+      _hr_spread_score    float | None   0–100 weighted HR spread
       _structure_key    str            Rep-stripped structure label
       _reps             int            Number of work intervals
       _work_pace        float | None   Avg work pace (tenths/500m)
@@ -705,6 +644,11 @@ def _enrich_workouts(
                                          ("Other" when cell is n/a)
     """
     result = []
+    bin_ms = 0.0
+    structure_ms = 0.0
+    placement_ms = 0.0
+    cache_hits = 0
+    cache_misses = 0
     for r in workouts:
         if r.get("workout_type") not in INTERVAL_WORKOUT_TYPES:
             continue
@@ -718,51 +662,55 @@ def _enrich_workouts(
         if reps == 1:
             continue
 
+        wid = r.get("id")
+        cache_key = (wid, max_hr) if wid is not None else None
+        if cache_key is not None and cache_key in _workout_enrich_cache:
+            result.append(_workout_enrich_cache[cache_key])
+            cache_hits += 1
+            continue
+
+        cache_misses += 1
         r = dict(r)  # shallow copy
 
-        bm = workout_bin_meters(r, thresholds_for(r))
+        t0 = time.perf_counter()
+        attach_spread_and_quality(
+            [r],
+            workouts,
+            max_hr,
+            thresholds_for=thresholds_for,
+            ref_watts_for=ref_watts_for,
+        )
+        bin_ms += (time.perf_counter() - t0) * 1000.0
+        bm = r["_bin_meters"]
         work_total = sum(bm[1:])
-
-        r["_bin_meters"] = bm
-        r["_bar_uri"] = bin_bar_svg(bm)
         r["_z3"] = sum(bm[i] for i in Z3_BINS) / work_total if work_total else 0.0
-        r["_power_score"] = power_intensity_score(bm)
 
-        if max_hr:
-            hrm = workout_hr_meters(r, max_hr)
-            r["_hr_bin_meters"] = hrm
-            # Render the HR bar using only classified meters (bins 0–5); drop
-            # bin 6 so "no HR" doesn't dilute the colour signal.  bin_bar_svg
-            # takes a 7-element list and skips index 0 internally, so pad
-            # bins 1–5 with a 0 for the "No HR" slot.
-            hr_for_bar = list(hrm)
-            hr_for_bar[6] = 0
-            r["_hr_bar_uri"] = bin_bar_svg(hr_for_bar)
-            r["_hr_score"] = hr_intensity_score(hrm)
-        else:
-            r["_hr_bin_meters"] = None
-            r["_hr_bar_uri"] = None
-            r["_hr_score"] = None
-
+        t0 = time.perf_counter()
         r["_structure_key"] = interval_structure_key(r, compact=True)
+        structure_ms += (time.perf_counter() - t0) * 1000.0
         r["_reps"] = reps
         r["_work_pace"] = avg_workpace_tenths(r)
         r["_work_spm"] = avg_work_spm(r)
+        t0 = time.perf_counter()
         col, row = _compute_grid_placement(r)
+        placement_ms += (time.perf_counter() - t0) * 1000.0
         r["_grid_col"] = col
         r["_grid_row"] = row
         r["_stimulus"] = _cell_name(row, col)
-        quality = compute_workout_quality(r, ref_watts_for(r), thresholds_for(r))
-        if quality is not None:
-            r["_quality"] = quality["category"]
-            r["_quality_score"] = quality["score"]
-            r["_quality_energy"] = quality["per_category_energy"]
-        else:
-            r["_quality"] = None
-            r["_quality_score"] = None
-            r["_quality_energy"] = None
+
+        if cache_key is not None:
+            if len(_workout_enrich_cache) >= _WORKOUT_ENRICH_CACHE_MAX:
+                _workout_enrich_cache.clear()
+            _workout_enrich_cache[cache_key] = r
         result.append(r)
     result.sort(key=lambda x: x.get("date", ""), reverse=True)
+    if DEBUG_INTERVALS_TIMING:
+        print(
+            f"[intervals render #{_render_counter}] enrich-internal "
+            f"(spread+quality={bin_ms:.0f}ms structure={structure_ms:.0f}ms "
+            f"placement={placement_ms:.0f}ms "
+            f"hits={cache_hits} misses={cache_misses} n={len(result)})"
+        )
     return result
 
 
@@ -847,308 +795,6 @@ def _grid_cell_tooltip_content(tt, row_idx: int, col_idx: int) -> None:
             )
 
 
-# Reference-event labels for the Power Intensity scale tooltip — paired with
-# their cat_key tuples (matching services.volume_bins._CK_* and the keys used
-# by services.reference_watts.get_reference_watts).  One entry per zone bin
-# (index 1..6); Slow Aerobic has no upper anchor, so its slot is None.
-_POWER_SCALE_ANCHORS: list[tuple[str | None, tuple | None]] = [
-    ("1k", ("dist", 1000)),  # Fast
-    ("2k", ("dist", 2000)),  # 2k
-    ("5k", ("dist", 5000)),  # 5k
-    ("60'", ("time", 36000)),  # Threshold
-    ("Mara", ("dist", 42195)),  # Fast Aerobic
-    (None, None),  # Slow Aerobic — no anchor
-]
-
-
-def _power_scale_tooltip_content(tt, ref_watts: dict | None, is_dark: bool) -> None:
-    """
-    Build a graphical zone-scale explainer in the tooltip's content slot.
-
-    Each colored band is one Power Intensity zone, in order Fast → Slow Aerobic.
-    Below each band: the reference event whose watts anchor that zone, plus
-    the user's actual watts at that event (date = most recent workout).  The
-    boundaries between zones are the midpoints between adjacent reference
-    watts, so seeing the events in each zone makes the rule visually obvious.
-    """
-    with hd.box(slot=tt.content_slot, padding=0.5, gap=0.4, min_width=32):
-        hd.text("Power Intensity zones", font_size="small", font_weight="bold")
-        hd.text(
-            "Each band is one zone; the label below names the PR event that "
-            "sits inside it. Boundaries are midpoints between adjacent "
-            "reference watts.",
-            font_size="x-small",
-            font_color="neutral-500",
-        )
-        with hd.hbox(gap=0.15, padding_top=0.2):
-            for i, name in enumerate(BIN_NAMES[1:], start=1):
-                with hd.scope(f"scale_{name}"):
-                    with hd.box(gap=0.15, align="center"):
-                        color_str = BIN_COLORS[i][0 if is_dark else 1]
-                        hd.box(
-                            width="100%",
-                            height=0.7,
-                            background_color=_parse_rgba(color_str),
-                            border_radius="small",
-                        )
-                        hd.text(
-                            name,
-                            font_size="x-small",
-                            font_weight="semibold",
-                            font_color="neutral-700",
-                        )
-                        evt_name, evt_key = _POWER_SCALE_ANCHORS[i - 1]
-                        if evt_name is None:
-                            hd.text(
-                                "below",
-                                font_size="x-small",
-                                font_color="neutral-400",
-                                font_style="italic",
-                            )
-                        else:
-                            hd.text(
-                                evt_name,
-                                font_size="x-small",
-                                font_color="neutral-500",
-                            )
-                            w = ref_watts.get(evt_key) if ref_watts else None
-                            if w:
-                                hd.text(
-                                    f"{int(w)}W",
-                                    font_size="x-small",
-                                    font_color="neutral-500",
-                                )
-                            else:
-                                hd.text(
-                                    "—",
-                                    font_size="x-small",
-                                    font_color="neutral-400",
-                                )
-
-
-def _chip_tooltip_content(tt, heading: str, definition: str, filter_rule: str) -> None:
-    """Rich chip tooltip body: bold zone heading, definition, filter rule."""
-    with hd.box(slot=tt.content_slot, padding=0.3, gap=0.25, max_width=40):
-        hd.text(heading, font_size="medium", font_weight="bold")
-        hd.text(definition, font_size="small")
-        hd.text(filter_rule, font_size="small", font_style="italic")
-
-
-def _intensity_chip(
-    *,
-    name: str,
-    color_str: str,
-    is_active: bool,
-    definition: str,
-    filter_rule: str,
-) -> bool:
-    """
-    Render a single intensity filter chip (pace or HR) with a rich tooltip.
-    Returns True if the chip was clicked this render cycle.
-    """
-    color_rgba = _parse_rgba(color_str)
-    with hd.tooltip() as tt:
-        _chip_tooltip_content(tt, name, definition, filter_rule)
-        if is_active:
-            with hd.button(
-                size="small",
-                padding=(0.2, 0.6, 0.2, 0.6),
-                border="none",
-                base_style=hd.style(background_color=color_rgba),
-            ) as btn:
-                with hd.hbox(gap=0.4, align="center", justify="center"):
-                    hd.image(
-                        src=swatch_svg(color_str, size=10, radius=2),
-                        width=0.65,
-                        height=0.65,
-                    )
-                    hd.text(
-                        name,
-                        font_size="small",
-                        font_color=_always_white(hd.theme().is_dark),
-                    )
-        else:
-            with hd.button(
-                variant="neutral",
-                size="small",
-                border="none",
-                background_color="neutral-50",
-                padding=(0.2, 0.6, 0.2, 0.6),
-            ) as btn:
-                with hd.hbox(gap=0.4, align="center", justify="center"):
-                    hd.image(
-                        src=swatch_svg(color_str, size=10, radius=2),
-                        width=0.65,
-                        height=0.65,
-                    )
-                    hd.text(name, font_size="small", font_color="neutral-600")
-    return btn.clicked
-
-
-def _zone_filter_legends(
-    state,
-    max_hr: int | None,
-    ref_watts: dict | None = None,
-) -> None:
-    """
-    Stacked labelled legends: Power Intensity (always) + HR Intensity
-    (only when max_hr is resolvable) + Quality.  Each combines
-    **disjunctively** within itself — selecting two chips shows workouts
-    touching EITHER zone — and conjunctively across legends.
-
-    Each chip has a rich content-slot tooltip with the zone's definition and
-    the filter rule.  Active state lives in state.active_bins (pace),
-    state.active_hr_bins (HR), and state.active_quality (quality); chip
-    colour reflects the zone colour when on.
-
-    The Power Intensity header carries a (?) icon whose tooltip renders a
-    graphical scale showing each zone's reference event and the user's
-    current watts at that event (dated to the most recent workout).
-    """
-    is_dark = hd.theme().is_dark
-
-    # ── Power Intensity legend ──────────────────────────────────────────
-    active_bins: set[int] = set(state.active_bins)
-    with hd.box(gap=0.3):
-        with hd.hbox(
-            gap=0.75,
-            align="center",
-            padding=(1, 0, 0.25, 0),
-            wrap="wrap",
-            justify="center",
-        ):
-            with hd.hbox(gap=0.25, align="center", min_width=7):
-                hd.text(
-                    "Power Intensity",
-                    font_size="small",
-                    font_weight="bold",
-                    font_color="neutral-600",
-                )
-                with hd.tooltip() as tt:
-                    _power_scale_tooltip_content(tt, ref_watts, is_dark)
-                    hd.icon(
-                        "question-circle",
-                        font_size="small",
-                        font_color="neutral-400",
-                    )
-            for i, name in enumerate(BIN_NAMES[1:], start=1):
-                with hd.scope(f"power_{name}"):
-                    color_str = BIN_COLORS[i][0 if is_dark else 1]
-                    clicked = _intensity_chip(
-                        name=name,
-                        color_str=color_str,
-                        is_active=i in active_bins,
-                        definition=POWER_ZONE_DEFINITION_TEXT.get(i, ""),
-                        filter_rule=POWER_ZONE_FILTER_TEXT.get(i, ""),
-                    )
-                    if clicked:
-                        sel = set(state.active_bins)
-                        if i in sel:
-                            sel.discard(i)
-                        else:
-                            sel.add(i)
-                        state.active_bins = tuple(sorted(sel))
-
-        # ── HR Intensity legend ─────────────────────────────────────────────
-        if not max_hr:
-            with hd.hbox(
-                gap=0.75,
-                align="center",
-                padding=(0.25, 0, 0.5, 0),
-                wrap="wrap",
-                justify="center",
-            ):
-                hd.text(
-                    "HR Intensity",
-                    font_size="small",
-                    font_weight="bold",
-                    font_color="neutral-300",
-                    min_width=7,
-                )
-                hd.text(
-                    "Set max HR in Profile to filter by HR intensity.",
-                    font_size="x-small",
-                    font_color="neutral-400",
-                    font_style="italic",
-                )
-        else:
-            active_hr_bins: set[int] = set(state.active_hr_bins)
-            with hd.hbox(
-                gap=0.75,
-                align="center",
-                padding=(0.25, 0, 0.5, 0),
-                wrap="wrap",
-                justify="center",
-            ):
-                hd.text(
-                    "HR Intensity",
-                    font_size="small",
-                    font_weight="bold",
-                    font_color="neutral-600",
-                    min_width=7,
-                )
-                # HR_ZONE_NAMES indices 1..5 are the classifiable zones.
-                for i in range(1, 6):
-                    name = HR_ZONE_NAMES[i]
-                    with hd.scope(f"hr_{name}"):
-                        color_str = HR_ZONE_COLORS[i][0 if is_dark else 1]
-                        clicked = _intensity_chip(
-                            name=name,
-                            color_str=color_str,
-                            is_active=i in active_hr_bins,
-                            definition=HR_ZONE_DEFINITION_TEXT.get(i, ""),
-                            filter_rule=HR_ZONE_FILTER_TEXT.get(i, ""),
-                        )
-                        if clicked:
-                            sel = set(state.active_hr_bins)
-                            if i in sel:
-                                sel.discard(i)
-                            else:
-                                sel.add(i)
-                            state.active_hr_bins = tuple(sorted(sel))
-
-        # ── Quality legend ──────────────────────────────────────────────────
-        active_quality: set[str] = set(state.active_quality)
-        with hd.hbox(
-            gap=0.75,
-            align="center",
-            padding=(0.25, 0, 0.5, 0),
-            wrap="wrap",
-            justify="center",
-        ):
-            hd.text(
-                "Quality",
-                font_size="small",
-                font_weight="bold",
-                font_color="neutral-600",
-                min_width=7,
-            )
-            for label, _upper in QUALITY_THRESHOLDS:
-                with hd.scope(f"quality_{label}"):
-                    style = _QUALITY_STYLE[label]
-                    color_rgba = style["bg"]
-                    color_str = (
-                        f"rgba({color_rgba[0]},{color_rgba[1]},{color_rgba[2]},"
-                        f"{color_rgba[3]})"
-                    )
-                    clicked = _intensity_chip(
-                        name=label,
-                        color_str=color_str,
-                        is_active=label in active_quality,
-                        definition=_QUALITY_DEFINITION_TEXT[label],
-                        filter_rule=_QUALITY_FILTER_TEXT[label],
-                    )
-                    if clicked:
-                        sel = set(state.active_quality)
-                        if label in sel:
-                            sel.discard(label)
-                        else:
-                            sel.add(label)
-                        state.active_quality = tuple(
-                            sorted(sel, key=lambda q: QUALITY_ORDER[q])
-                        )
-
-
 def _grid_browser(zone_workouts: list[dict], state) -> None:
     """
     Render the 2D work-duration × rest:work grid using CSS Grid.
@@ -1168,10 +814,16 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
     is_dark = hd.theme().is_dark
 
     # Pre-compute per-cell data
+    _t0 = time.perf_counter()
     cell_workouts: dict[str, list[dict]] = {}
     for r in zone_workouts:
         k = _cell_key(r["_grid_col"], r["_grid_row"])
         cell_workouts.setdefault(k, []).append(r)
+    _log_phase(
+        "grid_precompute",
+        (time.perf_counter() - _t0) * 1000.0,
+        extra=f"n={len(zone_workouts)}",
+    )
 
     active_cells: frozenset[str] = frozenset(state.active_cells)
 
@@ -1273,8 +925,8 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                     # to a neutral grey.  Selection state is a thick white
                     # border rather than a colour change, so the cell colour
                     # stays legible.
-                    white_token = _always_white(is_dark)
-                    black_token = _always_white(not is_dark)
+                    white_token = always_white(is_dark)
+                    black_token = always_white(not is_dark)
 
                     for ci in range(_N_COLS):
                         with hd.scope(f"c{ci}"):
@@ -1361,79 +1013,6 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Info panel
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Intensity column rendering (Power + HR)
-# ---------------------------------------------------------------------------
-
-
-def _render_intensity_cell(
-    score: float | None,
-    bar_uri: str | None,
-    bin_meters: list | None,
-    zone_names: list[str],
-    zone_colors: list[tuple[str, str]],
-    is_dark: bool,
-    *,
-    skip_indices: tuple[int, ...] = (0,),
-) -> None:
-    """
-    Shared cell renderer for the Power Intensity and HR Intensity columns.
-
-    Layout: score (bold) on top, a small stacked zone bar (half-width)
-    underneath, and a rich content-slot tooltip listing each non-empty zone
-    with its swatch, name, and percentage.  Workouts with no meaningful
-    meters (score is None) render as a single "—" with no bar.
-
-    skip_indices — zone indices to exclude entirely from the tooltip (e.g.
-    Rest, or Rest + No HR).  They are also excluded from the percentage
-    denominator so the zone percentages sum to 100%.
-    """
-    if score is None or bin_meters is None:
-        hd.text("—", font_size="medium", font_color="neutral-400")
-        return
-
-    total = sum(m for idx, m in enumerate(bin_meters) if idx not in set(skip_indices))
-
-    with hd.tooltip() as tt:
-        with hd.box(slot=tt.content_slot, padding=0.4, gap=0.2, min_width=12):
-            for idx, name in enumerate(zone_names):
-                with hd.scope(f"{idx} {name}"):
-                    if idx in skip_indices:
-                        continue
-                    meters = bin_meters[idx] if idx < len(bin_meters) else 0
-                    if meters <= 0:
-                        continue
-                    pct = (meters / total) if total > 0 else 0.0
-                    if pct < 0.005:
-                        continue
-                    color_str = zone_colors[idx][0 if is_dark else 1]
-                    with hd.hbox(gap=0.4, align="center"):
-                        hd.image(
-                            src=swatch_svg(color_str, size=10, radius=2),
-                            width=0.6,
-                            height=0.6,
-                        )
-                        hd.text(name, font_size="x-small", min_width=6)
-                        hd.text(
-                            f"{pct:.0%}",
-                            font_size="x-small",
-                            font_weight="bold",
-                        )
-        with hd.box(align="start", gap=0.2):
-            hd.text(f"{score:.0f}", font_size="medium", font_weight="bold")
-            if bar_uri:
-                hd.image(
-                    src=bar_uri,
-                    width=_INTENSITY_BAR_WIDTH,
-                    height=_INTENSITY_BAR_HEIGHT,
-                )
-
-
-# ---------------------------------------------------------------------------
 # Tab entry point
 # ---------------------------------------------------------------------------
 
@@ -1441,8 +1020,13 @@ def _render_intensity_cell(
 def intervals_page(ctx) -> None:
     """Top-level HyperDiv component for the Interval Workouts tab."""
 
+    global _render_counter
+    _render_counter += 1
+
     print("syncing from intervals page")
+    _t0 = time.perf_counter()
     result = get_all_workouts(ctx)
+    _log_phase("get_all_workouts", (time.perf_counter() - _t0) * 1000.0)
     if result is None:
         hd.box(padding=2, min_height="80vh")
         return
@@ -1454,30 +1038,24 @@ def intervals_page(ctx) -> None:
     # Time-aware thresholds: block on the reference-watts loader so the
     # first-time index build shows a progress bar rather than spawning a
     # synchronous build inside _enrich_workouts.
+    _t0 = time.perf_counter()
     if not reference_watts_loader(all_workouts):
         return
+    _log_phase("reference_watts_loader", (time.perf_counter() - _t0) * 1000.0)
 
-    # Cache per-date so we don't recompute thresholds when many workouts
-    # share a date.  We cache both the ref-watts dict and the derived
-    # bin thresholds; the Quality metric needs the raw ref-watts.
-    th_cache: dict = {}
+    # Per-date cache so we don't recompute thresholds when many workouts
+    # share a date.  Both the ref-watts dict (for Quality) and the derived
+    # bin thresholds are cached.
+    _thresholds_for, _ref_watts_for = make_thresholds_resolver(all_workouts)
 
-    def _resolve(w):
-        d = parse_date(w.get("date", ""))
-        if d not in th_cache:
-            ref = get_reference_watts(d, all_workouts)
-            print(ref)
-            th_cache[d] = (ref, compute_bin_thresholds(ref))
-        return th_cache[d]
-
-    def _thresholds_for(w):
-        return _resolve(w)[1]
-
-    def _ref_watts_for(w):
-        return _resolve(w)[0]
-
+    _t0 = time.perf_counter()
     all_intervals = _enrich_workouts(
         all_workouts, _thresholds_for, _ref_watts_for, max_hr
+    )
+    _log_phase(
+        "enrich_workouts",
+        (time.perf_counter() - _t0) * 1000.0,
+        extra=f"in={len(all_workouts)} out={len(all_intervals)}",
     )
 
     if not all_intervals:
@@ -1492,8 +1070,6 @@ def intervals_page(ctx) -> None:
         active_quality=tuple(),  # tuple[str] — quality buckets (Low/Medium/High/Ultra) for OR filter
         structure_filter=None,  # str | None — filter table to this structure key
     )
-
-    is_dark = hd.theme().is_dark
 
     # ── Interval-specific column definitions (capture state for filter button) ──
     def _render_structure_cell(w):
@@ -1515,84 +1091,6 @@ def intervals_page(ctx) -> None:
             hd.text(
                 s, font_size="x-small", font_color="neutral-500", font_style="italic"
             )
-
-    def _render_power_intensity_cell(w):
-        _render_intensity_cell(
-            score=w.get("_power_score"),
-            bar_uri=w.get("_bar_uri"),
-            bin_meters=w.get("_bin_meters"),
-            zone_names=BIN_NAMES,
-            zone_colors=BIN_COLORS,
-            is_dark=is_dark,
-            skip_indices=(0,),
-        )
-
-    def _render_hr_intensity_cell(w):
-        _render_intensity_cell(
-            score=w.get("_hr_score"),
-            bar_uri=w.get("_hr_bar_uri"),
-            bin_meters=w.get("_hr_bin_meters"),
-            zone_names=HR_ZONE_NAMES,
-            zone_colors=HR_ZONE_COLORS,
-            is_dark=is_dark,
-            skip_indices=(0, 6),
-        )
-
-    def _render_quality_cell(w):
-        q = w.get("_quality")
-        if q is None:
-            hd.text("—", font_size="small", font_color="neutral-400")
-            return
-        score = w.get("_quality_score") or 0.0
-        energy = w.get("_quality_energy") or {}
-        style = _QUALITY_STYLE[q]
-        top_cats = sorted(
-            ((cat, e) for cat, e in energy.items() if e > 0),
-            key=lambda p: p[1],
-            reverse=True,
-        )[:3]
-        if q == "Low":
-            headline = (
-                f"Quality score {score:.2f} — below the 0.50 threshold for a "
-                f"Medium session."
-            )
-        elif q == "Medium":
-            headline = (
-                f"Quality score {score:.2f} — clears the 0.50 Medium threshold, "
-                f"below the 0.75 cutoff for High."
-            )
-        else:  # High
-            headline = f"Quality score {score:.2f} — clears the 0.75 High threshold."
-        with hd.tooltip() as tt:
-            with hd.box(slot=tt.content_slot, padding=0.4, gap=0.3, max_width=24):
-                hd.text(f"{q} quality", font_size="small", font_weight="bold")
-                hd.text(headline, font_size="x-small")
-                if top_cats:
-                    total = sum(e for _, e in top_cats) or 1.0
-                    hd.text(
-                        "Top contributions:",
-                        font_size="x-small",
-                        font_color="neutral-500",
-                    )
-                    for cat, e in top_cats:
-                        with hd.scope(f"{cat} {e}"):
-                            hd.text(
-                                f"  • {cat}: {100.0 * e / total:.0f}%",
-                                font_size="x-small",
-                            )
-            with hd.box(
-                padding=(0.15, 0.5, 0.15, 0.5),
-                border_radius="medium",
-                background_color=style["bg"],
-                align="center",
-                justify="center",
-            ):
-                hd.text(
-                    style["label"],
-                    font_size="x-small",
-                    font_weight="bold",
-                    font_color=_always_white(is_dark),
-                )
 
     interval_columns = [
         ColumnDef(
@@ -1623,33 +1121,9 @@ def intervals_page(ctx) -> None:
             render_cell=_render_stimulus_cell,
             sortable=False,
         ),
-        ColumnDef(
-            "power_intensity",
-            "Power Intensity",
-            "8rem",
-            render_cell=_render_power_intensity_cell,
-            sort_value=lambda w: w.get("_power_score")
-            if w.get("_power_score") is not None
-            else -1.0,
-        ),
-        ColumnDef(
-            "hr_intensity",
-            "HR Intensity",
-            "8rem",
-            render_cell=_render_hr_intensity_cell,
-            sort_value=lambda w: w.get("_hr_score")
-            if w.get("_hr_score") is not None
-            else -1.0,
-        ),
-        ColumnDef(
-            "quality",
-            "Quality",
-            "6rem",
-            render_cell=_render_quality_cell,
-            sort_value=lambda w: w.get("_quality_score")
-            if w.get("_quality_score") is not None
-            else -1.0,
-        ),
+        COL_POWER_SPREAD,
+        COL_HR_SPREAD,
+        COL_QUALITY,
         ColumnDef(
             "work",
             "Work",
@@ -1724,11 +1198,11 @@ def intervals_page(ctx) -> None:
 
             # Dual labelled legends (Pace + HR) with rich chip tooltips.
             # ref_watts dates to the most recent workout so the (?) tooltip
-            # under "Power Intensity" reflects current fitness.
+            # under "Power Spread" reflects current fitness.
             today_ref_watts = (
                 _ref_watts_for(all_intervals[0]) if all_intervals else None
             )
-            _zone_filter_legends(state, max_hr, today_ref_watts)
+            spread_quality_legends(state, max_hr, today_ref_watts)
 
             # Apply cell filter on top of already pace/HR/structure filtered
             active_cells = frozenset(state.active_cells)

@@ -47,8 +47,26 @@ from components.workout_table import (
     COL_SPM,
     COL_HR,
     COL_LINK,
+    COL_POWER_SPREAD,
+    COL_HR_SPREAD,
+    COL_QUALITY,
 )
-from components.shared_ui import global_filter_ui
+from components.profile_page import get_profile_from_context
+from components.reference_watts_loader import reference_watts_loader
+from components.shared_ui import global_filter_ui, header_dropdown
+from components.spread_quality_legends import spread_quality_legends
+from services.heartrate_utils import (
+    hr_bin_passes,
+    resolve_max_hr,
+)
+from services.reference_watts import get_reference_watts
+from services.rowing_utils import parse_date
+from services.volume_bins import (
+    compute_bin_thresholds,
+    power_bin_passes,
+)
+from services.workout_enrichment import attach_spread_and_quality
+from services.workout_quality import QUALITY_STYLE
 
 
 # ---------------------------------------------------------------------------
@@ -270,12 +288,50 @@ def compute_sb_ids(workouts: list) -> set:
 # ---------------------------------------------------------------------------
 
 
-def prepare_points(workouts: list, sb_ids: set, show_watts: bool = False) -> list:
+def _quality_hsl(category: str | None) -> tuple:
+    """Return (h, s, l) for a workout's quality category in 'quality' color mode.
+
+    Workouts without a quality value (None) get a neutral grey.
+    """
+    if not category:
+        return (0, 0, 50)  # neutral grey
+    rgba = QUALITY_STYLE[category]["bg"]
+    r, g, b = rgba[0] / 255.0, rgba[1] / 255.0, rgba[2] / 255.0
+    mx, mn = max(r, g, b), min(r, g, b)
+    l = (mx + mn) / 2.0
+    if mx == mn:
+        h = 0.0
+        s = 0.0
+    else:
+        d = mx - mn
+        s = d / (2 - mx - mn) if l > 0.5 else d / (mx + mn)
+        if mx == r:
+            h = (g - b) / d + (6 if g < b else 0)
+        elif mx == g:
+            h = (b - r) / d + 2
+        else:
+            h = (r - g) / d + 4
+        h *= 60
+    return (round(h), round(s * 100), round(l * 100))
+
+
+def prepare_points(
+    workouts: list,
+    sb_ids: set,
+    show_watts: bool = False,
+    color_mode: str = "gander",
+) -> list:
     """
     Convert raw workout dicts into the compact point dicts expected by the JS plugin.
     Returns list sorted largest-dist-first so big dots render behind small ones.
 
+    color_mode = "gander" (default): each session gets a deterministic palette
+    colour from its id.  color_mode = "quality": each session is coloured by
+    its workout-quality category (workouts must already have ``_quality``
+    attached); workouts without a quality value get a neutral grey.
+
     Each dict has:
+      id        — workout id (for click-to-open)
       x         — ms timestamp
       y         — pace (sec/500m) or watts depending on show_watts, rounded to 2dp
       r         — outer dot radius (px)  = ½√total_m
@@ -333,12 +389,16 @@ def prepare_points(workouts: list, sb_ids: set, show_watts: bool = False) -> lis
             rest_desc = ""
             dist_str = f"{dist:,}m" if dist else ""
 
-        # Deterministic color from session ID
-        idx = int(hashlib.md5(str(rid).encode()).hexdigest(), 16) % len(_PALETTE)
-        h, s, l_ = _PALETTE[idx]
+        if color_mode == "quality":
+            h, s, l_ = _quality_hsl(r.get("_quality"))
+        else:
+            # Deterministic color from session ID
+            idx = int(hashlib.md5(str(rid).encode()).hexdigest(), 16) % len(_PALETTE)
+            h, s, l_ = _PALETTE[idx]
 
         pts.append(
             {
+                "id": rid,
                 "x": x,
                 "y": y_val,
                 "r": radius,
@@ -373,14 +433,16 @@ def prepare_points(workouts: list, sb_ids: set, show_watts: bool = False) -> lis
 # ---------------------------------------------------------------------------
 
 
-def window_bounds_ms(all_ms: list, window_size: str, window_end_ms: int) -> tuple:
+def window_bounds_ms(
+    all_ms: list, window_size: str, window_end_ms: int, window_start_ms: int = 0
+) -> tuple:
     """
     Return (start_ms, end_ms) for the current view window.
 
-    window_end_ms is the right edge; the left edge is derived from window_size.
-    If window_end_ms is 0 (uninitialised), default to the latest session.
+    window_end_ms is the right edge; if 0 (uninitialised) defaults to latest session.
+    window_start_ms overrides the left edge when non-zero (set after a brush resize).
+    When 0, the left edge is derived from window_size.
     """
-
     days = _WINDOW_DAYS.get(window_size, 183)
     window_ms = days * _MS_PER_DAY
 
@@ -392,10 +454,16 @@ def window_bounds_ms(all_ms: list, window_size: str, window_end_ms: int) -> tupl
     max_ms = max(all_ms)
 
     end_ms = window_end_ms if window_end_ms else max_ms
-    # Clamp so the window stays within history
     end_ms = min(end_ms, max_ms)
-    end_ms = max(end_ms, min_ms + window_ms)
-    start_ms = max(end_ms - window_ms, min_ms)
+
+    if window_start_ms:
+        # Custom start from a brush resize — honour it directly.
+        start_ms = max(window_start_ms, min_ms)
+        end_ms = max(end_ms, start_ms + _MS_PER_DAY)
+    else:
+        # Derive start from the preset window size.
+        end_ms = max(end_ms, min_ms + window_ms)
+        start_ms = max(end_ms - window_ms, min_ms)
 
     return start_ms, end_ms
 
@@ -418,14 +486,28 @@ def sessions_chart(workouts: list, ctx=None) -> None:
     """
     state = hd.state(
         window_size="Year",
-        window_end_ms=0,  # 0 = uninitialised → defaults to latest session
+        window_end_ms=0,   # 0 = uninitialised → defaults to latest session
+        window_start_ms=0, # 0 = derive from window_size; non-zero after a brush resize
         last_change_id=0,
+        last_click_seq=0,
         filter_10k=False,
         filter_ivl="All",  # "All" | "Intervals Only" | "No Intervals"
         show_watts=False,  # False = pace (sec/500m), True = watts
+        color_mode="gander",  # "gander" | "quality"
+        active_bins=tuple(),
+        active_hr_bins=tuple(),
+        active_quality=tuple(),
     )
 
     workouts = _apply_outlier_filter(workouts)
+
+    # ── Attach Power Spread, HR Spread, and Quality fields ────────────────────
+    # Block on the reference-watts loader so quality colouring + filters work.
+    if not reference_watts_loader(workouts):
+        return
+    profile = get_profile_from_context(ctx) or {}
+    max_hr, _ = resolve_max_hr(profile, workouts)
+    attach_spread_and_quality(workouts, workouts, max_hr)
 
     # ── Apply filters ──────────────────────────────────────────────────────────
 
@@ -447,8 +529,28 @@ def sessions_chart(workouts: list, ctx=None) -> None:
             r for r in filtered if r.get("workout_type") not in INTERVAL_WORKOUT_TYPES
         ]
 
+    # Apply Power Spread / HR Spread / Quality legend filters (disjunctive within,
+    # conjunctive across).
+    if state.active_bins:
+        sel = set(state.active_bins)
+        filtered = [
+            r for r in filtered
+            if any(power_bin_passes(r.get("_bin_meters") or [], i) for i in sel)
+        ]
+    if state.active_hr_bins:
+        sel = set(state.active_hr_bins)
+        filtered = [
+            r for r in filtered
+            if any(hr_bin_passes(r.get("_hr_bin_meters"), i) for i in sel)
+        ]
+    if state.active_quality:
+        sel = set(state.active_quality)
+        filtered = [r for r in filtered if r.get("_quality") in sel]
+
     sb_ids = compute_sb_ids(filtered)
-    pts = prepare_points(filtered, sb_ids, show_watts=state.show_watts)
+    pts = prepare_points(
+        filtered, sb_ids, show_watts=state.show_watts, color_mode=state.color_mode
+    )
 
     if not pts:
         hd.text("No sessions match the selected filters.", font_color="neutral-500")
@@ -458,11 +560,8 @@ def sessions_chart(workouts: list, ctx=None) -> None:
 
     # ── Compute target window ─────────────────────────────────────────────────
     target_start, target_end = window_bounds_ms(
-        all_ms, state.window_size, state.window_end_ms
+        all_ms, state.window_size, state.window_end_ms, state.window_start_ms
     )
-
-
-
 
 
     with hd.box(gap=1, justify="center", align="center"):
@@ -470,7 +569,17 @@ def sessions_chart(workouts: list, ctx=None) -> None:
 
             with hd.h1(font_weight="normal"):
                 with hd.hbox(gap=0, align="center"):
-                    hd.text("Take a Gander at ")
+                    # Verb selector — same styling as Race page header dropdowns.
+                    header_dropdown(
+                        state,
+                        key="color_mode_dd",
+                        labels={
+                            "gander": "Take a Gander at",
+                            "quality": "Scrutinize the Quality of",
+                        },
+                        current_value=state.color_mode,
+                        field="color_mode",
+                    )
                     with hd.dropdown() as _sessions_dd:
                         from components.view_context import your as _your
 
@@ -482,7 +591,7 @@ def sessions_chart(workouts: list, ctx=None) -> None:
                         if _sessions_btn.clicked:
                             _sessions_dd.opened = not _sessions_dd.opened
 
-                        with hd.hbox(gap=1, padding=1,background_color="neutral-50", align="center"):  
+                        with hd.hbox(gap=1, padding=1,background_color="neutral-50", align="center"):
                             with hd.scope("ivl_filter"):
                                 with hd.radio_group(value=state.filter_ivl) as ivl_rg:
                                     hd.radio_button("All", size="small")
@@ -547,10 +656,26 @@ def sessions_chart(workouts: list, ctx=None) -> None:
                 if metric_rg.changed:
                     state.show_watts = metric_rg.value == "Watts"
 
-        # ── Sync window_end_ms from brush drags ───────────────────────────────────
+        # ── Sync window bounds from brush drags / resizes ─────────────────────────
         if chart.change_id != state.last_change_id:
             state.last_change_id = chart.change_id
             state.window_end_ms = chart.brush_end
+            state.window_start_ms = chart.brush_start
+
+        # ── Click-to-open: navigate to /session/<id> when a chart dot is clicked ──
+        if chart.click_seq > state.last_click_seq:
+            state.last_click_seq = chart.click_seq
+            if chart.clicked_workout_id:
+                hd.location().go(path=f"/session/{chart.clicked_workout_id}")
+
+        # ── Spread + Quality legend (Power Spread / HR Spread / Quality) ──────────
+        # ref_watts dates to the most recent workout in view so the (?) tooltip
+        # under "Power Spread" reflects current fitness.
+        today_ref_watts = None
+        if filtered:
+            today_d = parse_date(filtered[0].get("date", ""))
+            today_ref_watts = get_reference_watts(today_d, workouts)
+        spread_quality_legends(state, max_hr, today_ref_watts)
 
         # ── Workouts-in-view table ────────────────────────────────────────────────
         in_window = [
@@ -564,5 +689,18 @@ def sessions_chart(workouts: list, ctx=None) -> None:
                 hd.h3(f"Workouts in View  ({len(in_window)})")
                 WorkoutTable(
                     in_window,
-                    [COL_DATE, COL_DISTANCE, COL_TIME, COL_PACE, COL_WATTS, COL_DRAG, COL_SPM, COL_HR, COL_LINK],
+                    [
+                        COL_DATE,
+                        COL_DISTANCE,
+                        COL_TIME,
+                        COL_PACE,
+                        COL_WATTS,
+                        COL_DRAG,
+                        COL_SPM,
+                        COL_HR,
+                        COL_POWER_SPREAD,
+                        COL_HR_SPREAD,
+                        COL_QUALITY,
+                        COL_LINK,
+                    ],
                 )

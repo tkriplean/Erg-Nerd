@@ -66,3 +66,10 @@ class SessionsChart(hd.Plugin):
     # Monotonically incremented by JS on every genuine user interaction.
     # Python gates state updates on this changing
     change_id = hd.Prop(hd.Int, 0)
+
+    # Click-to-open: id of the most recently clicked dot in the main chart.
+    # JS bumps click_seq on every click so Python can detect a new click even
+    # when the same dot is clicked twice.  Python navigates to /session/<id>
+    # in response.
+    clicked_workout_id = hd.Prop(hd.Int, 0)
+    click_seq = hd.Prop(hd.Int, 0)

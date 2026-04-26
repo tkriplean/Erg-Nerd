@@ -54,7 +54,17 @@ from components.workout_table import (
     COL_SPM,
     COL_HR,
     COL_LINK,
+    render_quality_cell,
+    render_spread_cell,
 )
+from components.profile_page import get_profile_from_context
+from services.heartrate_utils import (
+    HR_ZONE_COLORS,
+    HR_ZONE_NAMES,
+    resolve_max_hr,
+)
+from services.volume_bins import BIN_COLORS, BIN_NAMES
+from services.workout_enrichment import attach_spread_and_quality
 
 from components.workout_chart_builder import (
     build_interval_rows_and_bands,
@@ -92,6 +102,18 @@ def _stat(label: str, value: str) -> None:
         hd.text(value, font_weight="bold", font_size="large")
 
 
+def _spread_stat(label: str, render_inner) -> None:
+    """One spread-style stat cell — small label above a render-cell payload."""
+    with hd.box(padding=(0.5, 1.25, 0.5, 1.25), gap=0.25):
+        hd.text(
+            label,
+            font_size="small",
+            font_color="neutral-500",
+            font_weight="semibold",
+        )
+        render_inner()
+
+
 def _summary_section(workout: dict, strokes: Optional[list]) -> None:
     """Compact multi-column stat grid."""
     wtype = workout.get("workout_type", "")
@@ -119,7 +141,47 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
     rest_dist = workout.get("rest_distance")
     rest_time = workout.get("rest_time")
 
-    with hd.box(grow=True):
+    is_dark = hd.theme().is_dark
+    has_power_spread = workout.get("_power_spread_score") is not None
+    has_hr_spread = workout.get("_hr_spread_score") is not None
+    has_quality = workout.get("_quality") is not None
+
+    with hd.box(grow=True, gap=0.25):
+        # ── Top row: Power Spread, HR Spread, Quality ─────────────────────
+        if has_power_spread or has_hr_spread or has_quality:
+            with hd.hbox(wrap="wrap", gap=0):
+                if has_power_spread:
+                    _spread_stat(
+                        "Power Spread",
+                        lambda: render_spread_cell(
+                            score=workout.get("_power_spread_score"),
+                            bar_uri=workout.get("_bar_uri"),
+                            bin_meters=workout.get("_bin_meters"),
+                            zone_names=BIN_NAMES,
+                            zone_colors=BIN_COLORS,
+                            is_dark=is_dark,
+                            skip_indices=(0,),
+                        ),
+                    )
+                if has_hr_spread:
+                    _spread_stat(
+                        "HR Spread",
+                        lambda: render_spread_cell(
+                            score=workout.get("_hr_spread_score"),
+                            bar_uri=workout.get("_hr_bar_uri"),
+                            bin_meters=workout.get("_hr_bin_meters"),
+                            zone_names=HR_ZONE_NAMES,
+                            zone_colors=HR_ZONE_COLORS,
+                            is_dark=is_dark,
+                            skip_indices=(0, 6),
+                        ),
+                    )
+                if has_quality:
+                    _spread_stat(
+                        "Quality",
+                        lambda: render_quality_cell(workout, is_dark),
+                    )
+
         with hd.hbox(wrap="wrap", gap=0):
             if workout.get("distance"):
                 _stat("Distance", fmt_distance(workout["distance"]))
@@ -1041,6 +1103,17 @@ def workout_page(session_id: int, ctx) -> None:
 
     _workouts_dict, all_workouts = sync_result
     workout = _workouts_dict.get(str(session_id))
+
+    # Attach Power Spread, HR Spread, and Quality fields so the summary cells
+    # can render them.  Best-effort: if reference watts haven't loaded yet,
+    # the fields stay as None and the summary row hides the cells.
+    if workout is not None:
+        profile = get_profile_from_context(ctx) or {}
+        max_hr, _ = resolve_max_hr(profile, all_workouts)
+        try:
+            attach_spread_and_quality([workout], all_workouts, max_hr)
+        except Exception:
+            pass
 
     # ── Fetch stroke data (unified via concept2_sync.strokes_for) ────────────
 
