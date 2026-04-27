@@ -26,6 +26,10 @@ def _load_dotenv(path: str = ".env") -> None:
 
 _load_dotenv()
 
+from services.rowinglevel import init_cache as _init_rowinglevel_cache
+
+_init_rowinglevel_cache()
+
 import hyperdiv as hd
 from services.profiling import profile_block
 from services.concept2 import (

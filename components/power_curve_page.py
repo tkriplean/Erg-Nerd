@@ -131,7 +131,7 @@ from services.rowing_utils import (
 from components.concept2_sync import sync_workouts
 from components.profile_page import get_profile
 from services.rowing_utils import profile_complete
-from services.rowinglevel import async_fetch_rowinglevel
+from services.rowinglevel import fetch_rowinglevel
 
 from services.concept2_records import wr_category_label
 from components.power_curve_chart_plugin import PowerCurveChart
@@ -1257,7 +1257,7 @@ def power_curve_page() -> None:
         state._annot_key = _annot_key
 
     if at_today:
-        rl_predictions = async_fetch_rowinglevel(
+        rl_predictions = fetch_rowinglevel(
             state, profile, efforts_filtered_by_event_and_display
         )
     else:

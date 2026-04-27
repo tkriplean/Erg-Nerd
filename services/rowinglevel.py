@@ -9,6 +9,18 @@ distances the site predicts.
 Results are cached in .rowinglevel_cache.json so the site is only hit once per
 unique (profile × performance) combination.  A minimum interval of 3 s is
 enforced between outbound requests.
+
+Cache lifecycle
+---------------
+The cache file is loaded once at app boot via ``init_cache()`` (called from
+``app.py``) into a module-level dict; if the file doesn't exist it is created
+with ``{}``.  All subsequent reads go through ``lookup_predictions()`` —
+synchronous, in-memory, no I/O.  Only cache misses invoke ``fetch_predictions()``
+which scrapes rowinglevel.com, mutates the in-memory dict, and persists to disk.
+
+``fetch_rowinglevel()`` synchronously serves whatever PB-category
+predictions are already cached; it only spawns an ``hd.task`` to scrape the
+subset of categories that are missing.
 """
 
 from __future__ import annotations
@@ -49,14 +61,38 @@ _LW_LIMIT_KG = {"Male": 72.5, "Female": 59.0}
 # Cache helpers
 # ---------------------------------------------------------------------------
 
+_CACHE: dict | None = None
 
-def _load_cache() -> dict:
+
+def init_cache() -> None:
+    """Load the on-disk cache into memory.  Creates the file (with ``{}``) if
+    it doesn't yet exist.  Call once at app boot, before any render runs."""
+    global _CACHE
     if _CACHE_PATH.exists():
         try:
-            return json.loads(_CACHE_PATH.read_text())
-        except Exception:
-            pass
-    return {}
+            _CACHE = json.loads(_CACHE_PATH.read_text())
+            if not isinstance(_CACHE, dict):
+                print(
+                    f"[rowinglevel] cache file {_CACHE_PATH} is not a JSON object; "
+                    "starting with empty in-memory cache (file preserved)."
+                )
+                _CACHE = {}
+        except Exception as e:
+            print(
+                f"[rowinglevel] failed to parse {_CACHE_PATH}: {e}; "
+                "starting with empty in-memory cache (file preserved)."
+            )
+            _CACHE = {}
+    else:
+        _CACHE = {}
+        _CACHE_PATH.write_text(json.dumps(_CACHE, indent=2))
+
+
+def get_cache() -> dict:
+    """Return the in-memory cache dict.  Lazily initializes if boot didn't."""
+    if _CACHE is None:
+        init_cache()
+    return _CACHE  # type: ignore[return-value]
 
 
 def _save_cache(data: dict) -> None:
@@ -67,6 +103,17 @@ def _cache_key(
     gender: str, age: int, weight_kg: float, dist_m: int, time_tenths: int
 ) -> str:
     return f"{gender.lower()}|{age}|{weight_kg:.1f}|{dist_m}|{time_tenths}"
+
+
+def lookup_predictions(
+    gender: str, age: int, weight_kg: float, dist_m: int, time_tenths: int
+) -> Optional[dict]:
+    """Synchronous in-memory cache lookup.  Returns the predictions dict if
+    cached, else ``None``.  No I/O, no scraping."""
+    entry = get_cache().get(_cache_key(gender, age, weight_kg, dist_m, time_tenths))
+    if entry is None:
+        return None
+    return entry.get("predictions")
 
 
 # ---------------------------------------------------------------------------
@@ -224,16 +271,20 @@ def _select_radio_by_label_and_value(page, label_text: str, value: str) -> bool:
     return False
 
 
-def async_fetch_rowinglevel(state, profile: dict, chart_workouts: list) -> dict:
+def fetch_rowinglevel(state, profile: dict, chart_workouts: list) -> dict:
     """
-    Launch (or resume) the background RowingLevel scrape.
-    Only fires when at_today and profile_complete; otherwise returns {}.
-    Uses a scope key derived from profile + PB hash so the task re-fires only
-    when its inputs change.
-    Returns rl_predictions (a dict — possibly empty).
+    Return RowingLevel predictions for each PB category.
+
+    Synchronously serves any predictions already in the in-memory cache.  Only
+    spawns a background ``hd.task`` to scrape the subset of PB categories that
+    are not yet cached; while that task is pending the function returns just
+    the cached subset so the chart never flashes empty when it has data to show.
+
+    Returns ``{}`` when the profile is incomplete.
     """
 
     import hyperdiv as hd
+    from datetime import date as _date
 
     if not profile_complete(profile):
         return {}
@@ -243,6 +294,9 @@ def async_fetch_rowinglevel(state, profile: dict, chart_workouts: list) -> dict:
         if profile["weight_unit"] == "lbs"
         else profile["weight"]
     )
+    gender = profile["gender"]
+    current_age = age_from_dob(profile.get("dob", ""))
+
     lbest: dict = {}
     lbest_anchor: dict = {}
     lbest_dates: dict = {}
@@ -258,42 +312,84 @@ def async_fetch_rowinglevel(state, profile: dict, chart_workouts: list) -> dict:
             lbest_anchor[c] = d
             lbest_dates[c] = w.get("date", "")
 
+    # Synchronous in-memory pass: resolve each PB category against the cache.
+    today = _date.today()
+    hits: dict = {}
+    miss_lbest: dict = {}
+    miss_anchor: dict = {}
+    miss_dates: dict = {}
+
+    for cat, pb_pace in lbest.items():
+        if cat in _RL_EXCLUDED_CATS:
+            continue
+        anchor_dist = lbest_anchor.get(cat)
+        if anchor_dist is None:
+            continue
+
+        perf_age = current_age
+        date_str = lbest_dates.get(cat, "")
+        if date_str:
+            try:
+                perf_date = _date.fromisoformat(date_str[:10])
+                years_ago = (today - perf_date).days // 365
+                perf_age = max(1, current_age - years_ago)
+            except Exception:
+                pass
+
+        time_tenths = round(pb_pace * anchor_dist / 500.0 * 10)
+        cached = lookup_predictions(
+            gender, perf_age, weight_kg, anchor_dist, time_tenths
+        )
+        if cached is not None:
+            hits[str(cat)] = cached
+        else:
+            miss_lbest[cat] = pb_pace
+            miss_anchor[cat] = anchor_dist
+            miss_dates[cat] = date_str
+
+    # All cached → return synchronously, no hd.task, no scope.
+    if not miss_lbest:
+        return hits
+
+    # Misses → spawn a background scrape only for the missing categories.
     lbest_hash = hashlib.md5(
         json.dumps(sorted((str(k), round(v, 2)) for k, v in lbest.items())).encode()
     ).hexdigest()[:8]
+    profile_key = hashlib.md5(
+        json.dumps(
+            (
+                profile.get("gender", ""),
+                current_age,
+                profile.get("weight", 0.0),
+                profile.get("weight_unit", "kg"),
+            )
+        ).encode()
+    ).hexdigest()[:10]
+    scope_key = f"rl_{profile_key}_{lbest_hash}"
 
-    key = (
-        profile.get("gender", ""),
-        age_from_dob(profile.get("dob", "")),
-        profile.get("weight", 0.0),
-        profile.get("weight_unit", "kg"),
-    )
-    key = hashlib.md5(json.dumps(key).encode()).hexdigest()[:10]
-
-    scope_key = f"rl_{key}_{lbest_hash}"
-
-    rl_predictions = {}
     with hd.scope(scope_key):
         rl_task = hd.task()
 
-        def _do_scrape(gender, current_age, wkg, lb, lb_anchor, lb_dates):
+        def _do_scrape(gender_, age_, wkg, lb, lb_anchor, lb_dates):
             return fetch_all_pb_predictions(
-                [], lb, lb_anchor, gender, current_age, wkg, lbest_dates=lb_dates
+                [], lb, lb_anchor, gender_, age_, wkg, lbest_dates=lb_dates
             )
 
+        print("FETCHING ROWING LEVEL ")
         rl_task.run(
             _do_scrape,
-            profile["gender"],
-            age_from_dob(profile.get("dob", "")),
+            gender,
+            current_age,
             weight_kg,
-            lbest,
-            lbest_anchor,
-            lbest_dates,
+            miss_lbest,
+            miss_anchor,
+            miss_dates,
         )
         if rl_task.done and rl_task.result:
-            rl_predictions = rl_task.result
+            print("ROWING LEVEL DONE")
+            return {**hits, **rl_task.result}
 
-    return rl_predictions
+    return hits
 
 
 def fetch_predictions(
@@ -310,10 +406,9 @@ def fetch_predictions(
     Uses Playwright headless Chromium because the form uses action="#results"
     (a client-side JS anchor) — a plain HTTP POST returns the homepage.
     """
-    cache = _load_cache()
-    key = _cache_key(gender, age, weight_kg, dist_m, time_tenths)
-    if key in cache:
-        return cache[key].get("predictions")
+    cached = lookup_predictions(gender, age, weight_kg, dist_m, time_tenths)
+    if cached is not None:
+        return cached
 
     _rate_limit()
 
@@ -602,7 +697,10 @@ def fetch_predictions(
             d: p for d, p in predictions.items() if d not in _RL_EXCLUDED_PRED_DISTS
         }
 
-        cache[key] = {"predictions": predictions}
+        cache = get_cache()
+        cache[_cache_key(gender, age, weight_kg, dist_m, time_tenths)] = {
+            "predictions": predictions
+        }
         _save_cache(cache)
         print(f"[rowinglevel] Got {len(predictions)} predictions for dist={dist_m}m")
         return predictions
