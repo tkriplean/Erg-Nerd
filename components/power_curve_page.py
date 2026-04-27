@@ -260,7 +260,7 @@ def _chart_section(
                 sim_command=sim_command,
                 sim_speed=state.sim_speed,
                 timeline_min=0,
-                timeline_max=max(1, total_days - 1),
+                timeline_max=max(1, total_days),
                 timeline_start_date=sim_start.isoformat(),
                 timeline_annotations=sb_annotations,
             )

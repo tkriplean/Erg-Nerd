@@ -1820,7 +1820,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
 
   function applyBundle(bundle) {
     cachedBundle     = bundle;
-    currentDay       = props.timeline_max + 1;
+    currentDay       = props.timeline_max;
     lastKfDay        = -1;
     pbBadgeCountdown = 0;
     pbBadgeLabels    = [];
@@ -1962,7 +1962,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
 
   function stopAnimation() {
     pauseAnimation();
-    currentDay = props.timeline_max + 1;
+    currentDay = props.timeline_max;
     lastKfDay  = -1;
   }
 
@@ -1973,7 +1973,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
   }
 
   /** Like tick() but does not advance currentDay (used for seek). */
-  function tick_noadvance() {
+  function tick_noadvance(initializing=false) {
     if (!cachedBundle) return;
     const bundle   = cachedBundle;
     const showW    = props.show_watts;
@@ -2007,10 +2007,12 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     chartInstance.config._canvas_labels = allCanvasLabels;
     chartInstance.update("none");
     tlSetThumb(currentDay);
-    ctx.updateProp("sim_day_out", currentDay);
+
+    if (!initializing)
+      ctx.updateProp("sim_day_out", currentDay);
   }
 
-  function handleSimCommand(command) {
+  function handleSimCommand(command, initializing=false) {
     if (!command) return;
     if (command === "play") {
       // "play" is authoritative: start animation and confirm play state.
@@ -2031,7 +2033,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
       // page, when a cached bundle is applied with sim_command="stop".
       isPlaying = false;
       stopAnimation();
-      if (cachedBundle) tick_noadvance();
+      if (cachedBundle) tick_noadvance(initializing);
     }
     // handleSimCommand does NOT send sim_playing_out — only user button clicks do.
     updatePlayButton();
@@ -2075,7 +2077,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     if (!cachedBundle || cachedBundle.bundle_key !== props.sim_bundle.bundle_key) {
       applyBundle(props.sim_bundle);
     }
-    handleSimCommand(props.sim_command);
+    handleSimCommand(props.sim_command, true);
   }
 
   ctx.onPropUpdate((propName, propValue) => {
