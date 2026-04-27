@@ -617,6 +617,7 @@ def build_svg(theme: str = "light") -> str:
 # ---------------------------------------------------------------------------
 
 
+@hd.cached
 def ergnerd_animation(width: int = 20, theme: str | None = None) -> None:
     """
     Render the animated rowing logo as a HyperDiv image component.
