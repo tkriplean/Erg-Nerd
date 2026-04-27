@@ -126,6 +126,7 @@ from services.rowing_utils import (
     compute_pace,
     RANKED_DISTANCES,
     RANKED_TIMES,
+    compute_watts,
 )
 from components.concept2_sync import sync_workouts
 from components.profile_page import get_profile
