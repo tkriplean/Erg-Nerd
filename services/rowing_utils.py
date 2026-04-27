@@ -212,6 +212,19 @@ def workout_cat_key(r: dict) -> Optional[tuple]:
     return None
 
 
+# Average SPM cutoff for a "30 r20" piece — 20.5 allows a small rounding margin
+# around the canonical "stroke rate 20 or less" definition.
+R20_SPM_THRESHOLD = 20.5
+
+
+def is_30r20(workout: dict) -> bool:
+    """True when a workout is a 30-minute piece rowed at avg SPM ≤ 20.5."""
+    if workout.get("time") != 18000:  # 18000 tenths == 30 min
+        return False
+    spm = workout.get("stroke_rate") or 0
+    return 0 < spm <= R20_SPM_THRESHOLD
+
+
 def apply_best_only(results: list, by_season: bool = False) -> list:
     """
     Keep the best result per ranked category, sorted by category order.

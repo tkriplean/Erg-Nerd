@@ -54,6 +54,7 @@ from services.rowing_utils import (
     compute_pace,
     compute_watts,
     age_from_dob,
+    is_30r20,
 )
 from services.formatters import format_time, fmt_split
 from services.stroke_utils import (
@@ -99,12 +100,19 @@ from components.shared_ui import global_filter_ui, header_dropdown
 _DEFAULT_EVENT_TYPE = "dist"
 _DEFAULT_EVENT_VALUE = 2000
 
+# Race-Page-only pseudo-event: 30 minutes capped at avg SR ≤ 20.5.
+# Not added to RANKED_TIMES so it stays invisible to other pages.
+EVENT_TYPE_R20 = "time_r20"
+EVENT_VALUE_R20 = 18000  # 30 min, in tenths
+
 
 # ── Event formatting ──────────────────────────────────────────────────────────
 
 
 def _fmt_event(etype: str, evalue: int) -> str:
     """Return a compact display string for a ranked event (e.g. '2k', '30 min')."""
+    if etype == EVENT_TYPE_R20:
+        return "30 r20"
     if etype == "dist":
         m = evalue
         if m >= 1000:
@@ -117,6 +125,8 @@ def _fmt_event(etype: str, evalue: int) -> str:
 
 def _fmt_event_long(etype: str, evalue: int) -> str:
     """Return the canonical display label from RANKED_DISTANCES / RANKED_TIMES."""
+    if etype == EVENT_TYPE_R20:
+        return "30 r20"
     if etype == "dist":
         return next(
             (lbl for d, lbl in RANKED_DISTANCES if d == evalue),
@@ -149,6 +159,13 @@ def _event_workouts(workouts: list, etype: str, evalue: int, machine: str) -> li
         if etype == "dist" and d == evalue:
             out.append(w)
         elif etype == "time" and w.get("time") == evalue and d not in RANKED_DIST_SET:
+            out.append(w)
+        elif (
+            etype == EVENT_TYPE_R20
+            and w.get("time") == evalue
+            and d not in RANKED_DIST_SET
+            and is_30r20(w)
+        ):
             out.append(w)
     return out
 
@@ -455,6 +472,7 @@ def race_page(ctx) -> None:
 
     # ── Compute available events ──────────────────────────────────────────────
     event_counts: dict = {}
+    r20_count = 0
     for w in rankable_efforts:
         d = w.get("distance") or 0
         t = w.get("time")
@@ -462,18 +480,34 @@ def race_page(ctx) -> None:
             event_counts[("dist", d)] = event_counts.get(("dist", d), 0) + 1
         elif t in RANKED_TIME_SET and d not in RANKED_DIST_SET:
             event_counts[("time", t)] = event_counts.get(("time", t), 0) + 1
+        if is_30r20(w) and d not in RANKED_DIST_SET:
+            r20_count += 1
 
     available_events: list = []
     for dist, _ in RANKED_DISTANCES:
         if event_counts.get(("dist", dist), 0) > 0:
             available_events.append(("dist", dist))
+    r20_added = False
     for tenths, _ in RANKED_TIMES:
         if event_counts.get(("time", tenths), 0) > 0:
             available_events.append(("time", tenths))
+            if tenths == 18000 and r20_count > 0:
+                available_events.append((EVENT_TYPE_R20, EVENT_VALUE_R20))
+                r20_added = True
+    # Surface r20 even when there are no other 30-min pieces in the field.
+    if r20_count > 0 and not r20_added:
+        available_events.append((EVENT_TYPE_R20, EVENT_VALUE_R20))
 
     # Default to first available if current selection has no data
     if available_events and (event_type, event_value) not in available_events:
         event_type, event_value = available_events[0]
+
+    # The "30 r20" pseudo-event is used for filtering and labelling only.
+    # Downstream code (race chart, WR lookup, PB selection) treats it as a
+    # plain time event so existing time-event logic runs unchanged.
+    is_r20_event = event_type == EVENT_TYPE_R20
+    ds_event_type = "time" if is_r20_event else event_type
+    ds_event_value = event_value
 
     # ── Derived workout sets ───────────────────────────────────────────────────
     # Full event scope: every qualifying workout for the event + global filters.
@@ -489,7 +523,7 @@ def race_page(ctx) -> None:
     # PB identification
     pb_id: int | None = None
     if racing_workouts:
-        if event_type == "dist":
+        if ds_event_type == "dist":
             pb = min(
                 (w for w in racing_workouts if w.get("time")),
                 key=lambda w: w["time"],
@@ -534,7 +568,8 @@ def race_page(ctx) -> None:
     # ── World Record ghost boat ────────────────────────────────────────────────
     # Available only when: profile is complete, machine filter is rower (WR
     # records are RowErg only), and the user has enabled the toggle.
-    _wr_available = profile_complete(profile)
+    # 30 r20 has no Concept2 world record, so the ghost lane is suppressed.
+    _wr_available = profile_complete(profile) and not is_r20_event
 
     # Compute the profile key regardless of toggle state so UI status text
     # can reference it when the checkbox is visible.
@@ -564,10 +599,10 @@ def race_page(ctx) -> None:
 
         # Build the WR boat if we have a record for the selected event.
         if state.wr_records_key == _wr_key:
-            _rec = state.wr_records.get((event_type, event_value))
+            _rec = state.wr_records.get((ds_event_type, ds_event_value))
             if _rec is not None:
                 _rec_val = _rec["result"] if isinstance(_rec, dict) else _rec
-                _wr_boat = build_wr_boat(event_type, event_value, _rec_val)
+                _wr_boat = build_wr_boat(ds_event_type, ds_event_value, _rec_val)
 
     # Prepend the WR boat so it occupies the first lane and is always visible.
     if _wr_boat is not None:
@@ -650,8 +685,8 @@ def race_page(ctx) -> None:
             # user ticks the checkbox; the lane itself only requires profile.
             _wr_chart = RaceChart(
                 races=races_data,
-                event_type=event_type,
-                event_value=event_value,
+                event_type=ds_event_type,
+                event_value=ds_event_value,
                 is_dark=is_dark,
                 wr_available=_wr_available,
                 wr_requested=state.show_wr_boat,
@@ -667,7 +702,7 @@ def race_page(ctx) -> None:
             #   1. Holder's name + category + record + date.
             #   2. Note that the WR lane rows even splits.
             if state.show_wr_boat and _wr_boat is not None and isinstance(_rec, dict):
-                _wr_caption(event_type, event_value, _rec)
+                _wr_caption(ds_event_type, ds_event_value, _rec)
 
         with hd.box(gap=1, align="center"):
             with hd.h2():
