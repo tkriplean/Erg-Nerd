@@ -28,6 +28,7 @@ because they are arbitrary Python objects that live purely server-side
 (BaseState is ``collect=False``).
 """
 
+import time
 from typing import Optional
 
 import hyperdiv as hd
@@ -39,6 +40,10 @@ class AppContext(hd.BaseState):
     user_id = hd.Prop(hd.String, "")
     display_name = hd.Prop(hd.String, "")
     client = hd.Prop(hd.Any, None)  # Concept2Client | None
+    # Unix timestamp at which ``client``'s access token expires.  Owned by
+    # ``populate_owner`` so it can short-circuit per-render Concept2Client
+    # construction when the cached token is still valid.
+    token_expires_at = hd.Prop(hd.Float, 0.0)
     # Workout snapshot — populated once per session.
     # Owner mode: written by ``concept2_sync`` after the API sync completes.
     # Public mode: written by ``populate_public`` from disk-stored snapshots.
@@ -59,30 +64,38 @@ class AppContext(hd.BaseState):
         return self.mode == "public"
 
 
-def _client_auth(client) -> str:
-    """Extract a Concept2Client's Authorization header for equality checks.
+def populate_owner(user_id: str, display_name: str = "") -> bool:
+    """Populate AppContext for owner mode.  Returns True on success; False if
+    no valid token exists for ``user_id`` (caller should clear localStorage
+    and show the login view).
 
-    ``get_client`` returns a fresh ``Concept2Client`` instance every render;
-    comparing object identity would always differ and trip an infinite
-    re-render loop. The auth header changes only on token refresh.
+    Fast path: when the same user is already populated and the cached
+    ``ctx.client``'s token has not yet expired, this is an O(1) timestamp
+    compare — no disk read, no httpx Client construction.
+
+    Cold path: loads (and refreshes if expired) the OAuth token from disk
+    via ``get_valid_token`` and constructs a fresh ``Concept2Client``.  The
+    new token's expiry is recorded on ``ctx.token_expires_at`` so subsequent
+    renders take the fast path until the access token actually rotates.
     """
-    if client is None:
-        return ""
-    try:
-        return str(client._http.headers.get("Authorization", ""))
-    except Exception:
-        return ""
+    from services.concept2 import Concept2Client, get_valid_token
 
-
-def populate_owner(client, user_id: str, display_name: str = "") -> None:
-    """Populate AppContext for owner mode. Idempotent — only writes props
-    when the owning user changes or the access token has been refreshed."""
     ctx = AppContext()
     uid = str(user_id)
     same_user = ctx.mode == "owner" and ctx.user_id == uid
-    same_token = same_user and _client_auth(ctx.client) == _client_auth(client)
-    if same_token:
-        return
+
+    # Fast path: cached client whose token is still valid (60s safety margin
+    # mirrors ``services.concept2.is_token_expired``).
+    if same_user and ctx.client is not None and time.time() < ctx.token_expires_at - 60:
+        return True
+
+    token_data = get_valid_token(uid)
+    if token_data is None:
+        return False
+
+    expires_at = float(token_data.get("saved_at", 0)) + float(
+        token_data.get("expires_in", 0)
+    )
     ctx.mode = "owner"
     ctx.user_id = uid
     if not same_user:
@@ -92,7 +105,9 @@ def populate_owner(client, user_id: str, display_name: str = "") -> None:
         ctx.all_seasons = []
         ctx.all_machines = []
         ctx.public_profile = None
-    ctx.client = client
+    ctx.client = Concept2Client(token_data["access_token"], user_id=uid)
+    ctx.token_expires_at = expires_at
+    return True
 
 
 def populate_public(user_id: str) -> bool:
@@ -127,6 +142,7 @@ def populate_public(user_id: str) -> bool:
     ctx.user_id = uid
     ctx.display_name = profile.get("display_name") or "Rower"
     ctx.client = None
+    ctx.token_expires_at = 0.0
     ctx.workouts_dict = workouts_dict
     ctx.sorted_workouts = sorted_workouts
     ctx.all_seasons, ctx.all_machines = derive_filter_metadata(workouts_dict)

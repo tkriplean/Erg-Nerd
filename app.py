@@ -34,7 +34,6 @@ from services.concept2 import (
     exchange_code,
     extract_c2_profile,
     get_authorization_url,
-    get_client,
     get_server_url,
     parse_callback_query,
     save_token,
@@ -534,14 +533,14 @@ def _public_404_view(user_id: str | None = None) -> None:
 def main() -> None:
     from pyinstrument import Profiler
 
-    if False and PROFILE_ENABLE:
+    if True and PROFILE_ENABLE:
         profiler = Profiler()
         profiler.start()
 
     with profile_block("main-render"):
         _main_body()
 
-    if False and PROFILE_ENABLE:
+    if True and PROFILE_ENABLE:
         profiler.stop()
         profiler.print()
 
@@ -600,16 +599,16 @@ def _main_body() -> None:
         _login_view()
         return
 
-    # Load token and run the app
+    # Load token and run the app.  ``populate_owner`` owns the token →
+    # Concept2Client lifecycle and short-circuits on subsequent renders when
+    # the cached token is still valid.
     user_id = ls_uid.result
-    client = get_client(user_id)
-    if client is None:
+    if not populate_owner(user_id):
         # Token file missing or corrupt — clear stale user_id and show login
         hd.local_storage.remove_item("c2_user_id")
         _login_view()
         return
 
-    populate_owner(client, user_id)
     _dashboard_view(app_state)
 
 
