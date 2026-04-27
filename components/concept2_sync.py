@@ -181,9 +181,9 @@ def concept2_sync(client) -> None:
             workouts_dict.values(), key=lambda r: r.get("date", ""), reverse=True
         )
         if not sync_state.written:
-            # Write real data only — synthetic workouts must never reach localStorage.
-            print("SAVING WORKOUTS TO LOCAL STORAGE")
-            hd.local_storage.set_item("workouts", compress_workouts(workouts_dict))
+            if workouts_dict != sync_state.initial_workouts:
+                # Write real data only — synthetic workouts must never reach localStorage.
+                hd.local_storage.set_item("workouts", compress_workouts(workouts_dict))
             sync_state.written = True
 
         # Push-on-sync: if the user has opted in (profile.public=True), mirror
