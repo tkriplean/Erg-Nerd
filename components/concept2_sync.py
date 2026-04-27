@@ -5,8 +5,20 @@ Render-top helpers that any Page can call.  Each handles its own lifecycle
 (load, fetch, cache, progress/loading UI) so the caller gets the ready data
 back or a loading sentinel.
 
-    concept2_sync(client) -> (workouts_dict, sorted_workouts) | None
-        Load, sync, and persist the user's own workout history.
+    concept2_sync(client) -> None
+        Load, sync, and persist the user's own workout history.  Called once
+        per session from ``app.py:_dashboard_view`` (owner mode only); writes
+        the resulting ``(workouts_dict, sorted_workouts)`` into
+        ``AppContext`` and renders progress / loading UI inline at the
+        call site while the API sync runs.  No-op on subsequent renders
+        once the snapshot is cached on the context.
+
+    sync_workouts() -> (workouts_dict, sorted_workouts) | None
+        Pure read of the cached snapshot from ``AppContext``.  Both modes
+        write into the same slots so this helper does not branch on mode.
+
+    get_all_workouts() -> (workouts_dict, filtered_sorted_workouts) | None
+        ``sync_workouts()`` + ``GlobalFilters`` (season / machine).
 
     load_world_record_data(state, profile) -> wr_data | None
         Fetch world-class CP data for the user's (gender, age, weight) bucket.
@@ -21,9 +33,9 @@ back or a loading sentinel.
         Queue-with-progress fetcher (race page).  Owner: one-at-a-time API
         fetch; public: synchronous disk reads from .public_profiles.
 
-The mode-aware helpers (``get_all_workouts``, ``sync_workouts``,
-``strokes_for``, ``strokes_batch``) read mode/user_id/client from
-``components.app_context.AppContext`` rather than taking a ``ctx`` argument.
+The mode-aware helpers (``strokes_for``, ``strokes_batch``) read
+mode/user_id/client from ``components.app_context.AppContext`` rather than
+taking a ``ctx`` argument.
 
 The stroke helpers store **raw** Concept2 API strokes
 (``[{t: tenths, d: decimeters, p, spm, hr, …}]``) — workout_page consumes
@@ -48,7 +60,7 @@ from services.concept2_records import (
     weight_class_str as wr_weight_class_str,
     fetch_wr_data,
 )
-from services.rowing_utils import age_from_dob, get_season
+from services.rowing_utils import age_from_dob, derive_filter_metadata, get_season
 
 from services.global_state import GlobalFilters
 from components.app_context import AppContext
@@ -65,7 +77,6 @@ def _fmt_month_year(date_str: str) -> str:
 def get_all_workouts():
     result = sync_workouts()
     if result is None:
-        hd.box(padding=2, min_height="80vh")
         return None
     workouts_dict, all_workouts = result
 
@@ -88,23 +99,32 @@ def get_all_workouts():
 
 def sync_workouts() -> tuple | None:
     """
-    Return (workouts_dict, sorted_workouts) for the active AppContext.
+    Return (workouts_dict, sorted_workouts) cached on ``AppContext``, or
+    ``None`` if the snapshot has not yet been populated.
 
-    Owner mode: delegate to ``concept2_sync(client)`` (fetches + syncs).
-    Public mode: return the pre-loaded snapshot the dashboard wired in from
-    ``services.public_profiles`` — no I/O, no sync task.
+    Owner mode: ``app.py:_dashboard_view`` calls ``concept2_sync(client)``
+    once per session to populate the slots.  Public mode: ``populate_public``
+    pre-fills them from ``services.public_profiles``.  Either way this is a
+    pure read — no I/O, no sync task.
     """
     ctx = AppContext()
-    if ctx.mode == "public":
-        return ctx.public_workouts_dict, ctx.public_sorted_workouts
-    return concept2_sync(ctx.client)
+    if ctx.workouts_dict is None:
+        return None
+    return ctx.workouts_dict, ctx.sorted_workouts
 
 
-def concept2_sync(client) -> tuple | None:
+def concept2_sync(client) -> None:
     """
-    Load, sync, and persist workout data.  Returns (workouts_dict, sorted_list)
-    when ready, or None while the component is still loading.
+    Load, sync, and persist workout data; write the result into
+    ``AppContext.workouts_dict`` / ``sorted_workouts``.  Called once per
+    session from ``app.py:_dashboard_view``.  Renders progress / loading UI
+    inline at the call site while the API sync runs.  No-op on subsequent
+    renders once the snapshot is cached on the context.
     """
+    ctx = AppContext()
+    if ctx.workouts_dict is not None:
+        return  # Already synced this session.
+
     # ── Step 1: one-time localStorage read ───────────────────────────────────
     sync_state = hd.state(
         written=False,
@@ -125,7 +145,7 @@ def concept2_sync(client) -> tuple | None:
         if not ls_wkts.done or not ls_profile.done:
             with hd.box(align="center", padding=4):
                 hd.spinner()
-            return None
+            return
         sync_state.initial_workouts = (
             decompress_workouts(ls_wkts.result) if ls_wkts.result else {}
         )
@@ -181,8 +201,15 @@ def concept2_sync(client) -> tuple | None:
                 from services.synthetic_data import augment_with_synthetic
 
                 sync_state.synth_cache = augment_with_synthetic(workouts_dict)
-            return sync_state.synth_cache
-        return workouts_dict, sorted_workouts
+            ctx.workouts_dict, ctx.sorted_workouts = sync_state.synth_cache
+            ctx.all_seasons, ctx.all_machines = derive_filter_metadata(
+                ctx.workouts_dict
+            )
+            return
+        ctx.workouts_dict = workouts_dict
+        ctx.sorted_workouts = sorted_workouts
+        ctx.all_seasons, ctx.all_machines = derive_filter_metadata(workouts_dict)
+        return
 
     # Loading UI
     if task.running:
@@ -207,14 +234,11 @@ def concept2_sync(client) -> tuple | None:
                         font_color="neutral-400",
                         font_size="small",
                     )
-        return None
+        return
 
     # Error UI
     if task.error:
         hd.alert(f"Error loading workouts: {task.error}", variant="danger", opened=True)
-        return None
-
-    return None
 
 
 # ---------------------------------------------------------------------------

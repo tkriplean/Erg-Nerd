@@ -443,8 +443,19 @@ def _dashboard_view(app_state, path_suffix: str | None = None) -> None:
                             hd.local_storage.remove_item("profile")
                             loc.go(path="/")
 
+        # ── One-time workout sync ─────────────────────────────────────────
+        # Owner mode: fire concept2_sync exactly once per session (it bails
+        # immediately on subsequent renders once ctx.workouts_dict is set).
+        # Public mode: populate_public has already filled the snapshot.
+        if not is_public:
+            concept2_sync(ctx.client)
+
+        if not is_public and ctx.workouts_dict is None:
+            # Loading / progress UI rendered inline by concept2_sync above —
+            # skip the page dispatch until the snapshot is ready.
+            pass
         # ── Session detail overlay ─────────────────────────────────────────
-        if in_session:
+        elif in_session:
             try:
                 session_id = int(active_path.split("/")[2])
             except (IndexError, ValueError):

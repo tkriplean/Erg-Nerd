@@ -3,14 +3,17 @@ Render-time application context, kept in a per-connection ``@hd.global_state``.
 
 The dashboard has two modes:
 
-- **Owner mode** — the logged-in user browsing their own data. Pages call
-  ``concept2_sync(ctx.client)`` to load and sync workouts; ``get_profile()``
-  pulls the profile from localStorage.
+- **Owner mode** — the logged-in user browsing their own data. ``app.py``
+  calls ``concept2_sync(ctx.client)`` once per session inside
+  ``_dashboard_view``; the result is cached on ``ctx.workouts_dict`` /
+  ``ctx.sorted_workouts``. ``get_profile()`` pulls the profile from
+  localStorage.
 
 - **Public mode** — anyone (no login required) viewing someone else's
   opt-in public profile at ``/u/{user_id}``. There is no ``Concept2Client``;
   ``app.py`` pre-loads workouts and profile from
-  ``services.public_profiles`` before constructing the context. Pages call
+  ``services.public_profiles`` into the same ``ctx.workouts_dict`` /
+  ``ctx.sorted_workouts`` slots before rendering the dashboard. Pages call
   ``sync_workouts()`` / ``get_profile()`` which short-circuit to the
   pre-loaded values with no I/O.
 
@@ -20,9 +23,9 @@ viewers do not share state. Pages call ``AppContext()`` from anywhere to
 read the active mode, user_id, client, etc. — no need to thread ``ctx``
 through every signature.
 
-The ``client`` and the public-mode pre-loaded snapshots are stored as
-``hd.Any`` props because they are arbitrary Python objects that live purely
-server-side (BaseState is ``collect=False``).
+The ``client`` and the workout snapshot props are stored as ``hd.Any``
+because they are arbitrary Python objects that live purely server-side
+(BaseState is ``collect=False``).
 """
 
 from typing import Optional
@@ -36,9 +39,15 @@ class AppContext(hd.BaseState):
     user_id = hd.Prop(hd.String, "")
     display_name = hd.Prop(hd.String, "")
     client = hd.Prop(hd.Any, None)  # Concept2Client | None
-    # Public-mode only: pre-loaded from services.public_profiles.
-    public_workouts_dict = hd.Prop(hd.Any, None)
-    public_sorted_workouts = hd.Prop(hd.Any, None)
+    # Workout snapshot — populated once per session.
+    # Owner mode: written by ``concept2_sync`` after the API sync completes.
+    # Public mode: written by ``populate_public`` from disk-stored snapshots.
+    workouts_dict = hd.Prop(hd.Any, None)
+    sorted_workouts = hd.Prop(hd.Any, None)
+    # Filter-UI metadata derived from ``workouts_dict`` at population time;
+    # consumed by ``components.shared_ui.global_filter_ui``.
+    all_seasons = hd.Prop(hd.List(hd.String), [])
+    all_machines = hd.Prop(hd.List(hd.String), [])
     public_profile = hd.Prop(hd.Any, None)
 
     @property
@@ -78,8 +87,10 @@ def populate_owner(client, user_id: str, display_name: str = "") -> None:
     ctx.user_id = uid
     if not same_user:
         ctx.display_name = display_name or ""
-        ctx.public_workouts_dict = None
-        ctx.public_sorted_workouts = None
+        ctx.workouts_dict = None
+        ctx.sorted_workouts = None
+        ctx.all_seasons = []
+        ctx.all_machines = []
         ctx.public_profile = None
     ctx.client = client
 
@@ -97,6 +108,7 @@ def populate_public(user_id: str) -> bool:
         load_public_profile,
         load_public_workouts,
     )
+    from services.rowing_utils import derive_filter_metadata
 
     if not pp_exists(user_id):
         return False
@@ -115,8 +127,9 @@ def populate_public(user_id: str) -> bool:
     ctx.user_id = uid
     ctx.display_name = profile.get("display_name") or "Rower"
     ctx.client = None
-    ctx.public_workouts_dict = workouts_dict
-    ctx.public_sorted_workouts = sorted_workouts
+    ctx.workouts_dict = workouts_dict
+    ctx.sorted_workouts = sorted_workouts
+    ctx.all_seasons, ctx.all_machines = derive_filter_metadata(workouts_dict)
     ctx.public_profile = profile
     return True
 

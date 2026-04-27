@@ -1,9 +1,7 @@
 import hyperdiv as hd
-from services.local_storage_compression import decompress_workouts
 from services.formatters import machine_label
-from services.rowing_utils import get_season
 from services.global_state import GlobalFilters
-from config import SYNTHETIC_MODE
+from components.app_context import AppContext
 
 
 def global_filter_ui() -> None:
@@ -13,46 +11,13 @@ def global_filter_ui() -> None:
 
     gstate.excluded_seasons  tuple[str]  — seasons hidden globally
     gstate.machine           str         — "All" or a machine type string
-    all_seasons              list[str]   — sorted newest-first
-    machine_types            list[str]   — unique machine types across all workouts
+    all_seasons              list[str]   — sorted newest-first (from AppContext)
+    machine_types            list[str]   — unique machine types (from AppContext)
     """
-
-    # Determine the full season list and machine types from localStorage workouts
-    # so the filter UI can render even before any page has fetched data.
-    # We do a lightweight read here; concept2_sync() on the active page handles
-    # the full data load.
-
     gstate = GlobalFilters()
-
-    # if len(gstate.all_seasons) == 0:
-    _ls_wkts_meta = hd.local_storage.get_item("workouts")
-
-    all_seasons: list = []
-    machine_types: list = []
-    if len(all_seasons) == 0:
-        if _ls_wkts_meta.done and _ls_wkts_meta.result:
-            _wkts = decompress_workouts(_ls_wkts_meta.result)
-            _season_set: set = set()
-            _mtype_set: set = set()
-            for _w in _wkts.values():
-                _s = get_season(_w.get("date", ""))
-                if _s != "Unknown":
-                    _season_set.add(_s)
-                _mt = _w.get("type", "rower")
-                if _mt:
-                    _mtype_set.add(_mt)
-            all_seasons = sorted(_season_set, reverse=True)
-            # In synthetic mode the augmented machines (skierg, bike) are never
-            # written to localStorage, so inject them manually here.
-            if SYNTHETIC_MODE:
-                _mtype_set.update({"skierg", "bike"})
-            machine_types = sorted(_mtype_set)
-
-            gstate.all_seasons = all_seasons
-            gstate.all_machines = machine_types
-
-    machine_types = gstate.all_machines
-    all_seasons = gstate.all_seasons
+    ctx = AppContext()
+    all_seasons = ctx.all_seasons
+    machine_types = ctx.all_machines
 
     with hd.hbox(gap=1, align="center", min_height="30px"):
         # ── Season dropdown ────────────────────────────────────────────────────

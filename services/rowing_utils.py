@@ -456,6 +456,22 @@ def seasons_from(results: list) -> list:
     )
 
 
+def derive_filter_metadata(workouts_dict: dict) -> tuple[list[str], list[str]]:
+    """Derive (all_seasons newest-first, all_machines sorted) from a
+    workouts dict.  Skips workouts whose date can't be parsed into a season.
+    """
+    season_set: set[str] = set()
+    machine_set: set[str] = set()
+    for w in workouts_dict.values():
+        s = get_season(w.get("date", ""))
+        if s != "Unknown":
+            season_set.add(s)
+        mt = w.get("type", "rower")
+        if mt:
+            machine_set.add(mt)
+    return sorted(season_set, reverse=True), sorted(machine_set)
+
+
 # ---------------------------------------------------------------------------
 # Quality-filter passes
 # ---------------------------------------------------------------------------
