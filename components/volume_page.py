@@ -62,7 +62,7 @@ from services.heartrate_utils import (
     is_valid_hr,
 )
 from services.workout_quality import QUALITY_STYLE
-from components.profile_page import get_profile
+from components.app_context import get_profile
 from components.volume_chart_builder import build_volume_chart_config, get_period_rows
 from components.volume_chart_plugin import VolumeChart
 from components.hyperdiv_extensions import grid_box

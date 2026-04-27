@@ -54,8 +54,10 @@ from components.volume_page import volume_page
 from components.concept2_sync import concept2_sync
 from components.app_context import (
     AppContext,
+    get_profile,
     populate_owner,
     populate_public,
+    refresh_profile_if_stale,
     write_session_ls,
     clear_session_ls,
     _SESSION_LS_KEY,
@@ -322,16 +324,6 @@ def _dashboard_view(app_state, path_suffix: str | None = None) -> None:
     ctx = AppContext()
     is_public = ctx.mode == "public"
 
-    # Owner mode: fetch user profile for the display-name link. Public mode:
-    # ctx.display_name is pre-populated from the scrubbed public profile.
-    user_task = hd.task() if not is_public else None
-    if user_task is not None:
-
-        def fetch_user():
-            return ctx.client.get_user().get("data", {})
-
-        user_task.run(fetch_user)
-
     _theme = hd.theme()
     loc = hd.location()
 
@@ -399,17 +391,14 @@ def _dashboard_view(app_state, path_suffix: str | None = None) -> None:
                         font_size="small",
                         font_weight="semibold",
                     )
-                elif user_task.done and user_task.result:
-                    user = user_task.result
-                    first = user.get("first_name", "") or ""
-                    last = user.get("last_name", "") or ""
+                else:
+                    profile = get_profile()
                     display_name = (
-                        f"{first} {last}".strip() or user.get("username", "") or ""
+                        (profile.get("display_name") or "").strip()
+                        or (ctx.display_name or "").strip()
+                        or "Rower"
                     )
-                    profile_image = user.get("profile_image") or ""
-                    initials = (first[:1] + last[:1]).upper() or (
-                        (user.get("username") or "?")[:1].upper()
-                    )
+                    profile_image = profile.get("profile_image") or ""
 
                     with hd.dropdown(placement="bottom-end") as _user_dd:
                         with hd.button(
@@ -643,6 +632,10 @@ def _main_body() -> None:
         clear_session_ls()
         _login_view()
         return
+
+    # If the cached profile is older than the refresh TTL, kick off one
+    # keyed task to re-fetch /users/me and merge non-edited fields back in.
+    refresh_profile_if_stale()
 
     _dashboard_view(app_state)
 

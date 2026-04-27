@@ -24,6 +24,9 @@ Scrubbing rules
   ``dob`` via ``services.rowing_utils.age_from_dob`` at publish time and
   stored instead.
 - Email and Concept2-internal fields are never included.
+- App-only metadata (``fetched_at``, ``user_edited``, ``profile_image``)
+  is dropped — only the fields needed to render the public dashboard are
+  written.
 
 Ownership check
 ---------------
@@ -154,7 +157,9 @@ def _atomic_write_text(path: Path, data: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _scrub_profile(user_id: str, profile: dict, display_name: str) -> dict:
+def _scrub_profile(
+    user_id: str, profile: dict, display_name: Optional[str] = None
+) -> dict:
     """
     Narrow a raw localStorage profile dict to the public-safe schema.
     This is the ONLY place in the module that reads ``profile['dob']``.
@@ -162,6 +167,9 @@ def _scrub_profile(user_id: str, profile: dict, display_name: str) -> dict:
     Stores ``yob`` (year-of-birth, int) so the derived age stays accurate as
     time passes.  ``age`` is also written as a convenience snapshot at publish
     time — roughly the same PII as yob — but readers should prefer yob.
+
+    App-only metadata (``fetched_at``, ``user_edited``, ``profile_image``)
+    is intentionally not propagated.
     """
     dob = profile.get("dob", "") or ""
     yob: Optional[int] = None
@@ -182,10 +190,15 @@ def _scrub_profile(user_id: str, profile: dict, display_name: str) -> dict:
             mhr = int(mhr)
         except (TypeError, ValueError):
             mhr = None
+    resolved_display_name = (
+        (display_name or "").strip()
+        or (profile.get("display_name") or "").strip()
+        or "Rower"
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "user_id": str(user_id),
-        "display_name": display_name or "Rower",
+        "display_name": resolved_display_name,
         "yob": yob,
         "age": age if age > 0 else None,  # snapshot at publish time (legacy)
         "gender": profile.get("gender", "") or "",
@@ -202,8 +215,15 @@ def _scrub_profile(user_id: str, profile: dict, display_name: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def publish_profile(user_id: str, profile: dict, display_name: str) -> None:
-    """Write the scrubbed profile.json.  Requires owner authentication."""
+def publish_profile(
+    user_id: str, profile: dict, display_name: Optional[str] = None
+) -> None:
+    """Write the scrubbed profile.json.  Requires owner authentication.
+
+    ``display_name`` defaults to ``profile["display_name"]`` (now populated
+    from Concept2 at OAuth) so callers no longer need to thread it through
+    separately.  Pass an explicit value only to override.
+    """
     if not owner_is_authenticated(user_id):
         raise PermissionError(f"No token on file for user_id={user_id!r}")
     scrubbed = _scrub_profile(user_id, profile, display_name)
@@ -219,6 +239,8 @@ def publish_workouts(user_id: str, workouts_dict: dict) -> None:
         raise PermissionError(f"No token on file for user_id={user_id!r}")
     if not isinstance(workouts_dict, dict) or not workouts_dict:
         raise ValueError("workouts_dict is empty or not a dict")
+
+    print("PUBLISHING WORKOUTS")
     encoded = compress_workouts(workouts_dict)
     size = len(encoded.encode("utf-8"))
     if size > MAX_WORKOUTS_ZB64_BYTES:
@@ -233,9 +255,15 @@ def publish_workouts(user_id: str, workouts_dict: dict) -> None:
 
 
 def publish_all(
-    user_id: str, profile: dict, display_name: str, workouts_dict: dict
+    user_id: str,
+    profile: dict,
+    workouts_dict: dict,
+    display_name: Optional[str] = None,
 ) -> None:
-    """Convenience: publish_profile + publish_workouts in sequence."""
+    """Convenience: publish_profile + publish_workouts in sequence.
+
+    ``display_name`` is optional; falls back to ``profile["display_name"]``.
+    """
     publish_profile(user_id, profile, display_name)
     publish_workouts(user_id, workouts_dict)
 

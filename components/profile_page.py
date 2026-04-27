@@ -12,68 +12,72 @@ do not steal focus. Changes are persisted (LS write + ``ctx.profile``
 update) when the user clicks "Update"; radio-group fields (Gender, Weight
 Unit, Weight Class) save immediately on change since they never hold
 keyboard focus.
+
+Edit tracking
+-------------
+Every save records which user-editable fields actually changed in
+``profile["user_edited"]`` (a JSON-friendly list).  The stale-refresh path
+in ``components.app_context.refresh_profile_if_stale`` consults that list
+and refuses to overwrite any field the user has touched in this UI, so
+that periodic Concept2 re-fetches never clobber an in-app override.
+
+Display name
+------------
+``display_name`` and ``profile_image`` are read-only here — they're populated
+from ``/users/me`` at OAuth (and on stale refresh) by
+``services.concept2.extract_c2_profile``.  This page reads them directly
+from the profile dict (no per-render API call).
 """
 
 import hyperdiv as hd
 
 from services.rowing_utils import age_from_dob
 from services import public_profiles
-from components.app_context import AppContext, write_session_ls
+from components.app_context import (
+    AppContext,
+    get_profile,
+    write_session_ls,
+    _PROFILE_DEFAULTS,
+    _USER_EDITABLE_FIELDS,
+)
 
 
-# ---------------------------------------------------------------------------
-# Profile helpers
-# ---------------------------------------------------------------------------
-
-_PROFILE_DEFAULTS: dict = {
-    "gender": "",  # "" = not set; "Male" | "Female" when set
-    "dob": "",  # "YYYY-MM-DD" date of birth; "" = not set
-    "weight": 0.0,  # 0.0 = not set
-    "weight_unit": "kg",  # "kg" | "lbs"
-    "weight_class": "",  # "" = not set; "Heavyweight" | "Lightweight"
-    "max_heart_rate": None,  # None = not set
-    "public": False,  # True = profile + workouts published at /u/{user_id}
-}
+def _diff_user_edits(prev: dict, new: dict) -> list[str]:
+    """Return user-editable field names whose value differs between
+    ``prev`` and ``new``."""
+    diffs: list[str] = []
+    for key in _USER_EDITABLE_FIELDS:
+        if prev.get(key) != new.get(key):
+            diffs.append(key)
+    return diffs
 
 
-def _public_profile_to_local_shape(pub: dict) -> dict:
+def _persist_profile(new_user_inputs: dict) -> dict:
     """
-    Adapt a scrubbed server-side public profile dict into the localStorage
-    profile shape that the rest of the app consumes.
+    Merge buffered user inputs onto the existing profile, record any
+    changed fields in ``user_edited``, persist to LS + AppContext, and
+    return the merged profile.
 
-    The public profile stores ``yob`` (year-of-birth) rather than raw DOB —
-    same approximate PII as age, but stable as years pass.  Downstream code
-    asks for ``dob`` to derive age, so synthesize a mid-year ``dob``
-    (``{yob}-07-01``) that yields the correct age via ``age_from_dob``.
-
-    Schema-v1 profiles (pre-yob) fall back to the snapshot ``age`` field.
+    ``new_user_inputs`` carries only the values the form controls (the
+    seven user-editable fields plus ``public``).  Display fields and
+    refresh metadata are preserved from the existing profile.
     """
-    from datetime import date
+    ctx = AppContext()
+    prev = {**_PROFILE_DEFAULTS, **(ctx.profile or {})}
+    edited = list(prev.get("user_edited") or [])
+    new_edits = _diff_user_edits(prev, new_user_inputs)
+    for key in new_edits:
+        if key not in edited:
+            edited.append(key)
 
-    out = {**_PROFILE_DEFAULTS}
-    yob = pub.get("yob")
-    if isinstance(yob, int) and 1900 <= yob <= date.today().year:
-        out["dob"] = f"{yob}-07-01"
-    else:
-        age = pub.get("age")
-        if isinstance(age, int) and age > 0:
-            out["dob"] = f"{date.today().year - age}-07-01"
-    out["gender"] = pub.get("gender", "") or ""
-    out["weight"] = pub.get("weight") or 0.0
-    out["weight_unit"] = pub.get("weight_unit", "kg") or "kg"
-    out["weight_class"] = pub.get("weight_class", "") or ""
-    out["max_heart_rate"] = pub.get("max_heart_rate")
-    return out
-
-
-def get_profile() -> dict:
-    """
-    Return the active profile dict, with ``_PROFILE_DEFAULTS`` merged in so
-    callers can rely on every key being present. Reads from
-    ``AppContext.profile`` — populated at boot for both owner and public
-    modes, so this is a pure synchronous read.
-    """
-    return {**_PROFILE_DEFAULTS, **(AppContext().profile or {})}
+    merged = {
+        **prev,
+        **new_user_inputs,
+        "user_edited": edited,
+    }
+    ctx.profile = merged
+    write_session_ls(ctx.user_id, merged)
+    return merged
 
 
 def profile_page() -> None:
@@ -113,23 +117,12 @@ def profile_page() -> None:
         state.public = bool(p.get("public", False))
         state.loaded = True
 
-    # ── Display-name lookup (owner only) ─────────────────────────────────────
-    # Concept2 first name is used as the published display name. Public-mode
-    # profile_page is blocked upstream, so ctx.client is guaranteed non-None.
-    display_name = ""
-    if ctx.client is not None:
-        user_task = hd.task()
+    # ── Display name comes from the cached profile (no per-render fetch) ────
+    profile = get_profile()
+    display_name = (profile.get("display_name") or ctx.display_name or "").strip()
 
-        def _fetch_user():
-            return ctx.client.get_user().get("data", {})
-
-        user_task.run(_fetch_user)
-        if user_task.done and user_task.result:
-            u = user_task.result
-            display_name = (u.get("first_name") or u.get("username") or "").strip()
-
-    # ── Build the profile dict from buffered state ───────────────────────────
-    def _current_profile() -> dict:
+    # ── Build the user-input slice from buffered state ──────────────────────
+    def _current_inputs() -> dict:
         try:
             weight_val = float(state.weight) if state.weight else 0.0
         except ValueError:
@@ -147,14 +140,12 @@ def profile_page() -> None:
             "weight_unit": state.weight_unit,
             "weight_class": state.weight_class,
             "max_heart_rate": mhr,
-            "public": state.public,
+            "public": bool(state.public),
         }
 
-    # ── Save helper — updates ctx.profile + the combined session LS key ──────
+    # ── Save helper — diff, mark edits, persist to ctx.profile + LS ─────────
     def _save():
-        new_profile = _current_profile()
-        ctx.profile = new_profile
-        write_session_ls(ctx.user_id, new_profile)
+        _persist_profile(_current_inputs())
         state.dirty = False
 
     # ── Publish tasks (scoped by action key so rerenders don't refire) ───────
@@ -168,26 +159,26 @@ def profile_page() -> None:
             if publish_action.action_key.startswith("publish_all_"):
 
                 def _do_publish_all(uid, prof, dn, wkts):
-                    public_profiles.publish_all(uid, prof, dn, wkts)
+                    public_profiles.publish_all(uid, prof, wkts, display_name=dn)
 
                 if not pt.running and not pt.done:
                     pt.run(
                         _do_publish_all,
                         ctx.user_id,
-                        _current_profile(),
+                        get_profile(),
                         display_name or "Rower",
                         ctx.workouts_dict or {},
                     )
             elif publish_action.action_key.startswith("publish_profile_"):
 
                 def _do_publish_profile(uid, prof, dn):
-                    public_profiles.publish_profile(uid, prof, dn)
+                    public_profiles.publish_profile(uid, prof, display_name=dn)
 
                 if not pt.running and not pt.done:
                     pt.run(
                         _do_publish_profile,
                         ctx.user_id,
-                        _current_profile(),
+                        get_profile(),
                         display_name or "Rower",
                     )
             elif publish_action.action_key.startswith("unpublish_"):
@@ -423,7 +414,6 @@ def _save_via_state(state) -> None:
     """Persist the current buffered state to ``ctx.profile`` and the combined
     session LS key. Mirrors the inner ``_save`` closure in ``profile_page``
     but usable from helper scope."""
-    ctx = AppContext()
     try:
         weight_val = float(state.weight) if state.weight else 0.0
     except ValueError:
@@ -434,15 +424,15 @@ def _save_via_state(state) -> None:
             mhr = None
     except ValueError:
         mhr = None
-    new_profile = {
-        "gender": state.gender,
-        "dob": state.dob,
-        "weight": weight_val,
-        "weight_unit": state.weight_unit,
-        "weight_class": state.weight_class,
-        "max_heart_rate": mhr,
-        "public": bool(state.public),
-    }
-    ctx.profile = new_profile
-    write_session_ls(ctx.user_id, new_profile)
+    _persist_profile(
+        {
+            "gender": state.gender,
+            "dob": state.dob,
+            "weight": weight_val,
+            "weight_unit": state.weight_unit,
+            "weight_class": state.weight_class,
+            "max_heart_rate": mhr,
+            "public": bool(state.public),
+        }
+    )
     state.dirty = False

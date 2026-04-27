@@ -83,7 +83,7 @@ from services.concept2_rankings_index import (
 )
 
 from components.concept2_sync import get_all_workouts
-from components.profile_page import get_profile
+from components.app_context import get_profile
 from components.app_context import your
 from components.rank_chart_plugin import RankChart
 from components.rank_distribution import distribution_svg

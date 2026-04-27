@@ -59,7 +59,7 @@ from components.workout_table import (
     render_quality_cell,
     render_spread_cell,
 )
-from components.profile_page import get_profile
+from components.app_context import get_profile
 from services.heartrate_utils import (
     HR_ZONE_COLORS,
     HR_ZONE_NAMES,

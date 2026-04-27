@@ -133,7 +133,7 @@ from components.workout_table import (
     WorkoutTable,
     always_white,
 )
-from components.profile_page import get_profile
+from components.app_context import get_profile
 from components.shared_ui import global_filter_ui
 from components.spread_quality_legends import spread_quality_legends
 

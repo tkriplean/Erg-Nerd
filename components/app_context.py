@@ -33,6 +33,20 @@ separate localStorage keys, each requiring its own async fetch on every
 boot. They are now packed into a single JSON object under ``app_session``
 so the boot flow makes one round-trip. The helpers ``write_session_ls``
 and ``clear_session_ls`` keep the on-disk shape in sync with AppContext.
+
+Profile flow
+------------
+``get_profile()`` is the single canonical accessor for profile data.
+Components import it from this module (not from ``profile_page``) and
+treat it as a synchronous read — no ``hd.task`` required mid-session.
+
+The profile dict carries ``fetched_at`` (unix ts of last ``/users/me``)
+and ``user_edited`` (list of field names the user has explicitly edited
+in the Profile tab).  ``refresh_profile_if_stale`` consults these on each
+render: when the cached profile is older than ``_PROFILE_REFRESH_TTL``
+it spawns one keyed ``hd.task`` to re-fetch, then merges the result via
+``merge_refreshed_profile`` — which protects ``user_edited`` fields from
+being overwritten by Concept2.
 """
 
 import json
@@ -43,6 +57,36 @@ import hyperdiv as hd
 
 
 _SESSION_LS_KEY = "app_session"
+
+# Re-fetch ``/users/me`` and refresh non-edited profile fields after this
+# many seconds (~30 days).  The user's profile is otherwise sourced from
+# localStorage and never touched by the server.
+_PROFILE_REFRESH_TTL = 30 * 24 * 3600
+
+_PROFILE_DEFAULTS: dict = {
+    "gender": "",  # "" = not set; "Male" | "Female" when set
+    "dob": "",  # "YYYY-MM-DD" date of birth; "" = not set
+    "weight": 0.0,  # 0.0 = not set
+    "weight_unit": "kg",  # "kg" | "lbs"
+    "weight_class": "",  # "" = not set; "Heavyweight" | "Lightweight"
+    "max_heart_rate": None,  # None = not set
+    "public": False,  # True = profile + workouts published at /u/{user_id}
+    "display_name": "",  # Concept2 first_name (read-only in app)
+    "profile_image": "",  # Concept2 avatar URL (read-only in app)
+    "fetched_at": 0.0,  # Unix ts of last /users/me fetch (0 = never)
+    "user_edited": [],  # Field names the user has explicitly edited
+}
+
+# Fields the user can edit in the Profile tab.  Mirrored in
+# ``components.profile_page``; kept here for ``merge_refreshed_profile``.
+_USER_EDITABLE_FIELDS = (
+    "gender",
+    "dob",
+    "weight",
+    "weight_unit",
+    "weight_class",
+    "max_heart_rate",
+)
 
 
 @hd.global_state
@@ -58,7 +102,7 @@ class AppContext(hd.BaseState):
     # User profile dict — uniform shape across modes. Owner mode: stored
     # under the combined ``app_session`` localStorage key. Public mode:
     # adapted from the scrubbed server-side public profile via
-    # ``components.profile_page._public_profile_to_local_shape``.
+    # ``_public_profile_to_local_shape``.
     profile = hd.Prop(hd.Any, None)
     # Workout snapshot — populated once per session.
     # Owner mode: written by ``concept2_sync`` after the API sync completes.
@@ -101,6 +145,125 @@ def clear_session_ls() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Profile accessor + refresh helpers
+# ---------------------------------------------------------------------------
+
+
+def get_profile() -> dict:
+    """
+    Return the active profile dict, with ``_PROFILE_DEFAULTS`` merged in so
+    callers can rely on every key being present. Reads from
+    ``AppContext.profile`` — populated at boot for both owner and public
+    modes, so this is a pure synchronous read.
+    """
+    return {**_PROFILE_DEFAULTS, **(AppContext().profile or {})}
+
+
+def is_profile_stale(profile: Optional[dict]) -> bool:
+    """True when the cached profile has no ``fetched_at`` or it has aged
+    past ``_PROFILE_REFRESH_TTL``."""
+    if not profile:
+        return True
+    fetched_at = float(profile.get("fetched_at") or 0)
+    if fetched_at <= 0:
+        return True
+    return (time.time() - fetched_at) > _PROFILE_REFRESH_TTL
+
+
+def merge_refreshed_profile(local: dict, fresh: dict) -> dict:
+    """
+    Merge a freshly-fetched Concept2 profile into the locally-cached one.
+
+    Fields listed in ``local["user_edited"]`` are protected — the local
+    value wins.  Everything else is overwritten by the C2 value, including
+    the always-fresh display fields (``display_name``, ``profile_image``)
+    and refresh metadata (``fetched_at``).
+
+    ``user_edited`` and ``public`` are state owned by the app, never by
+    Concept2; they are preserved from ``local`` unconditionally.
+    """
+    edited = set(local.get("user_edited") or [])
+    merged = {**_PROFILE_DEFAULTS, **(local or {})}
+    for key, fresh_val in (fresh or {}).items():
+        if key in ("user_edited", "public"):
+            continue
+        if key in _USER_EDITABLE_FIELDS and key in edited:
+            continue
+        merged[key] = fresh_val
+    merged["user_edited"] = sorted(edited)
+    merged["public"] = bool(local.get("public", False))
+    return merged
+
+
+def refresh_profile_if_stale() -> None:
+    """
+    Owner-mode boot helper.  When the cached profile is stale, spawn one
+    keyed ``hd.task`` per session to fetch ``/users/me``, merge the result
+    via ``merge_refreshed_profile``, persist to localStorage, and update
+    AppContext.
+
+    No-op in public mode and when the profile is fresh.  Renders nothing.
+    """
+    ctx = AppContext()
+    if ctx.mode != "owner" or ctx.client is None or not ctx.user_id:
+        return
+    profile = ctx.profile or {}
+    if not is_profile_stale(profile):
+        return
+
+    from services.concept2 import extract_c2_profile
+
+    with hd.scope(f"profile_refresh_{ctx.user_id}"):
+        task = hd.task()
+        if not task.running and not task.done:
+            task.run(lambda: ctx.client.get_user().get("data", {}))
+        if task.done and not task.error and task.result:
+            fresh = extract_c2_profile(task.result)
+            merged = merge_refreshed_profile(profile, fresh)
+            # Avoid a write loop: only persist when something actually changed.
+            if merged != profile:
+                ctx.profile = merged
+                ctx.display_name = merged.get("display_name") or ctx.display_name
+                write_session_ls(ctx.user_id, merged)
+
+
+# ---------------------------------------------------------------------------
+# Public-profile shape adapter
+# ---------------------------------------------------------------------------
+
+
+def _public_profile_to_local_shape(pub: dict) -> dict:
+    """
+    Adapt a scrubbed server-side public profile dict into the localStorage
+    profile shape that the rest of the app consumes.
+
+    The public profile stores ``yob`` (year-of-birth) rather than raw DOB —
+    same approximate PII as age, but stable as years pass.  Downstream code
+    asks for ``dob`` to derive age, so synthesize a mid-year ``dob``
+    (``{yob}-07-01``) that yields the correct age via ``age_from_dob``.
+
+    Schema-v1 profiles (pre-yob) fall back to the snapshot ``age`` field.
+    """
+    from datetime import date
+
+    out = {**_PROFILE_DEFAULTS}
+    yob = pub.get("yob")
+    if isinstance(yob, int) and 1900 <= yob <= date.today().year:
+        out["dob"] = f"{yob}-07-01"
+    else:
+        age = pub.get("age")
+        if isinstance(age, int) and age > 0:
+            out["dob"] = f"{date.today().year - age}-07-01"
+    out["gender"] = pub.get("gender", "") or ""
+    out["weight"] = pub.get("weight") or 0.0
+    out["weight_unit"] = pub.get("weight_unit", "kg") or "kg"
+    out["weight_class"] = pub.get("weight_class", "") or ""
+    out["max_heart_rate"] = pub.get("max_heart_rate")
+    out["display_name"] = pub.get("display_name", "") or ""
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Population helpers
 # ---------------------------------------------------------------------------
 
@@ -131,6 +294,7 @@ def populate_owner(user_id: str, profile: Optional[dict] = None) -> bool:
     if same_user and ctx.client is not None and time.time() < ctx.token_expires_at - 60:
         if profile is not None:
             ctx.profile = profile
+            ctx.display_name = (profile.get("display_name") or "").strip()
         return True
 
     token_data = get_valid_token(uid)
@@ -143,13 +307,13 @@ def populate_owner(user_id: str, profile: Optional[dict] = None) -> bool:
     ctx.mode = "owner"
     ctx.user_id = uid
     if not same_user:
-        ctx.display_name = ""
         ctx.workouts_dict = None
         ctx.sorted_workouts = None
         ctx.all_seasons = []
         ctx.all_machines = []
         ctx.public_profile = None
     ctx.profile = profile or {}
+    ctx.display_name = ((profile or {}).get("display_name") or "").strip()
     ctx.client = Concept2Client(token_data["access_token"], user_id=uid)
     ctx.token_expires_at = expires_at
     return True
@@ -169,7 +333,6 @@ def populate_public(user_id: str) -> bool:
         load_public_workouts,
     )
     from services.rowing_utils import derive_filter_metadata
-    from components.profile_page import _public_profile_to_local_shape
 
     if not pp_exists(user_id):
         return False

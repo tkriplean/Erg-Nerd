@@ -129,7 +129,7 @@ from services.rowing_utils import (
     compute_watts,
 )
 from components.concept2_sync import sync_workouts
-from components.profile_page import get_profile
+from components.app_context import get_profile
 from services.rowing_utils import profile_complete
 from services.rowinglevel import fetch_rowinglevel
 

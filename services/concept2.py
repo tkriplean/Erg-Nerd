@@ -14,6 +14,15 @@ Token storage:
     .concept2_token_{user_id}.json
   Token refresh is handled automatically and saves back to the same user file.
 
+Profile caching:
+  ``/users/me`` is **not** cached on disk — profile data lives in the
+  browser's localStorage (key ``app_session``) and is mirrored into
+  AppContext at boot.  ``extract_c2_profile`` shapes the response into the
+  Erg Nerd profile dict consumed by the rest of the app.  The endpoint is
+  hit at most twice per user lifecycle: once during OAuth, then at most
+  once per ~30 days when the cached profile goes stale (driven by
+  ``components.app_context.refresh_profile_if_stale``).
+
 Workout caching:
   Workouts are stored in the browser's localStorage (not on disk).
   get_all_results(initial_workouts) accepts the pre-loaded workouts dict
@@ -359,10 +368,11 @@ class Concept2Client:
 
     def get_user(self) -> dict:
         """
-        Return the authenticated user's profile (cached for 5 minutes).
+        Return the authenticated user's profile.
 
-        The cache is keyed per user so simultaneous sessions stay isolated.
-        Email is scrubbed before writing to disk.
+        Not cached on the server — profile data belongs in the browser's
+        localStorage (see ``components.app_context``).  Callers should hit
+        this endpoint sparingly: once at OAuth and on stale-refresh.
 
         Response shape:
             {
@@ -379,26 +389,9 @@ class Concept2Client:
               }
             }
         """
-
-        # TODO: Do we really need to store this on disk at all?
-        cache_key = f"users_me_{self._user_id}" if self._user_id else "users_me"
-        cached = _read_cache(cache_key)
-        if cached is not None:
-            return cached
-
         response = self._http.get("/users/me")
         response.raise_for_status()
-        data = response.json()
-
-        # Scrub email before persisting to disk
-        if isinstance(data.get("data"), dict) and "email" in data["data"]:
-            data = {
-                **data,
-                "data": {k: v for k, v in data["data"].items() if k != "email"},
-            }
-
-        _write_cache(cache_key, data)
-        return data
+        return response.json()
 
     # ------------------------------------------------------------------
     # Results — single page
@@ -620,6 +613,9 @@ def extract_c2_profile(user_data: dict) -> dict:
 
     weight_class is derived from weight + gender using the standard open/elite
     lightweight limits (men ≤ 72.5 kg, women ≤ 59.0 kg).
+
+    Also populates the read-only display fields (``display_name``,
+    ``profile_image``) and refresh metadata (``fetched_at``, ``user_edited``).
     """
     from services.rowinglevel import _LW_LIMIT_KG  # avoid top-level circular import
 
@@ -637,6 +633,11 @@ def extract_c2_profile(user_data: dict) -> dict:
     else:
         weight_class = ""
 
+    display_name = (
+        (user_data.get("first_name") or "").strip()
+        or (user_data.get("username") or "").strip()
+    )
+
     return {
         "gender": gender,
         "dob": user_data.get("dob", ""),
@@ -644,4 +645,8 @@ def extract_c2_profile(user_data: dict) -> dict:
         "weight_unit": "kg",
         "weight_class": weight_class,
         "max_heart_rate": max_hr,
+        "display_name": display_name,
+        "profile_image": user_data.get("profile_image") or "",
+        "fetched_at": time.time(),
+        "user_edited": [],
     }

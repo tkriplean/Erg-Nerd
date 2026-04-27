@@ -161,10 +161,15 @@ def concept2_sync(client) -> None:
 
         return client.get_all_results(initial, on_progress=on_progress)
 
+    print("RUNNING WORKOUTS TASK")
     task.run(_fetch, client, sync_state.initial_workouts, progress)
+
+    if not task.done:
+        print("STILL FETCHING WORKOUTS")
 
     # ── Step 3: handle result ────────────────────────────────────────────────
     if task.done and not task.error:
+        print("WORKOUTS FETCHED")
         workouts_dict, sorted_workouts = task.result
         # Data-integrity pass: drop bogus HR readings and repair corrupt splits
         # before anything is persisted or returned to consumers.  Idempotent so
@@ -177,6 +182,7 @@ def concept2_sync(client) -> None:
         )
         if not sync_state.written:
             # Write real data only — synthetic workouts must never reach localStorage.
+            print("SAVING WORKOUTS TO LOCAL STORAGE")
             hd.local_storage.set_item("workouts", compress_workouts(workouts_dict))
             sync_state.written = True
 
@@ -263,19 +269,13 @@ def _maybe_push_on_sync(client, sync_state, workouts_dict: dict) -> None:
 
     push_task = hd.task()
 
-    def _do_push(client_, uid, prof, wkts):
-        # Fetch display name inside the task so it doesn't block render.
-        try:
-            u = client_.get_user().get("data", {})
-            dn = (
-                u.get("first_name") or u.get("username") or "Rower"
-            ).strip() or "Rower"
-        except Exception:
-            dn = "Rower"
-        public_profiles.publish_all(uid, prof, dn, wkts)
+    def _do_push(uid, prof, wkts):
+        # display_name now lives on the profile dict (populated at OAuth /
+        # stale refresh), so no extra /users/me call is needed here.
+        public_profiles.publish_all(uid, prof, wkts)
 
     if not push_task.running and not push_task.done:
-        push_task.run(_do_push, client, user_id, profile, workouts_dict)
+        push_task.run(_do_push, user_id, profile, workouts_dict)
 
     if push_task.done:
         sync_state.published = True
@@ -328,7 +328,13 @@ def load_world_record_data(state, profile: dict):
         wr_task = hd.task()
         if not wr_task.running and not wr_task.done:
             wr_task.run(fetch_wr_data, gender_api, age, weight_kg)
+            print("STARTING WORLD RECORD CONCEPT2 FETCH")
+        elif not wr_task.done:
+            print("WORLD RECORD CONCEPT2 FETCH NOT YET DONE")
+
         if wr_task.done and not state.wr_fetch_done:
+            print("WORLD RECORD CONCEPT2 FETCH DONE")
+
             state.wr_fetch_done = True
             state.wr_data = wr_task.result  # None if API returned nothing
 
@@ -502,12 +508,15 @@ def strokes_for(workout: dict) -> dict:
 
         task = hd.task()
         if not task.running and not task.done:
+            print(f"FETCHING strokes_for_{wid}")
             task.run(lambda: ctx.client.get_strokes(int(ctx.user_id), wid))
         if task.running:
+            print(f"strokes_for_{wid} STILL RUNNING")
             return {"strokes": None, "status": "loading", "error": None}
         if task.error:
             return {"strokes": None, "status": "error", "error": str(task.error)}
         if task.done:
+            print(f"strokes_for_{wid} DONE")
             strokes = task.result if isinstance(task.result, list) else []
             _persist_strokes(ctx.user_id, wid, strokes, cache, public_enabled)
             return {"strokes": strokes, "status": "loaded", "error": None}
@@ -608,10 +617,13 @@ def strokes_batch(workouts: list) -> dict:
         with hd.scope(f"batch_fetch_{next_id}"):
             task = hd.task()
             if not task.running and not task.done:
+                print("STILL FETCHING STROKE CACHE")
                 task.run(
                     lambda nid=next_id: ctx.client.get_strokes(int(ctx.user_id), nid)
                 )
             if task.done:
+                print("STROKE CACHE FETCHED")
+
                 if task.error:
                     print(f"[strokes_batch] error on {next_id}: {task.error}")
                     batch_state.queue = batch_state.queue[1:]

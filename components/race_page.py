@@ -65,7 +65,7 @@ from services.stroke_utils import (
 )
 from services.rowing_utils import season_color
 from services.concept2_records import get_age_group_records
-from components.profile_page import get_profile
+from components.app_context import get_profile
 from services.rowing_utils import (
     apply_quality_filters,
     is_rankable_noninterval,
@@ -595,8 +595,11 @@ def race_page() -> None:
                 if not _wr_task.running and not _wr_task.done:
                     _wr_task.run(get_age_group_records, _g_api, _wr_age, _wr_wt_kg)
                 if _wr_task.done and not _wr_task.error:
+                    print("WORLD RECORDS LOADED")
                     state.wr_records = _wr_task.result
                     state.wr_records_key = _wr_key
+                else:
+                    print("WORLD RECORDS NOT YET LOADED")
 
         # Build the WR boat if we have a record for the selected event.
         if state.wr_records_key == _wr_key:

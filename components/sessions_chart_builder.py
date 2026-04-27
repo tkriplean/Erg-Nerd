@@ -51,7 +51,7 @@ from components.workout_table import (
     COL_HR_SPREAD,
     COL_QUALITY,
 )
-from components.profile_page import get_profile
+from components.app_context import get_profile
 from components.reference_watts_loader import reference_watts_loader
 from components.shared_ui import global_filter_ui, header_dropdown
 from components.spread_quality_legends import spread_quality_legends
