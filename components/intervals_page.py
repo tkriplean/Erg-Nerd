@@ -108,6 +108,7 @@ from components.view_context import your
 from services.interval_utils import (
     avg_workpace_tenths,
     avg_work_spm,
+    get_rep_count,
     interval_structure_key,
 )
 from services.threshold_cache import make_thresholds_resolver
@@ -632,13 +633,10 @@ def _enrich_workouts(
     for r in workouts:
         if r.get("workout_type") not in INTERVAL_WORKOUT_TYPES:
             continue
-        ivs = (r.get("workout") or {}).get("intervals") or []
-        work_ivs = [iv for iv in ivs if (iv.get("type") or "").lower() != "rest"]
-
         # Skip single-rep sessions (e.g. 1×500m / 3'r).  Keep workouts with
         # multiple intervals that share no rest — they form legitimate multi-block
         # sessions even though every rest_time == 0.
-        reps = len(work_ivs) or len(ivs)
+        reps = get_rep_count(r)
         if reps == 1:
             continue
 

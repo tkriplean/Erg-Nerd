@@ -104,7 +104,37 @@ def _iter_valid_intervals(intervals: list):
             yield work_idx, iv
 
 
-def build_interval_rows_and_bands(intervals: list) -> tuple:
+def _time_weighted_hr(
+    stroke_t_hr: list[tuple[float, float]], xMin: float, xMax: float
+) -> Optional[float]:
+    """Time-weighted HR average across strokes whose elapsed t falls in window.
+
+    Each stroke contributes its HR weighted by the gap to the next stroke
+    inside the window (the trailing stroke uses the gap to xMax).  Returns
+    None unless at least 3 stroke samples land in the window.
+    """
+    in_win = [(t, hr) for t, hr in stroke_t_hr if xMin <= t <= xMax]
+    if len(in_win) < 3:
+        return None
+    weighted_sum = 0.0
+    weight_total = 0.0
+    for i, (t, hr) in enumerate(in_win):
+        if i + 1 < len(in_win):
+            w = in_win[i + 1][0] - t
+        else:
+            w = max(0.0, xMax - t)
+        if w <= 0:
+            w = 1.0  # avoid zero-weight collapse on coincident samples
+        weighted_sum += hr * w
+        weight_total += w
+    if weight_total <= 0:
+        return None
+    return weighted_sum / weight_total
+
+
+def build_interval_rows_and_bands(
+    intervals: list, strokes: Optional[list] = None
+) -> tuple:
     """
     Single source of truth for the interval → (rows, bands) transformation.
 
@@ -112,6 +142,13 @@ def build_interval_rows_and_bands(intervals: list) -> tuple:
     iterate intervals in exactly the same order so that band index i always
     matches table row i for click-to-focus.  This function guarantees that by
     computing both simultaneously from the same iteration.
+
+    When ``strokes`` is provided, per-work-interval ``hr_avg`` is recomputed
+    from the strokes whose elapsed time falls within that interval's
+    [xMin, xMax] window using a time-weighted average (each stroke weighted
+    by its inter-stroke duration).  This corrects cases where the C2 API's
+    ``heart_rate.average`` field is unreliable.  Falls back to the API value
+    when fewer than 3 stroke samples land in the window.
 
     Returns
     -------
@@ -126,12 +163,29 @@ def build_interval_rows_and_bands(intervals: list) -> tuple:
     bands: list = []
     elapsed_s = 0.0
 
+    # Pre-extract (t_seconds, hr) pairs for time-weighted HR aggregation.
+    stroke_t_hr: list[tuple[float, float]] = []
+    if strokes:
+        for s in strokes:
+            t_s = (s.get("t") or 0) / 10.0
+            hr = s.get("hr")
+            if hr:
+                stroke_t_hr.append((t_s, hr))
+        stroke_t_hr.sort(key=lambda x: x[0])
+
     for work_idx, iv in _iter_valid_intervals(intervals):
         t = iv.get("time") or 0
         dur_s = t / 10.0
         d = iv.get("distance") or 0
         pace_t = (t * 500 / d) if d else None
         hr = (iv.get("heart_rate") or {}).get("average")
+
+        if stroke_t_hr:
+            xMin = elapsed_s
+            xMax = elapsed_s + dur_s
+            recomputed = _time_weighted_hr(stroke_t_hr, xMin, xMax)
+            if recomputed is not None:
+                hr = recomputed
 
         # ── Work row ────────────────────────────────────────────────────────
         rows.append(
@@ -257,7 +311,7 @@ def _slow_end_cap(
     return slowest * (0.90 if show_watts else 1.10)
 
 
-def _pad(lo, hi, frac=0.12, min_pad=0, lo_floor=None, round_to_int=False):
+def _pad(lo, hi, frac=0.05, min_pad=0, lo_floor=None, round_to_int=False):
     """Expand [lo, hi] by frac of the span on each side.
 
     lo_floor     — if set, clamps the lower bound to at least this value.
@@ -300,7 +354,7 @@ def _build_bands(
     splits = wo.get("splits")
 
     if intervals and wtype in INTERVAL_WORKOUT_TYPES:
-        _, bands = build_interval_rows_and_bands(intervals)
+        _, bands = build_interval_rows_and_bands(intervals, strokes)
         return bands
 
     if custom_splits and strokes and workout is not None:
@@ -573,7 +627,16 @@ def build_compare_series(
             else:
                 suffix = fmt_distance(dist) if dist else ""
             label = f"{date_str} · {suffix}".strip(" ·") or f"Workout {cid}"
-        total_t_s = (cw.get("time") or 0) / 10.0
+        if intervals:
+            # Wall-clock end including rest between intervals (workout["time"]
+            # is work-only for interval workouts).
+            total_tenths = sum(
+                (iv.get("time") or 0) + (iv.get("rest_time") or 0)
+                for iv in intervals
+            )
+            total_t_s = total_tenths / 10.0
+        else:
+            total_t_s = (cw.get("time") or 0) / 10.0
         out.append(
             {
                 "id": cid,
@@ -882,12 +945,16 @@ def build_stroke_chart_config(
         x_min = b["xMin"]
         x_max = b["xMax"]
     else:
-        # For non-interval workouts cap the x-axis at the recorded session
-        # duration so trailing noise beyond the finish doesn't expand the domain.
-        if wtype not in INTERVAL_WORKOUT_TYPES:
-            session_time_s = (workout.get("time") or 0) / 10.0
-            if session_time_s > 0:
-                x_max = round(session_time_s, 2)
+        # Cap the x-axis at the recorded session duration so trailing noise
+        # beyond the finish doesn't expand the domain.  For interval workouts
+        # the workout's `time` is work-only, so derive the wall-clock end from
+        # the last band's xMax instead.
+        if wtype in INTERVAL_WORKOUT_TYPES and bands:
+            primary_total_s = bands[-1]["xMax"]
+        else:
+            primary_total_s = (workout.get("time") or 0) / 10.0
+        if primary_total_s > 0:
+            x_max = round(primary_total_s, 2)
         # With compares, expand x-axis to cover the longest compared workout.
         if has_compares:
             compare_max = max((cs.get("total_time_s") or 0) for cs in compare_series)

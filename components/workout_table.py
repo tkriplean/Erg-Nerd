@@ -461,6 +461,18 @@ COL_QUALITY = ColumnDef(
     else -1.0,
 )
 
+COL_SIMILARITY = ColumnDef(
+    key="similarity",
+    header="Similarity",
+    width="6rem",
+    render_value=lambda w: f"{w['_similarity']:.0f}"
+    if w.get("_similarity") is not None
+    else "—",
+    sort_value=lambda w: w.get("_similarity")
+    if w.get("_similarity") is not None
+    else -1.0,
+)
+
 
 # ---------------------------------------------------------------------------
 # WorkoutTable

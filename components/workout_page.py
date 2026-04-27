@@ -54,6 +54,8 @@ from components.workout_table import (
     COL_SPM,
     COL_HR,
     COL_LINK,
+    COL_QUALITY,
+    COL_SIMILARITY,
     render_quality_cell,
     render_spread_cell,
 )
@@ -75,7 +77,11 @@ from components.workout_chart_builder import (
     _stitch_interval_times,
 )
 from components.workout_chart_plugin import StrokeChart
-from services.interval_utils import interval_structure_key
+from services.interval_utils import (
+    avg_workpace_tenths,
+    get_rep_count,
+    interval_structure_key,
+)
 from services.rowing_utils import (
     INTERVAL_WORKOUT_TYPES,
     compute_watts,
@@ -708,6 +714,7 @@ def _splits_table(
             ts,
             focused_idx=focused_idx,
             on_focus=on_focus,
+            strokes=strokes,
         )
         return
 
@@ -811,6 +818,7 @@ def _intervals_table(
     ts: str,
     focused_idx: int = -1,
     on_focus=None,
+    strokes: Optional[list] = None,
 ) -> None:
     """
     Render interval-workout intervals table.
@@ -820,7 +828,7 @@ def _intervals_table(
     workout_chart_builder.py.  This guarantees row index i always corresponds
     to band index i for click-to-focus zoom.
     """
-    rows, _ = build_interval_rows_and_bands(intervals)
+    rows, _ = build_interval_rows_and_bands(intervals, strokes)
 
     # Detect HR data across work rows only
     has_hr = any(r.get("hr_avg") for r in rows if not r.get("_is_rest"))
@@ -972,36 +980,151 @@ def _compare_cell(w: dict, state) -> None:
         state.compared_workouts = tuple(sorted(current))
 
 
-def _find_similar(workout: dict, all_workouts: list, n: int = 8) -> list:
+def _interval_dimension(w: dict) -> str:
+    """Return 'time' or 'distance' based on the first work interval's type;
+    'unknown' if no work intervals."""
+    ivs = (w.get("workout") or {}).get("intervals") or []
+    for iv in ivs:
+        t = (iv.get("type") or "").lower()
+        if t in ("time", "distance"):
+            return t
+    return "unknown"
+
+
+def _interval_volume_and_work_fraction(w: dict) -> tuple:
+    """Return (total_work_volume, work_fraction).
+
+    Volume is total work distance (m) for distance-dim workouts, or total work
+    time (tenths) for time-dim workouts.
+
+    work_fraction = total_work_time / (total_work_time + total_rest_time),
+    in [0, 1]. Captures the work:rest character — 0.5 means 1:1 work:rest,
+    0.2 means 1:4, 1.0 means continuous (no rest).
+    """
+    ivs = (w.get("workout") or {}).get("intervals") or []
+    work_ivs = [iv for iv in ivs if (iv.get("type") or "").lower() != "rest"]
+    if not work_ivs:
+        return 0, 1.0
+    dim = _interval_dimension(w)
+    if dim == "distance":
+        vol = sum((iv.get("distance") or 0) for iv in work_ivs)
+    else:
+        vol = sum((iv.get("time") or 0) for iv in work_ivs)
+    total_work_t = sum((iv.get("time") or 0) for iv in work_ivs)
+    total_rest_t = sum((iv.get("rest_time") or 0) for iv in work_ivs)
+    denom = total_work_t + total_rest_t
+    work_fraction = (total_work_t / denom) if denom > 0 else 1.0
+    return vol, work_fraction
+
+
+def _find_similar(workout: dict, all_workouts: list) -> list:
+    """Return shallow-copied workouts similar to ``workout``, with ``_similarity``
+    (0–100, higher = more similar) attached, sorted descending."""
     wtype = workout.get("workout_type", "")
     wid = workout.get("id")
     is_interval = wtype in INTERVAL_WORKOUT_TYPES
 
+    pool: list = []
     if is_interval:
-        key = interval_structure_key(workout)
-        pool = [
-            w
-            for w in all_workouts
-            if w.get("id") != wid and interval_structure_key(w) == key
-        ]
-        pool.sort(key=lambda w: w.get("date", ""), reverse=True)
+        ref_dim = _interval_dimension(workout)
+        ref_vol, ref_wf = _interval_volume_and_work_fraction(workout)
+        ref_pace_t = avg_workpace_tenths(workout)
+        ref_interv_count = len(workout.get("workout", {}).get("intervals"))
+        ref_d_p_i = ref_vol / ref_interv_count
+        for w in all_workouts:
+            if w.get("id") == wid:
+                continue
+            if (w.get("workout_type") or "") not in INTERVAL_WORKOUT_TYPES:
+                continue
+            if _interval_dimension(w) != ref_dim:
+                continue
+            vol, wf = _interval_volume_and_work_fraction(w)
+            # Drop wildly-different sessions: total work volume must be within
+            # ±40% of the reference (e.g. 5×1000m can match 4×1250m or 6×800m
+            # but not 10×500m).
+            if not ref_vol or not vol:
+                continue
+            if abs(vol - ref_vol) / ref_vol > 0.40:
+                continue
+            row = dict(w)
+            terms = []
+
+            # Volume term: 1.0 at exact match
+            volume_term = max(0.0, 1.0 - abs(vol - ref_vol) / (vol + ref_vol))
+
+            # Interval count term
+            interv_count = len(w.get("workout", {}).get("intervals"))
+            interval_count_term = max(
+                0.0,
+                1.0
+                - abs(ref_interv_count - interv_count)
+                / (ref_interv_count + interv_count),
+            )
+
+            # Distance per interval
+            d_p_i = vol / interv_count
+            dist_term = max(0.0, 1.0 - abs(d_p_i - ref_d_p_i) / (d_p_i + ref_d_p_i))
+            print(
+                {
+                    dist_term,
+                    vol,
+                    ref_vol,
+                    d_p_i,
+                    ref_d_p_i,
+                    interv_count,
+                    ref_interv_count,
+                }
+            )
+            # Work-fraction term: captures work:rest character (e.g. 1:1 vs 1:4).
+            # Both values are in [0, 1], so the absolute difference is bounded.
+            work_fraction_term = max(0.0, 1.0 - abs(wf - ref_wf))
+            # Pace term: 1.0 at exact match, 0.0 at ≥30s/500m off.
+            pace_term = 0
+            if ref_pace_t is not None:
+                p = avg_workpace_tenths(w)
+                if p is not None:
+                    pace_delta_s = abs(p - ref_pace_t) / 10.0
+                    pace_term = max(0.0, 1.0 - pace_delta_s / 30.0)
+
+            row["_similarity"] = (
+                100
+                * volume_term
+                * work_fraction_term
+                * work_fraction_term
+                * pace_term
+                * dist_term
+                * interval_count_term
+            )  # (100.0 * sum(terms) / len(terms)) if terms else None
+            pool.append(row)
     else:
         ref_dist = workout.get("distance", 0)
         ref_pace = pace_tenths(workout)
-        pool = []
         for w in all_workouts:
             if w.get("id") == wid or w.get("workout_type") != wtype:
                 continue
             d = w.get("distance", 0)
             if ref_dist and d and abs(d - ref_dist) / ref_dist > 0.20:
                 continue
-            pool.append(w)
-        if ref_pace:
-            pool.sort(key=lambda w: abs((pace_tenths(w) or 9999) - ref_pace))
-        else:
-            pool.sort(key=lambda w: w.get("date", ""), reverse=True)
+            row = dict(w)
+            dist_term = None
+            if ref_dist and d:
+                dist_term = max(0.0, 1.0 - abs(d - ref_dist) / (0.20 * ref_dist))
+            pace_term = None
+            p = pace_tenths(w)
+            if ref_pace and p:
+                pace_delta_s = abs(p - ref_pace) / 10.0
+                pace_term = max(0.0, 1.0 - pace_delta_s / 30.0)
+            terms = [t for t in (dist_term, pace_term) if t is not None]
+            row["_similarity"] = (100.0 * sum(terms) / len(terms)) if terms else None
+            pool.append(row)
 
-    return pool[:n]
+    pool.sort(
+        key=lambda w: w.get("_similarity")
+        if w.get("_similarity") is not None
+        else -1.0,
+        reverse=True,
+    )
+    return pool
 
 
 # ---------------------------------------------------------------------------
@@ -1141,11 +1264,9 @@ def workout_page(session_id: int, ctx) -> None:
     # ── Title ────────────────────────────────────────────────────────────────
 
     if is_interval:
-        ivs = (workout.get("workout") or {}).get("intervals") or []
-        work_ivs = [iv for iv in ivs if (iv.get("type") or "").lower() != "rest"]
-        reps = len(work_ivs) or len(ivs)
+        reps = get_rep_count(workout)
         title = interval_structure_key(workout, compact=True)
-        if not workout.get("workout_type", "") == "VariableInterval":
+        if reps:
             title = f"{reps} x {title}"
     else:
         title = fmt_distance_label(workout)
@@ -1353,6 +1474,10 @@ def workout_page(session_id: int, ctx) -> None:
 
         similar = _find_similar(workout, all_workouts)
         if similar:
+            try:
+                attach_spread_and_quality(similar, all_workouts, max_hr)
+            except Exception:
+                pass
             with hd.box(align="center"):
                 hd.h2(
                     "Similar sessions",
@@ -1372,7 +1497,23 @@ def workout_page(session_id: int, ctx) -> None:
                     sortable=False,
                 )
                 if is_interval_workout:
-                    # Similar sessions are mostly intervals — show structure column
+                    # Similar sessions are mostly intervals — show reps + structure
+                    reps_col = ColumnDef(
+                        "reps",
+                        "Reps",
+                        "4rem",
+                        render_value=lambda w: (
+                            str(get_rep_count(w))
+                            if w.get("workout_type", "") in INTERVAL_WORKOUT_TYPES
+                            and get_rep_count(w)
+                            else "—"
+                        ),
+                        sort_value=lambda w: (
+                            get_rep_count(w)
+                            if w.get("workout_type", "") in INTERVAL_WORKOUT_TYPES
+                            else 0
+                        ),
+                    )
                     workout_col = ColumnDef(
                         "workout_structure",
                         "Workout",
@@ -1385,6 +1526,7 @@ def workout_page(session_id: int, ctx) -> None:
                     )
                     cols = [
                         COL_DATE,
+                        reps_col,
                         workout_col,
                         COL_DISTANCE,
                         COL_TIME,
@@ -1392,6 +1534,8 @@ def workout_page(session_id: int, ctx) -> None:
                         COL_WATTS,
                         COL_SPM,
                         COL_HR,
+                        COL_QUALITY,
+                        COL_SIMILARITY,
                         compare_col,
                         COL_LINK,
                     ]
@@ -1406,7 +1550,14 @@ def workout_page(session_id: int, ctx) -> None:
                         COL_DRAG,
                         COL_SPM,
                         COL_HR,
+                        COL_QUALITY,
+                        COL_SIMILARITY,
                         compare_col,
                         COL_LINK,
                     ]
-                WorkoutTable(similar, cols)
+                WorkoutTable(
+                    similar,
+                    cols,
+                    default_sort_col="similarity",
+                    default_sort_asc=False,
+                )
