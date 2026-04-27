@@ -94,6 +94,7 @@ def reference_watts_loader(all_workouts: list) -> bool:
 
     if task.running:
         _progress_ui(loader_state, "Computing fitness baseline…")
+        print("REFERENCE WATTS NOT LOADED YET")
         return False
 
     if task.error:
@@ -105,15 +106,15 @@ def reference_watts_loader(all_workouts: list) -> bool:
         return False
 
     if task.done:
+        print("REFERENCE WATTS LOADED")
+
         index = task.result
         # ``build_reference_watts_index`` already seeds the service cache;
         # just mark our loader state and persist.
         loader_state.seeded_hash = index.get("input_hash", target_hash)
         if loader_state.persisted_hash != loader_state.seeded_hash:
             try:
-                hd.local_storage.set_item(
-                    LS_KEY, json.dumps(serialize_index(index))
-                )
+                hd.local_storage.set_item(LS_KEY, json.dumps(serialize_index(index)))
                 loader_state.persisted_hash = loader_state.seeded_hash
             except Exception as exc:
                 print(f"[reference_watts] persist failed: {exc}")

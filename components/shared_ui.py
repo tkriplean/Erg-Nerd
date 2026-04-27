@@ -89,20 +89,19 @@ def global_filter_ui() -> None:
 
                         # Per-season checkboxes
                         with hd.box(gap=0.25, padding_top=0.5):
-                            with hd.scope(str(gstate.excluded_seasons)):
-                                for season in all_seasons:
-                                    with hd.scope(f"gs_{season}"):
-                                        _is_sel = season not in gstate.excluded_seasons
-                                        cb = hd.checkbox(season, checked=_is_sel)
-                                        if cb.changed:
-                                            _e = set(gstate.excluded_seasons)
-                                            if cb.checked:
-                                                _e.discard(season)
-                                            else:
-                                                _e.add(season)
-                                            gstate.excluded_seasons = tuple(sorted(_e))
-                                        if cb.checked != _is_sel:
-                                            cb.checked = _is_sel
+                            for season in all_seasons:
+                                with hd.scope(f"gs_{season}"):
+                                    _is_sel = season not in gstate.excluded_seasons
+                                    cb = hd.checkbox(season, checked=_is_sel)
+                                    if cb.changed:
+                                        _e = set(gstate.excluded_seasons)
+                                        if cb.checked:
+                                            _e.discard(season)
+                                        else:
+                                            _e.add(season)
+                                        gstate.excluded_seasons = tuple(sorted(_e))
+                                    if cb.checked != _is_sel:
+                                        cb.checked = _is_sel
 
         # ── Machine selector (only when >1 type) ───────────────────────────────
         if len(machine_types) > 1:
@@ -142,38 +141,37 @@ def header_dropdown(
     field: str,
 ) -> None:
     cur_label = labels.get(current_value, current_value)
-    with hd.scope(key):
-        with hd.dropdown() as dd:
-            btn = hd.button(
-                cur_label,
-                caret=True,
-                size="small",
-                font_color="neutral-800",
-                font_size=2,
-                font_weight="bold",
-                border="none",
-                slot=dd.trigger,
-                padding=(1, 0.5, 1, 0),
-                label_style=hd.style(padding_right=0),
-            )
-            if btn.clicked:
-                dd.opened = not dd.was_opened
-            with hd.box(gap=0.1, background_color="neutral-0", min_width=20):
-                for val, lbl in labels.items():
-                    with hd.scope(f"{key}_{val}"):
-                        item = hd.button(
-                            lbl,
-                            size="small",
-                            variant="primary" if current_value == val else "text",
-                            width="100%",
-                            border_radius="small",
-                            font_size="medium",
-                            font_color="neutral-0"
-                            if current_value == val
-                            else "neutral-800",
-                            label_style=hd.style(padding_top=0.5, padding_bottom=0.5),
-                            hover_background_color="neutral-100",
-                        )
-                        if item.clicked:
-                            setattr(state, field, val)
-                            dd.opened = False
+    with hd.dropdown() as dd:
+        btn = hd.button(
+            cur_label,
+            caret=True,
+            size="small",
+            font_color="neutral-800",
+            font_size=2,
+            font_weight="bold",
+            border="none",
+            slot=dd.trigger,
+            padding=(1, 0.5, 1, 0),
+            label_style=hd.style(padding_right=0),
+        )
+        if btn.clicked:
+            dd.opened = not dd.was_opened
+        with hd.box(gap=0.1, background_color="neutral-0", min_width=20):
+            for val, lbl in labels.items():
+                with hd.scope(f"{key}_{val}"):
+                    item = hd.button(
+                        lbl,
+                        size="small",
+                        variant="primary" if current_value == val else "text",
+                        width="100%",
+                        border_radius="small",
+                        font_size="medium",
+                        font_color="neutral-0"
+                        if current_value == val
+                        else "neutral-800",
+                        label_style=hd.style(padding_top=0.5, padding_bottom=0.5),
+                        hover_background_color="neutral-100",
+                    )
+                    if item.clicked:
+                        setattr(state, field, val)
+                        dd.opened = False

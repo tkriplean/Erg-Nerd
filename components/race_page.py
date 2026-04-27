@@ -357,33 +357,28 @@ def _race_stroke_graph(
             )
 
         if cfg:
-            with hd.scope("race_chart"):
-                StrokeChart(config=cfg, height="45vh")
+            StrokeChart(config=cfg, height="45vh")
 
     with hd.hbox(gap=1.5, align="center", justify="center", wrap="wrap", padding=0.5):
-        with hd.scope("race_chart_metric"):
-            with radio_group(value=state.chart_metric, size="small") as mrg:
-                hd.radio_button("Pace", value="pace")
-                hd.radio_button("Watts", value="watts")
-            if mrg.changed:
-                state.chart_metric = mrg.value
+        with radio_group(value=state.chart_metric, size="small") as mrg:
+            hd.radio_button("Pace", value="pace")
+            hd.radio_button("Watts", value="watts")
+        if mrg.changed:
+            state.chart_metric = mrg.value
 
-        with hd.scope("race_chart_pace_sw"):
-            _lbl = "Watts" if state.chart_metric == "watts" else "Pace"
-            pace_sw = hd.switch(_lbl, checked=state.chart_show_pace, size="small")
-            if pace_sw.changed:
-                state.chart_show_pace = pace_sw.checked
+        _lbl = "Watts" if state.chart_metric == "watts" else "Pace"
+        pace_sw = hd.switch(_lbl, checked=state.chart_show_pace, size="small")
+        if pace_sw.changed:
+            state.chart_show_pace = pace_sw.checked
 
-        with hd.scope("race_chart_spm_sw"):
-            spm_sw = hd.switch("SPM", checked=state.chart_show_spm, size="small")
-            if spm_sw.changed:
-                state.chart_show_spm = spm_sw.checked
+        spm_sw = hd.switch("SPM", checked=state.chart_show_spm, size="small")
+        if spm_sw.changed:
+            state.chart_show_spm = spm_sw.checked
 
         if has_hr_any:
-            with hd.scope("race_chart_hr_sw"):
-                hr_sw = hd.switch("HR", checked=state.chart_show_hr, size="small")
-                if hr_sw.changed:
-                    state.chart_show_hr = hr_sw.checked
+            hr_sw = hd.switch("HR", checked=state.chart_show_hr, size="small")
+            if hr_sw.changed:
+                state.chart_show_hr = hr_sw.checked
 
 
 # ── Results table ─────────────────────────────────────────────────────────────
@@ -590,16 +585,15 @@ def race_page() -> None:
     if _wr_available and state.show_wr_boat:
         # Fetch records if not yet cached or profile changed.
         if state.wr_records_key != _wr_key:
-            with hd.scope(f"wr_task_{_wr_key}"):
-                _wr_task = hd.task()
-                if not _wr_task.running and not _wr_task.done:
-                    _wr_task.run(get_age_group_records, _g_api, _wr_age, _wr_wt_kg)
-                if _wr_task.done and not _wr_task.error:
-                    print("WORLD RECORDS LOADED")
-                    state.wr_records = _wr_task.result
-                    state.wr_records_key = _wr_key
-                else:
-                    print("WORLD RECORDS NOT YET LOADED")
+            _wr_task = hd.task()
+            if not _wr_task.running and not _wr_task.done:
+                _wr_task.run(get_age_group_records, _g_api, _wr_age, _wr_wt_kg)
+            if _wr_task.done and not _wr_task.error:
+                print("WORLD RECORDS LOADED")
+                state.wr_records = _wr_task.result
+                state.wr_records_key = _wr_key
+            else:
+                print("WORLD RECORDS NOT YET LOADED")
 
         # Build the WR boat if we have a record for the selected event.
         if state.wr_records_key == _wr_key:
@@ -753,14 +747,13 @@ def race_page() -> None:
                             font_color="neutral-700" if not is_dark else "neutral-300",
                             font_size="small",
                         )
-                        with hd.scope("race_scatter_metric"):
-                            with radio_group(
-                                value=state.scatter_metric, size="small"
-                            ) as srg:
-                                hd.radio_button("Pace", value="pace")
-                                hd.radio_button("Watts", value="watts")
-                            if srg.changed:
-                                state.scatter_metric = srg.value
+                        with radio_group(
+                            value=state.scatter_metric, size="small"
+                        ) as srg:
+                            hd.radio_button("Pace", value="pace")
+                            hd.radio_button("Watts", value="watts")
+                        if srg.changed:
+                            state.scatter_metric = srg.value
                     _scatter_cfg = build_race_scatter_config(
                         all_event_workouts,
                         metric=state.scatter_metric,

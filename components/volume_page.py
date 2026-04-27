@@ -83,6 +83,7 @@ _HR_NO_DATA_BINS = frozenset({6})  # "No HR" — excluded from classification de
 # both themes.  Rest re-uses the standard Rest grey; Unrated picks a neutral
 # grey that visually reads as "no signal".
 
+
 def _quality_rgba(category: str) -> str:
     r, g, b, a = QUALITY_STYLE[category]["bg"]
     return f"rgba({r},{g},{b},{a})"
@@ -174,9 +175,7 @@ _PERIOD_HEADERS = {
 }
 
 
-def _distribution_table(
-    rows: list, view: str, zone_mode: str = "power_spread"
-) -> None:
+def _distribution_table(rows: list, view: str, zone_mode: str = "power_spread") -> None:
     """
     Render a sortable CSS Grid table with one row per period showing zone
     breakdowns and a training distribution classification.
@@ -293,91 +292,87 @@ def _distribution_table(
     col_template = " ".join(w for _, _, w, _ in col_defs)
     n_cols = len(col_defs)
 
-    # Reset sort when view or zone_mode changes
-    with hd.scope(f"{view}_{zone_mode}"):
-        # Default: idx asc=False → index 0 (newest) first
-        sort = hd.state(col="idx", asc=True)
+    # Default: idx asc=False → index 0 (newest) first
+    sort = hd.state(col="idx", asc=True)
 
-        # Sort rows (rows are already newest-first at index 0)
-        _SORT_KEYS = {
-            "idx": lambda i, r: i,
-            "total": lambda i, r: r.get("total_raw", 0),
-            "rest": lambda i, r: r.get("rest_raw", 0),
-            "z1": lambda i, r: r.get("z1_raw", 0),
-            "z2": lambda i, r: r.get("z2_raw", 0),
-            "z3": lambda i, r: r.get("z3_raw", 0),
-            "z3a": lambda i, r: r.get("z3a_raw", 0),
-            "z3b": lambda i, r: r.get("z3b_raw", 0),
-            "dist": lambda i, r: r.get("distribution", ""),
-            "low": lambda i, r: r.get("low_raw", 0),
-            "med": lambda i, r: r.get("med_raw", 0),
-            "high": lambda i, r: r.get("high_raw", 0),
-            "ultra": lambda i, r: r.get("ultra_raw", 0),
-            "unrated": lambda i, r: r.get("unrated_raw", 0),
-        }
-        key_fn = _SORT_KEYS.get(sort.col, _SORT_KEYS["idx"])
-        indexed = list(enumerate(rows))
-        sorted_rows = sorted(indexed, key=lambda p: key_fn(*p), reverse=not sort.asc)
+    # Sort rows (rows are already newest-first at index 0)
+    _SORT_KEYS = {
+        "idx": lambda i, r: i,
+        "total": lambda i, r: r.get("total_raw", 0),
+        "rest": lambda i, r: r.get("rest_raw", 0),
+        "z1": lambda i, r: r.get("z1_raw", 0),
+        "z2": lambda i, r: r.get("z2_raw", 0),
+        "z3": lambda i, r: r.get("z3_raw", 0),
+        "z3a": lambda i, r: r.get("z3a_raw", 0),
+        "z3b": lambda i, r: r.get("z3b_raw", 0),
+        "dist": lambda i, r: r.get("distribution", ""),
+        "low": lambda i, r: r.get("low_raw", 0),
+        "med": lambda i, r: r.get("med_raw", 0),
+        "high": lambda i, r: r.get("high_raw", 0),
+        "ultra": lambda i, r: r.get("ultra_raw", 0),
+        "unrated": lambda i, r: r.get("unrated_raw", 0),
+    }
+    key_fn = _SORT_KEYS.get(sort.col, _SORT_KEYS["idx"])
+    indexed = list(enumerate(rows))
+    sorted_rows = sorted(indexed, key=lambda p: key_fn(*p), reverse=not sort.asc)
 
-        with hd.box(padding=(1, 0, 0, 0)):
-            with grid_box(
-                grid_template_columns=col_template,
-                width="100%",
-                border="1px solid neutral-200",
-                border_radius="medium",
-                overflow="hidden",
-            ):
-                # ── Header row ─────────────────────────────────────────────
-                for ci, (header, col_key, _, _) in enumerate(col_defs):
-                    with hd.scope(f"hdr_{col_key}"):
-                        is_sorted = sort.col == col_key
-                        arrow = (" ▲" if sort.asc else " ▼") if is_sorted else ""
-                        cell_props = dict(
-                            padding=(0.5, 0.75),
-                            background_color="neutral-50",
-                            border_bottom="1px solid neutral-200",
-                            align="center",
+    with hd.box(padding=(1, 0, 0, 0)):
+        with grid_box(
+            grid_template_columns=col_template,
+            width="100%",
+            border="1px solid neutral-200",
+            border_radius="medium",
+            overflow="hidden",
+        ):
+            # ── Header row ─────────────────────────────────────────────
+            for ci, (header, col_key, _, _) in enumerate(col_defs):
+                with hd.scope(f"hdr_{col_key}"):
+                    is_sorted = sort.col == col_key
+                    arrow = (" ▲" if sort.asc else " ▼") if is_sorted else ""
+                    cell_props = dict(
+                        padding=(0.5, 0.75),
+                        background_color="neutral-50",
+                        border_bottom="1px solid neutral-200",
+                        align="center",
+                    )
+                    if ci < n_cols - 1:
+                        cell_props["border_right"] = "1px solid neutral-200"
+                    with hd.box(**cell_props):
+                        btn = hd.button(
+                            f"{header}{arrow}",
+                            variant="text",
+                            font_size="small",
+                            font_weight="semibold",
+                            font_color="neutral-700" if is_sorted else "neutral-500",
                         )
-                        if ci < n_cols - 1:
-                            cell_props["border_right"] = "1px solid neutral-200"
-                        with hd.box(**cell_props):
-                            btn = hd.button(
-                                f"{header}{arrow}",
-                                variant="text",
-                                font_size="small",
-                                font_weight="semibold",
-                                font_color="neutral-700"
-                                if is_sorted
-                                else "neutral-500",
-                            )
-                            if btn.clicked:
-                                if sort.col == col_key:
-                                    sort.asc = not sort.asc
-                                else:
-                                    sort.col = col_key
-                                    # First click: descending for numeric cols, ascending for period/dist
-                                    sort.asc = col_key in ("idx", "dist")
+                        if btn.clicked:
+                            if sort.col == col_key:
+                                sort.asc = not sort.asc
+                            else:
+                                sort.col = col_key
+                                # First click: descending for numeric cols, ascending for period/dist
+                                sort.asc = col_key in ("idx", "dist")
 
-                # ── Data rows ──────────────────────────────────────────────
-                for orig_i, row in sorted_rows:
-                    row_bg = "neutral-50" if orig_i % 2 == 0 else "neutral-0"
-                    with hd.scope(f"row_{orig_i}"):
-                        for ci, (_, col_key, _, render_fn) in enumerate(col_defs):
-                            with hd.scope(f"c{ci}{col_key}"):
-                                cell_props = dict(
-                                    padding=(0.5, 0.75),
-                                    background_color=row_bg,
-                                    border_top="1px solid neutral-100",
-                                    align="end",
-                                    justify="center",
-                                )
-                                if ci < n_cols - 1:
-                                    cell_props["border_right"] = "1px solid neutral-100"
-                                with hd.box(**cell_props):
-                                    if col_key == "dist":
-                                        hd.text(row["distribution"])
-                                    else:
-                                        hd.text(render_fn(row), font_size="small")
+            # ── Data rows ──────────────────────────────────────────────
+            for orig_i, row in sorted_rows:
+                row_bg = "neutral-50" if orig_i % 2 == 0 else "neutral-0"
+                with hd.scope(f"row_{orig_i}"):
+                    for ci, (_, col_key, _, render_fn) in enumerate(col_defs):
+                        with hd.scope(f"c{ci}{col_key}"):
+                            cell_props = dict(
+                                padding=(0.5, 0.75),
+                                background_color=row_bg,
+                                border_top="1px solid neutral-100",
+                                align="end",
+                                justify="center",
+                            )
+                            if ci < n_cols - 1:
+                                cell_props["border_right"] = "1px solid neutral-100"
+                            with hd.box(**cell_props):
+                                if col_key == "dist":
+                                    hd.text(row["distribution"])
+                                else:
+                                    hd.text(render_fn(row), font_size="small")
 
 
 # ---------------------------------------------------------------------------
@@ -413,29 +408,28 @@ def _hr_callout(all_workouts: list, profile: dict, is_owner: bool = True) -> tup
 
         # ── Inline edit (owner only) ────────────────────────────────────────
         if is_owner:
-            with hd.scope("hr_edit"):
-                hr_input = hd.text_input(
-                    placeholder="e.g. 185",
-                    value=str(max_hr) if max_hr else "",
-                    size="small",
-                    width=6,
-                )
-                # Save button only when the field value differs from what's stored
-                stored_str = str(max_hr) if max_hr else ""
-                if hr_input.value != stored_str:
-                    save_btn = hd.button("Save", size="small", variant="primary")
-                    if save_btn.clicked and hr_input.value:
-                        try:
-                            new_val = int(hr_input.value)
-                            if is_valid_hr(new_val):
-                                hd.local_storage.set_item(
-                                    "profile",
-                                    json.dumps({**profile, "max_heart_rate": new_val}),
-                                )
-                                max_hr = new_val
-                                is_estimated = False
-                        except ValueError:
-                            pass
+            hr_input = hd.text_input(
+                placeholder="e.g. 185",
+                value=str(max_hr) if max_hr else "",
+                size="small",
+                width=6,
+            )
+            # Save button only when the field value differs from what's stored
+            stored_str = str(max_hr) if max_hr else ""
+            if hr_input.value != stored_str:
+                save_btn = hd.button("Save", size="small", variant="primary")
+                if save_btn.clicked and hr_input.value:
+                    try:
+                        new_val = int(hr_input.value)
+                        if is_valid_hr(new_val):
+                            hd.local_storage.set_item(
+                                "profile",
+                                json.dumps({**profile, "max_heart_rate": new_val}),
+                            )
+                            max_hr = new_val
+                            is_estimated = False
+                    except ValueError:
+                        pass
         else:
             hd.text(
                 str(max_hr) if max_hr else "—",
@@ -509,9 +503,7 @@ def _volume_section(
                 return
             # Attach _quality to each workout so we can read it from the bin_fn.
             attach_spread_and_quality(all_workouts, all_workouts, max_hr)
-            unrated_count = sum(
-                1 for w in all_workouts if w.get("_quality") is None
-            )
+            unrated_count = sum(1 for w in all_workouts if w.get("_quality") is None)
             if unrated_count:
                 # An unrated workout is generally a bug — flag it once per
                 # render so the underlying reference-watts gap stays visible.

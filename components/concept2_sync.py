@@ -324,19 +324,18 @@ def load_world_record_data(state, profile: dict):
         state.wr_fetch_done = False
         state.wr_data = None
 
-    with hd.scope(f"wr_task_{fetch_key}"):
-        wr_task = hd.task()
-        if not wr_task.running and not wr_task.done:
-            wr_task.run(fetch_wr_data, gender_api, age, weight_kg)
-            print("STARTING WORLD RECORD CONCEPT2 FETCH")
-        elif not wr_task.done:
-            print("WORLD RECORD CONCEPT2 FETCH NOT YET DONE")
+    wr_task = hd.task()
+    if not wr_task.running and not wr_task.done:
+        wr_task.run(fetch_wr_data, gender_api, age, weight_kg)
+        print("STARTING WORLD RECORD CONCEPT2 FETCH")
+    elif not wr_task.done:
+        print("WORLD RECORD CONCEPT2 FETCH NOT YET DONE")
 
-        if wr_task.done and not state.wr_fetch_done:
-            print("WORLD RECORD CONCEPT2 FETCH DONE")
+    if wr_task.done and not state.wr_fetch_done:
+        print("WORLD RECORD CONCEPT2 FETCH DONE")
 
-            state.wr_fetch_done = True
-            state.wr_data = wr_task.result  # None if API returned nothing
+        state.wr_fetch_done = True
+        state.wr_data = wr_task.result  # None if API returned nothing
 
     return state.wr_data
 
@@ -488,38 +487,38 @@ def strokes_for(workout: dict) -> dict:
     # callers can invoke strokes_for(wid=A), strokes_for(wid=B) from the
     # same loop body without colliding on HyperDiv's call-stack-derived
     # component keys.
-    with hd.scope(f"strokes_for_{wid}"):
-        cache, ready = _load_strokes_cache()
-        if not ready:
-            return {"strokes": None, "status": "loading", "error": None}
 
-        public_enabled = _public_enabled()
+    cache, ready = _load_strokes_cache()
+    if not ready:
+        return {"strokes": None, "status": "loading", "error": None}
 
-        key = str(wid)
-        if key in cache:
-            # Cache-hit: still mirror to the public directory — the entry
-            # may have been cached before the user opted in.  The mirror
-            # helper no-ops when the file already exists on disk.
-            _mirror_strokes_to_public(ctx.user_id, wid, cache[key], public_enabled)
-            return {"strokes": cache[key], "status": "loaded", "error": None}
+    public_enabled = _public_enabled()
 
-        if ctx.client is None:
-            return {"strokes": None, "status": "error", "error": "no client"}
+    key = str(wid)
+    if key in cache:
+        # Cache-hit: still mirror to the public directory — the entry
+        # may have been cached before the user opted in.  The mirror
+        # helper no-ops when the file already exists on disk.
+        _mirror_strokes_to_public(ctx.user_id, wid, cache[key], public_enabled)
+        return {"strokes": cache[key], "status": "loaded", "error": None}
 
-        task = hd.task()
-        if not task.running and not task.done:
-            print(f"FETCHING strokes_for_{wid}")
-            task.run(lambda: ctx.client.get_strokes(int(ctx.user_id), wid))
-        if task.running:
-            print(f"strokes_for_{wid} STILL RUNNING")
-            return {"strokes": None, "status": "loading", "error": None}
-        if task.error:
-            return {"strokes": None, "status": "error", "error": str(task.error)}
-        if task.done:
-            print(f"strokes_for_{wid} DONE")
-            strokes = task.result if isinstance(task.result, list) else []
-            _persist_strokes(ctx.user_id, wid, strokes, cache, public_enabled)
-            return {"strokes": strokes, "status": "loaded", "error": None}
+    if ctx.client is None:
+        return {"strokes": None, "status": "error", "error": "no client"}
+
+    task = hd.task()
+    if not task.running and not task.done:
+        print(f"FETCHING strokes_for_{wid}")
+        task.run(lambda: ctx.client.get_strokes(int(ctx.user_id), wid))
+    if task.running:
+        print(f"strokes_for_{wid} STILL RUNNING")
+        return {"strokes": None, "status": "loading", "error": None}
+    if task.error:
+        return {"strokes": None, "status": "error", "error": str(task.error)}
+    if task.done:
+        print(f"strokes_for_{wid} DONE")
+        strokes = task.result if isinstance(task.result, list) else []
+        _persist_strokes(ctx.user_id, wid, strokes, cache, public_enabled)
+        return {"strokes": strokes, "status": "loaded", "error": None}
 
     return {"strokes": None, "status": "loading", "error": None}
 
@@ -614,27 +613,22 @@ def strokes_batch(workouts: list) -> dict:
 
     if batch_state.queue and ctx.client is not None:
         next_id = batch_state.queue[0]
-        with hd.scope(f"batch_fetch_{next_id}"):
-            task = hd.task()
-            if not task.running and not task.done:
-                print("STILL FETCHING STROKE CACHE")
-                task.run(
-                    lambda nid=next_id: ctx.client.get_strokes(int(ctx.user_id), nid)
-                )
-            if task.done:
-                print("STROKE CACHE FETCHED")
+        task = hd.task()
+        if not task.running and not task.done:
+            print("STILL FETCHING STROKE CACHE")
+            task.run(lambda nid=next_id: ctx.client.get_strokes(int(ctx.user_id), nid))
+        if task.done:
+            print("STROKE CACHE FETCHED")
 
-                if task.error:
-                    print(f"[strokes_batch] error on {next_id}: {task.error}")
-                    batch_state.queue = batch_state.queue[1:]
-                    batch_state.done += 1
-                else:
-                    strokes = task.result if isinstance(task.result, list) else []
-                    _persist_strokes(
-                        ctx.user_id, next_id, strokes, cache, public_enabled
-                    )
-                    batch_state.queue = batch_state.queue[1:]
-                    batch_state.done += 1
+            if task.error:
+                print(f"[strokes_batch] error on {next_id}: {task.error}")
+                batch_state.queue = batch_state.queue[1:]
+                batch_state.done += 1
+            else:
+                strokes = task.result if isinstance(task.result, list) else []
+                _persist_strokes(ctx.user_id, next_id, strokes, cache, public_enabled)
+                batch_state.queue = batch_state.queue[1:]
+                batch_state.done += 1
 
     by_id = {str(wid): cache[str(wid)] for wid in ids if str(wid) in cache}
     # Snapshot so the next render can serve the same view if LS is mid-reload

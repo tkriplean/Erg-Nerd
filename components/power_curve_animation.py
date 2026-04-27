@@ -899,39 +899,43 @@ def manage_animation_bundle(
         # Scope by (identity, selection) so a still-running task for a prior
         # selection under the same identity doesn't swallow this selection's
         # build.
-        with hd.scope(f"sim_bundle_{_identity_key}_{_selection_key}"):
-            _bt = hd.task()
-            if not _bt.running and not _bt.done:
-                _bt.run(
-                    build_keyframes,
-                    workouts.efforts_filtered_by_event,
-                    workouts.quality_efforts,
-                    workouts.featured_efforts,
-                    **_keyframes_kwargs,
+        _bt = hd.task()
+        if not _bt.running and not _bt.done:
+            print("STARTING ANIMATION BUNDLE TASK")
+            _bt.run(
+                build_keyframes,
+                workouts.efforts_filtered_by_event,
+                workouts.quality_efforts,
+                workouts.featured_efforts,
+                **_keyframes_kwargs,
+            )
+        elif not _bt.done:
+            print("ANIMATION BUNDLE TASK NOT YET DONE")
+        if _bt.done:
+            print("DONE WITH ANIMATION BUNDLE TASK")
+
+            if _bt.result:
+                bundle_data, pred_lookup = _bt.result
+                # LRU insertion + eviction.  Plain dict preserves insertion
+                # order in Py3.7+; re-binding keeps HyperDiv's reactive
+                # state-change detection happy.
+                new_cache = dict(state.sim_snapshot_cache)
+                new_cache[_selection_key] = (bundle_data, pred_lookup)
+                while len(new_cache) > _SNAPSHOT_CACHE_MAX:
+                    _oldest = next(iter(new_cache))
+                    del new_cache[_oldest]
+                state.sim_snapshot_cache = new_cache
+                state.sim_full_selections = frozenset(
+                    state.sim_full_selections | {_selection_key}
                 )
-            if _bt.done:
-                if _bt.result:
-                    bundle_data, pred_lookup = _bt.result
-                    # LRU insertion + eviction.  Plain dict preserves insertion
-                    # order in Py3.7+; re-binding keeps HyperDiv's reactive
-                    # state-change detection happy.
-                    new_cache = dict(state.sim_snapshot_cache)
-                    new_cache[_selection_key] = (bundle_data, pred_lookup)
-                    while len(new_cache) > _SNAPSHOT_CACHE_MAX:
-                        _oldest = next(iter(new_cache))
-                        del new_cache[_oldest]
-                    state.sim_snapshot_cache = new_cache
-                    state.sim_full_selections = frozenset(
-                        state.sim_full_selections | {_selection_key}
-                    )
-                elif _bt.error:
-                    # Task failed — stop playing and surface the error.
-                    state.sim_playing = False
-                    hd.alert(
-                        f"Animation bundle failed: {_bt.error}",
-                        variant="danger",
-                        closable=True,
-                    )
+            elif _bt.error:
+                # Task failed — stop playing and surface the error.
+                state.sim_playing = False
+                hd.alert(
+                    f"Animation bundle failed: {_bt.error}",
+                    variant="danger",
+                    closable=True,
+                )
 
     # ── Fast bundle: synchronous placeholder for initial render ──────────────
     # If nothing is cached for this selection yet, compute a single end-state

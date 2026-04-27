@@ -213,18 +213,17 @@ def refresh_profile_if_stale() -> None:
 
     from services.concept2 import extract_c2_profile
 
-    with hd.scope(f"profile_refresh_{ctx.user_id}"):
-        task = hd.task()
-        if not task.running and not task.done:
-            task.run(lambda: ctx.client.get_user().get("data", {}))
-        if task.done and not task.error and task.result:
-            fresh = extract_c2_profile(task.result)
-            merged = merge_refreshed_profile(profile, fresh)
-            # Avoid a write loop: only persist when something actually changed.
-            if merged != profile:
-                ctx.profile = merged
-                ctx.display_name = merged.get("display_name") or ctx.display_name
-                write_session_ls(ctx.user_id, merged)
+    task = hd.task()
+    if not task.running and not task.done:
+        task.run(lambda: ctx.client.get_user().get("data", {}))
+    if task.done and not task.error and task.result:
+        fresh = extract_c2_profile(task.result)
+        merged = merge_refreshed_profile(profile, fresh)
+        # Avoid a write loop: only persist when something actually changed.
+        if merged != profile:
+            ctx.profile = merged
+            ctx.display_name = merged.get("display_name") or ctx.display_name
+            write_session_ls(ctx.user_id, merged)
 
 
 # ---------------------------------------------------------------------------

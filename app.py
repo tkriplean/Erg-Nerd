@@ -131,6 +131,7 @@ def _oauth_callback_view(query_args: str, app_state) -> None:
 # ---------------------------------------------------------------------------
 
 
+@hd.cached
 def _login_view() -> None:
     try:
         auth_url = get_authorization_url()
@@ -262,24 +263,6 @@ def _app_footer() -> None:
                         src="https://img.buymeacoffee.com/button-api/?text=Support Erg Nerd&emoji=☕&slug=ergnerd&button_color=5F7FFF&font_color=ffffff&font_family=Lato&outline_color=000000&coffee_color=FFDD00"
                     )
 
-            # with hd.box(
-            #     gap=0.5,
-            #     grow=True,
-            #     border_left="1px solid neutral-500",
-            #     margin_top=1,
-            #     padding_left=0.5,
-            # ):
-            #     for page_name, path in _PAGES_ROUTES.items():
-            #         with hd.scope(f"footer_{page_name}"):
-            #             hd.link(
-            #                 page_name,
-            #                 href=path,
-            #                 target="_self",
-            #                 font_color="neutral-300",
-            #                 font_size="small",
-            #                 underline=False,
-            #             )
-
         with hd.box(gap=0.3, align="center"):
             with hd.hbox(align="center", gap=1):
                 with hd.hbox(gap=0.2):
@@ -288,6 +271,13 @@ def _app_footer() -> None:
                         font_color="neutral-300",
                         font_size="small",
                     )
+                    hd.link(
+                        "Redline Rower",
+                        href="https://log.concept2.com/team/7119",
+                        font_size="small",
+                        font_color="primary-300",
+                    )
+
                     hd.link(
                         "Travis Kriplean",
                         href="https://traviskriplean.com",
@@ -314,6 +304,108 @@ def _app_footer() -> None:
                 )
 
 
+@hd.cached
+def _app_header(current_page, is_public):
+    # Public mode: hide Profile tab (no public settings page) AND Race tab is
+    # kept — strokes gracefully degrade when uncached. Profile is the only
+    # route that 404s in public mode.
+    _hidden_nav_pages = {"Profile"}
+
+    # Public-mode navigation links prepend "/u/{uid}" so SPA nav stays within
+    # the public dashboard.
+    def nav_href(path: str) -> str:
+        if is_public:
+            # "/" default page has no suffix under /u/{uid}
+            suffix = "" if path == "/" else path
+            return f"/u/{ctx.user_id}{suffix}"
+        return path
+
+    _theme = hd.theme()
+    with hd.hbox(gap=2, align="center"):
+        ergnerd_animation(width=10, theme="dark" if _theme.is_dark else "light")
+        with hd.nav(direction="horizontal", gap=0, align="end"):
+            for page_name, path in _PAGES_ROUTES.items():
+                if page_name in _hidden_nav_pages:
+                    continue
+                with hd.scope(f"{page_name, current_page}"):
+                    is_active = page_name == current_page
+                    hd.link(
+                        page_name,
+                        href=nav_href(path),
+                        target="_self",
+                        underline=False,
+                        font_size="medium",
+                        font_color="primary" if is_active else "neutral-600",
+                        border_bottom=(
+                            "2px solid primary"
+                            if is_active
+                            else "2px solid neutral-200"
+                        ),
+                        padding=(1, 1.25, 1, 1.25),
+                        hover_background_color="neutral-50",
+                    )
+
+        with hd.box(grow=True):
+            pass
+
+        with hd.hbox(gap=1, align="center", padding_bottom=1):
+            if SYNTHETIC_MODE:
+                hd.badge("SYNTHETIC DATA", variant="warning")
+
+            if is_public:
+                hd.text(
+                    ctx.display_name,
+                    font_color="primary",
+                    font_size="small",
+                    font_weight="semibold",
+                )
+            else:
+                profile = get_profile()
+                display_name = (
+                    (profile.get("display_name") or "").strip()
+                    or (ctx.display_name or "").strip()
+                    or "Rower"
+                )
+                profile_image = profile.get("profile_image") or ""
+
+                with hd.dropdown(placement="bottom-end") as _user_dd:
+                    with hd.button(
+                        display_name,
+                        caret=True,
+                        variant="text",
+                        size="large",
+                        slot=_user_dd.trigger,
+                        font_color="primary",
+                    ) as _user_btn:
+                        if profile_image:
+                            hd.avatar(
+                                image=profile_image,
+                                assistive_label=display_name,
+                                size=2.5,
+                                slot=_user_btn.prefix,
+                            )
+                    with hd.menu() as _user_menu:
+                        _profile_mi = hd.menu_item("Profile", prefix_icon="person")
+                        _disconnect_mi = hd.menu_item(
+                            "Disconnect", prefix_icon="box-arrow-right"
+                        )
+                    if _user_btn.clicked or _user_menu.selected_item:
+                        _user_dd.opened = not _user_dd.opened
+                    if _profile_mi.clicked:
+                        loc.go(path="/profile")
+                    if _disconnect_mi.clicked:
+                        # Also tear down any published public data — single
+                        # source of truth is the token file.
+                        try:
+                            public_profiles.unpublish(ctx.user_id)
+                        except Exception as _exc:
+                            print(f"[disconnect] unpublish failed: {_exc}")
+                        clear_token(ctx.user_id)
+                        clear_session_ls()
+                        hd.local_storage.remove_item("workouts")
+                        loc.go(path="/")
+
+
 # ---------------------------------------------------------------------------
 # Dashboard view
 # ---------------------------------------------------------------------------
@@ -325,7 +417,6 @@ def _dashboard_view(app_state, path_suffix: str | None = None) -> None:
     ctx = AppContext()
     is_public = ctx.mode == "public"
 
-    _theme = hd.theme()
     loc = hd.location()
 
     # Active path used to dispatch pages. In owner mode we read ``loc.path``
@@ -333,111 +424,14 @@ def _dashboard_view(app_state, path_suffix: str | None = None) -> None:
     # from "/u/{uid}/sessions" by the caller.
     active_path = path_suffix if path_suffix is not None else loc.path
 
-    # Public-mode navigation links prepend "/u/{uid}" so SPA nav stays within
-    # the public dashboard.
-    def nav_href(path: str) -> str:
-        if is_public:
-            # "/" default page has no suffix under /u/{uid}
-            suffix = "" if path == "/" else path
-            return f"/u/{ctx.user_id}{suffix}"
-        return path
-
     # Derive active page from URL; unknown/session paths fall back to default.
     in_session = active_path.startswith("/session/")
     current_page = _ROUTES_PAGES.get(active_path, None if in_session else _DEFAULT_PAGE)
 
-    # Public mode: hide Profile tab (no public settings page) AND Race tab is
-    # kept — strokes gracefully degrade when uncached. Profile is the only
-    # route that 404s in public mode.
-    _hidden_nav_pages = {"Profile"}
-
     public_banner()
 
     with hd.box(padding=2, gap=1, padding_top=0):
-        with hd.hbox(gap=2, align="center"):
-            ergnerd_animation(width=10, theme="dark" if _theme.is_dark else "light")
-            with hd.nav(direction="horizontal", gap=0, align="end"):
-                for page_name, path in _PAGES_ROUTES.items():
-                    if page_name in _hidden_nav_pages:
-                        continue
-                    with hd.scope(f"{page_name, active_path}"):
-                        is_active = page_name == current_page
-                        hd.link(
-                            page_name,
-                            href=nav_href(path),
-                            target="_self",
-                            underline=False,
-                            font_size="medium",
-                            font_color="primary" if is_active else "neutral-600",
-                            border_bottom=(
-                                "2px solid primary"
-                                if is_active
-                                else "2px solid neutral-200"
-                            ),
-                            padding=(1, 1.25, 1, 1.25),
-                            hover_background_color="neutral-50",
-                        )
-
-            with hd.box(grow=True):
-                pass
-
-            with hd.hbox(gap=1, align="center", padding_bottom=1):
-                if SYNTHETIC_MODE:
-                    hd.badge("SYNTHETIC DATA", variant="warning")
-
-                if is_public:
-                    hd.text(
-                        ctx.display_name,
-                        font_color="primary",
-                        font_size="small",
-                        font_weight="semibold",
-                    )
-                else:
-                    profile = get_profile()
-                    display_name = (
-                        (profile.get("display_name") or "").strip()
-                        or (ctx.display_name or "").strip()
-                        or "Rower"
-                    )
-                    profile_image = profile.get("profile_image") or ""
-
-                    with hd.dropdown(placement="bottom-end") as _user_dd:
-                        with hd.button(
-                            display_name,
-                            caret=True,
-                            variant="text",
-                            size="large",
-                            slot=_user_dd.trigger,
-                            font_color="primary",
-                        ) as _user_btn:
-                            if profile_image:
-                                hd.avatar(
-                                    image=profile_image,
-                                    assistive_label=display_name,
-                                    size=2.5,
-                                    slot=_user_btn.prefix,
-                                )
-                        with hd.menu() as _user_menu:
-                            _profile_mi = hd.menu_item("Profile", prefix_icon="person")
-                            _disconnect_mi = hd.menu_item(
-                                "Disconnect", prefix_icon="box-arrow-right"
-                            )
-                        if _user_btn.clicked or _user_menu.selected_item:
-                            _user_dd.opened = not _user_dd.opened
-                        if _profile_mi.clicked:
-                            loc.go(path="/profile")
-                        if _disconnect_mi.clicked:
-                            # Also tear down any published public data — single
-                            # source of truth is the token file.
-                            try:
-                                public_profiles.unpublish(ctx.user_id)
-                            except Exception as _exc:
-                                print(f"[disconnect] unpublish failed: {_exc}")
-                            clear_token(ctx.user_id)
-                            clear_session_ls()
-                            hd.local_storage.remove_item("workouts")
-                            loc.go(path="/")
-
+        _app_header(current_page, is_public)
         # ── One-time workout sync ─────────────────────────────────────────
         # Owner mode: fire concept2_sync exactly once per session (it bails
         # immediately on subsequent renders once ctx.workouts_dict is set).
@@ -456,8 +450,7 @@ def _dashboard_view(app_state, path_suffix: str | None = None) -> None:
             except (IndexError, ValueError):
                 session_id = None
             if session_id is not None:
-                with hd.scope(session_id):
-                    workout_page(session_id)
+                workout_page(session_id)
         elif current_page == "Volume":
             volume_page()
         elif current_page == "Sessions":
@@ -529,14 +522,14 @@ def _public_404_view(user_id: str | None = None) -> None:
 def main() -> None:
     from pyinstrument import Profiler
 
-    if True and PROFILE_ENABLE:
+    if False and PROFILE_ENABLE:
         profiler = Profiler()
         profiler.start()
 
     with profile_block("main-render"):
         _main_body()
 
-    if True and PROFILE_ENABLE:
+    if False and PROFILE_ENABLE:
         profiler.stop()
         profiler.print()
 

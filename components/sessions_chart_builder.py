@@ -592,22 +592,19 @@ def sessions_chart(workouts: list) -> None:
                             _sessions_dd.opened = not _sessions_dd.opened
 
                         with hd.hbox(gap=1, padding=1,background_color="neutral-50", align="center"):
-                            with hd.scope("ivl_filter"):
-                                with hd.radio_group(value=state.filter_ivl) as ivl_rg:
-                                    hd.radio_button("All", size="small")
-                                    hd.radio_button("Intervals", size="small")
-                                    hd.radio_button("Continuous", size="small")
-                                if ivl_rg.changed:
-                                    state.filter_ivl = ivl_rg.value
-                            with hd.scope("filter_10k"):
-                                cb_10k = hd.checkbox("10k+", checked=state.filter_10k)
-                                if cb_10k.changed:
-                                    state.filter_10k = cb_10k.checked
+                            with hd.radio_group(value=state.filter_ivl) as ivl_rg:
+                                hd.radio_button("All", size="small")
+                                hd.radio_button("Intervals", size="small")
+                                hd.radio_button("Continuous", size="small")
+                            if ivl_rg.changed:
+                                state.filter_ivl = ivl_rg.value
+                            cb_10k = hd.checkbox("10k+", checked=state.filter_10k)
+                            if cb_10k.changed:
+                                state.filter_10k = cb_10k.checked
             global_filter_ui()
 
 
         # with hd.hbox(gap=2, align="center", wrap="wrap", padding_bottom=1):
-        #     with hd.scope("ws"):
         #         with hd.radio_group(value=state.window_size) as rg:
         #             hd.radio_button("Month", size="small")
         #             hd.radio_button("Quarter", size="small")
@@ -620,17 +617,16 @@ def sessions_chart(workouts: list) -> None:
         #             state.window_size = rg.value
         #             state.window_end_ms = 0  # snap to latest when window size changes
 
-            # with hd.scope("ivl_filter"):
-            #     with hd.radio_group(value=state.filter_ivl) as ivl_rg:
-            #         hd.radio_button("All", size="small")
-            #         hd.radio_button("Intervals Only", size="small")
-            #         hd.radio_button("No Intervals", size="small")
-            #     if ivl_rg.changed:
-            #         state.filter_ivl = ivl_rg.value
-            # with hd.scope("filter_10k"):
-            #     cb_10k = hd.checkbox("10k+", checked=state.filter_10k)
-            #     if cb_10k.changed:
-            #         state.filter_10k = cb_10k.checked
+        #     with hd.radio_group(value=state.filter_ivl) as ivl_rg:
+        #         hd.radio_button("All", size="small")
+        #         hd.radio_button("Intervals Only", size="small")
+        #         hd.radio_button("No Intervals", size="small")
+        #     if ivl_rg.changed:
+        #         state.filter_ivl = ivl_rg.value
+        # with hd.scope("filter_10k"):
+        #     cb_10k = hd.checkbox("10k+", checked=state.filter_10k)
+        #     if cb_10k.changed:
+        #         state.filter_10k = cb_10k.checked
 
 
         # ── Plugin ────────────────────────────────────────────────────────────────
@@ -647,14 +643,13 @@ def sessions_chart(workouts: list) -> None:
 
         with hd.hbox(gap=2, align="center", wrap="wrap", padding_bottom=1):
 
-            with hd.scope("metric"):
-                with hd.radio_group(
-                    value="Watts" if state.show_watts else "Pace"
-                ) as metric_rg:
-                    hd.radio_button("Pace", size="small")
-                    hd.radio_button("Watts", size="small")
-                if metric_rg.changed:
-                    state.show_watts = metric_rg.value == "Watts"
+            with hd.radio_group(
+                value="Watts" if state.show_watts else "Pace"
+            ) as metric_rg:
+                hd.radio_button("Pace", size="small")
+                hd.radio_button("Watts", size="small")
+            if metric_rg.changed:
+                state.show_watts = metric_rg.value == "Watts"
 
         # ── Sync window bounds from brush drags / resizes ─────────────────────────
         if chart.change_id != state.last_change_id:

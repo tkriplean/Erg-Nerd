@@ -816,21 +816,20 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
         ):
             # ── Header row ────────────────────────────────────────────────
             # Corner cell
-            with hd.scope("corner"):
-                with hd.hbox(
-                    gap=0.4,
-                    align="center",
-                    justify="end",
-                    height=_HEADER_H,
-                    padding=(0.4, 0.6),
-                ):
-                    hd.text(
-                        "Work : rest ratio",
-                        font_size="small",
-                        font_color="neutral-400",
-                        font_style="italic",
-                    )
-                    hd.icon("arrow-down", font_size="small", font_color="neutral-400")
+            with hd.hbox(
+                gap=0.4,
+                align="center",
+                justify="end",
+                height=_HEADER_H,
+                padding=(0.4, 0.6),
+            ):
+                hd.text(
+                    "Work : rest ratio",
+                    font_size="small",
+                    font_color="neutral-400",
+                    font_style="italic",
+                )
+                hd.icon("arrow-down", font_size="small", font_color="neutral-400")
 
             # Column header cells
             for ci, (col_label, _, _) in enumerate(_DUR_COLS):
@@ -855,27 +854,26 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
             for ri, (row_label, ratio_range, _, _) in enumerate(_RATIO_ROWS):
                 with hd.scope(f"row_{ri}"):
                     # Row label cell
-                    with hd.scope("lbl"):
-                        with hd.box(
-                            # height=_CELL_H,
-                            padding=(0.4, 0.6),
-                            align="end",
-                            justify="center",
-                            # border_top="1px solid neutral-200",
-                            # border_right="1px solid neutral-200",
-                            gap=0.1,
-                        ):
-                            hd.text(
-                                row_label,
-                                font_size="small",
-                                font_weight="bold",
-                                font_color="neutral-600",
-                            )
-                            hd.text(
-                                ratio_range,
-                                font_size="small",
-                                font_color="neutral-400",
-                            )
+                    with hd.box(
+                        # height=_CELL_H,
+                        padding=(0.4, 0.6),
+                        align="end",
+                        justify="center",
+                        # border_top="1px solid neutral-200",
+                        # border_right="1px solid neutral-200",
+                        gap=0.1,
+                    ):
+                        hd.text(
+                            row_label,
+                            font_size="small",
+                            font_weight="bold",
+                            font_color="neutral-600",
+                        )
+                        hd.text(
+                            ratio_range,
+                            font_size="small",
+                            font_color="neutral-400",
+                        )
 
                     # Data cells — each cell is coloured by its own stimulus's
                     # expected pace-intensity score.  "Other" cells fall back
@@ -1183,10 +1181,9 @@ def intervals_page() -> None:
                 f"_{sorted(list(state.active_quality))}"
                 f"_{sorted(list(state.active_cells))}"
             )
-            with hd.scope(filter_key):
-                WorkoutTable(
-                    filtered,
-                    interval_columns,
-                    rows_per_page=_ROWS_PER_PAGE,
-                    default_sort_col="date",
-                )
+            WorkoutTable(
+                filtered,
+                interval_columns,
+                rows_per_page=_ROWS_PER_PAGE,
+                default_sort_col="date",
+            )

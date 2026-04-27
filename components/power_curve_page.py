@@ -167,6 +167,8 @@ from components.hyperdiv_extensions import radio_group, grid_box
 from components.shared_ui import global_filter_ui
 from services.global_state import GlobalFilters
 
+from components.prediction_table import prediction_table
+
 
 # ---------------------------------------------------------------------------
 # Constants local to this module
@@ -183,7 +185,6 @@ _SIM_LOOKAHEAD_STEPS = 4  # ghost/arrow lookahead = this many sim steps ahead
 
 
 def _chart_section(
-    state,
     *,
     rl_predictions: dict,
     profile: dict,
@@ -207,6 +208,8 @@ def _chart_section(
     All transport interaction (Play/Pause, Speed, seeking) is handled entirely
     inside the PowerCurveChart plugin — no Python UI is rendered for it.
     """
+
+    state = PowerCurveState()
     is_dark = hd.theme().is_dark
 
     if state.sim_bundle is None:
@@ -377,120 +380,116 @@ def _chart_settings(state, profile, pauls_k_fit):
                 # Gear icon → component lines dropdown (only for predictors that support it).
                 _pred_meta = PREDICTORS_BY_KEY[state.chart_predictor]
                 if _pred_meta.computed_from_components:
-                    with hd.scope("comp_gear"):
-                        with hd.dropdown() as _comp_dd:
-                            _gear_btn = hd.icon_button(
-                                "gear-fill" if state.chart_show_components else "gear",
-                                font_size="medium",
-                                font_color="primary"
-                                if state.chart_show_components
-                                else "neutral-500",
-                                slot=_comp_dd.trigger,
-                            )
-                            if _gear_btn.clicked:
-                                _comp_dd.opened = not _comp_dd.opened
+                    with hd.dropdown() as _comp_dd:
+                        _gear_btn = hd.icon_button(
+                            "gear-fill" if state.chart_show_components else "gear",
+                            font_size="medium",
+                            font_color="primary"
+                            if state.chart_show_components
+                            else "neutral-500",
+                            slot=_comp_dd.trigger,
+                        )
+                        if _gear_btn.clicked:
+                            _comp_dd.opened = not _comp_dd.opened
 
+                        with hd.box(
+                            gap=2,
+                            padding=1,
+                            background_color="neutral-0",
+                            min_width=22,
+                            align="start",
+                        ):
                             with hd.box(
-                                gap=2,
-                                padding=1,
-                                background_color="neutral-0",
-                                min_width=22,
-                                align="start",
+                                gap=0.75,
                             ):
-                                with hd.box(
-                                    gap=0.75,
-                                ):
-                                    with hd.scope("comp_cb"):
-                                        _comp_cb = hd.checkbox(
-                                            _pred_meta.component_label,
-                                            checked=state.chart_show_components,
-                                        )
-                                        if _comp_cb.changed:
-                                            state.chart_show_components = (
-                                                _comp_cb.checked
-                                            )
-                                    hd.text(
-                                        _pred_meta.component_desc,
-                                        font_size="small",
-                                        font_color="neutral-500",
-                                    )
+                                _comp_cb = hd.checkbox(
+                                    _pred_meta.component_label,
+                                    checked=state.chart_show_components,
+                                )
+                                if _comp_cb.changed:
+                                    state.chart_show_components = _comp_cb.checked
+                                hd.text(
+                                    _pred_meta.component_desc,
+                                    font_size="small",
+                                    font_color="neutral-500",
+                                )
 
-                                # ---- Paul's Law personalised K scale graphic ----
-                                if (
-                                    state.chart_predictor == "pauls_law"
-                                    and pauls_k_fit is not None
-                                ):
-                                    _K_MIN, _K_MAX = 1.0, 9.0
-                                    _pos_def = (5.0 - _K_MIN) / (_K_MAX - _K_MIN)
-                                    _pos_usr = max(
-                                        0.0,
-                                        min(
-                                            1.0,
-                                            (pauls_k_fit - _K_MIN) / (_K_MAX - _K_MIN),
-                                        ),
-                                    )
-                                    _SC = 1000
-                                    _gd = max(1, round(_pos_def * _SC))
-                                    _gu = max(1, round(_pos_usr * _SC))
+                            # ---- Paul's Law personalised K scale graphic ----
+                            if (
+                                state.chart_predictor == "pauls_law"
+                                and pauls_k_fit is not None
+                            ):
+                                _K_MIN, _K_MAX = 1.0, 9.0
+                                _pos_def = (5.0 - _K_MIN) / (_K_MAX - _K_MIN)
+                                _pos_usr = max(
+                                    0.0,
+                                    min(
+                                        1.0,
+                                        (pauls_k_fit - _K_MIN) / (_K_MAX - _K_MIN),
+                                    ),
+                                )
+                                _SC = 1000
+                                _gd = max(1, round(_pos_def * _SC))
+                                _gu = max(1, round(_pos_usr * _SC))
 
-                                    with hd.box(gap=0.3, padding=("0.25rem", 0)):
-                                        # Default (5.0s) marker — label + arrow above bar
-                                        with hd.hbox(gap=0, align="end"):
-                                            hd.box(grow=_gd)
-                                            with hd.box(align="center", gap=0):
-                                                hd.text(
-                                                    "5.0s - default",
-                                                    font_size="small",
-                                                    font_color="neutral-500",
-                                                )
-                                                hd.text(
-                                                    "▾",
-                                                    font_size="medium",
-                                                    font_color="neutral-500",
-                                                )
-                                            hd.box(grow=_SC - _gd)
-
-                                        hd.box(
-                                            grow=1,
-                                            height=0.4,
-                                            background_color=f"neutral-600",
-                                        )
-
-                                        # Side labels: aerobic ←→ sprint dominant
-                                        with hd.hbox():
+                                with hd.box(gap=0.3, padding=("0.25rem", 0)):
+                                    # Default (5.0s) marker — label + arrow above bar
+                                    with hd.hbox(gap=0, align="end"):
+                                        hd.box(grow=_gd)
+                                        with hd.box(align="center", gap=0):
                                             hd.text(
-                                                "aerobic",
+                                                "5.0s - default",
                                                 font_size="small",
                                                 font_color="neutral-500",
                                             )
-                                            hd.box(grow=1)
                                             hd.text(
-                                                "sprint dominant",
-                                                font_size="small",
+                                                "▾",
+                                                font_size="medium",
                                                 font_color="neutral-500",
                                             )
+                                        hd.box(grow=_SC - _gd)
 
-                                        # User marker — arrow + value below bar
-                                        with hd.hbox(gap=0, align="start"):
-                                            hd.box(grow=_gu)
-                                            with hd.box(align="center", gap=0):
-                                                hd.text(
-                                                    "▴",
-                                                    font_size="medium",
-                                                    font_color="primary-500",
-                                                )
-                                                hd.text(
-                                                    f"{pauls_k_fit:.1f}s — you",
-                                                    font_size="small",
-                                                    font_color="primary-600",
-                                                )
-                                            hd.box(grow=_SC - _gu)
+                                    hd.box(
+                                        grow=1,
+                                        height=0.4,
+                                        background_color=f"neutral-600",
+                                    )
 
+                                    # Side labels: aerobic ←→ sprint dominant
+                                    with hd.hbox():
                                         hd.text(
-                                            f"Paul's Law predicts a balanced athlete's pace will slow 5 seconds per distance doubling.",
-                                            font_color="neutral-600",
+                                            "aerobic",
                                             font_size="small",
+                                            font_color="neutral-500",
                                         )
+                                        hd.box(grow=1)
+                                        hd.text(
+                                            "sprint dominant",
+                                            font_size="small",
+                                            font_color="neutral-500",
+                                        )
+
+                                    # User marker — arrow + value below bar
+                                    with hd.hbox(gap=0, align="start"):
+                                        hd.box(grow=_gu)
+                                        with hd.box(align="center", gap=0):
+                                            hd.text(
+                                                "▴",
+                                                font_size="medium",
+                                                font_color="primary-500",
+                                            )
+                                            hd.text(
+                                                f"{pauls_k_fit:.1f}s — you",
+                                                font_size="small",
+                                                font_color="primary-600",
+                                            )
+                                        hd.box(grow=_SC - _gu)
+
+                                    hd.text(
+                                        f"Paul's Law predicts a balanced athlete's pace will slow 5 seconds per distance doubling.",
+                                        font_color="neutral-600",
+                                        font_size="small",
+                                    )
 
                 else:
                     # Keep show_components False when predictor doesn't support it.
@@ -609,277 +608,6 @@ def _rl_profile_notice() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _prediction_table(
-    state,
-    pred_rows: list,
-    accuracy: dict,
-    rl_available: bool = True,
-    pauls_k: float = 5.0,
-) -> None:
-    """
-    Renders the multi-model prediction grid (Your PB, CP, Log-Log, Paul's Law,
-    RowingLevel, Average) plus an accuracy footer row.  Pure renderer —
-    ``pred_rows`` and ``accuracy`` are computed upstream by
-    ``build_prediction_table_data`` (via the bundle lookup during animation
-    or the slow-path snapshot when paused).
-
-    Only renders when at least one row has any data.
-    """
-    if not any(
-        r.get("pb_pace", None)
-        or r.get("cp_pace", None)
-        or r.get("loglog_pace", None)
-        or r.get("pl_pace", None)
-        or r.get("rl_pace", None)
-        for r in pred_rows
-    ):
-        return
-
-    from components.app_context import your as _your
-
-    _poss = _your()
-    _poss_lower = _your(capitalize=False)
-    _pl_tip = (
-        f"Predicts +{pauls_k:.1f} s/500m for each doubling of distance "
-        f"({_poss_lower} personalised value), applied from each anchor PB and averaged."
-    )
-    _PRED_COLS = [("pb", f"{_poss} PB", f"{_poss} personal best for each event.")]
-    for _p in PREDICTORS:
-        if _p.key == "none":
-            continue
-        if _p.key == "rowinglevel" and not rl_available:
-            continue
-        _tip = _pl_tip if _p.key == "pauls_law" else _p.extended_description
-        _label = "Average" if _p.key == "average" else _p.name
-        _PRED_COLS.append((_p.key, _label, _tip))
-
-    _HEADER_BG = "neutral-100"
-    _ACC_BG = "neutral-100"
-
-    # CSS Grid: fixed Event column + one 1fr column per prediction model
-    _col_template = "8rem " + " ".join(["1fr"] * len(_PRED_COLS))
-
-    with grid_box(
-        grid_template_columns=_col_template,
-        border="1px solid neutral-200",
-        border_radius="medium",
-        width="100%",
-        overflow="hidden",
-    ):
-        # ── header row ────────────────────────────────────────────────────
-        with hd.scope("hdr_event"):
-            with hd.box(
-                padding=1,
-                background_color=_HEADER_BG,
-                border_right="1px solid neutral-200",
-                border_bottom="1px solid neutral-200",
-            ):
-                hd.text("Event", font_weight="semibold", font_size="small")
-
-        for col_key, col_label, col_tip in _PRED_COLS:
-            with hd.scope(f"hdr_{col_key}"):
-                with hd.box(
-                    padding=(0.75, 0.5),
-                    background_color=_HEADER_BG,
-                    border_bottom="1px solid neutral-200",
-                ):
-                    with hd.hbox(gap=0.5, align="center"):
-                        hd.text(col_label, font_weight="semibold", font_size="small")
-                        with hd.tooltip(col_tip):
-                            hd.icon(
-                                "question-circle",
-                                font_size="small",
-                                font_color="neutral-500",
-                            )
-
-        # ── data rows ─────────────────────────────────────────────────────
-        for _ri, _row in enumerate(pred_rows):
-            with hd.scope(_row["label"]):
-                _row_bg = "neutral-50" if _ri % 2 == 0 else "neutral-0"
-                _pb_raw = _row.get("pb_raw")
-
-                if _row["event_type"] == "dist":
-                    _ev_idx = next(
-                        i
-                        for i, (d, _) in enumerate(RANKED_DISTANCES)
-                        if d == _row["event_value"]
-                    )
-                    _ev_enabled = state.dist_enabled[_ev_idx]
-                else:
-                    _ev_idx = next(
-                        i
-                        for i, (t, _) in enumerate(RANKED_TIMES)
-                        if t == _row["event_value"]
-                    )
-                    _ev_enabled = state.time_enabled[_ev_idx]
-
-                # Event cell
-                with hd.scope("ev"):
-                    with hd.box(
-                        padding=1,
-                        background_color=_row_bg,
-                        border_top="1px solid neutral-200",
-                        border_right="1px solid neutral-200",
-                    ):
-                        with hd.hbox(gap=0.5, align="center"):
-                            with hd.scope("toggle"):
-                                with hd.tooltip(
-                                    "Include this event's PB in prediction "
-                                    "calculations? More accurate predictions "
-                                    "when you include only current, max-effort results."
-                                ):
-                                    _ev_sw = hd.switch(
-                                        "", checked=_ev_enabled, size="small"
-                                    )
-                                if _ev_sw.changed:
-                                    if _row["event_type"] == "dist":
-                                        _flags = list(state.dist_enabled)
-                                        _flags[_ev_idx] = _ev_sw.checked
-                                        state.dist_enabled = tuple(_flags)
-                                    else:
-                                        _flags = list(state.time_enabled)
-                                        _flags[_ev_idx] = _ev_sw.checked
-                                        state.time_enabled = tuple(_flags)
-                            hd.text(
-                                _row["label"],
-                                font_weight="semibold",
-                                font_size="small",
-                                font_color="neutral-600"
-                                if _ev_enabled
-                                else "neutral-400",
-                            )
-
-                # Prediction cells
-                for col_key, col_label, _tip in _PRED_COLS:
-                    with hd.scope(col_key):
-                        _pace_val = _row.get(f"{col_key}_pace")
-                        _result_val = _row.get(f"{col_key}_result")
-                        _pred_raw = _row.get(f"{col_key}_raw")
-                        has_delta = (
-                            col_key != "pb"
-                            and _pred_raw is not None
-                            and _pb_raw is not None
-                        )
-                        if has_delta:
-                            _delta = _pred_raw - _pb_raw
-                            _delta_s = f"{_delta:+.1f}s"
-                            _delta_color = (
-                                "success-600"
-                                if _delta < 0
-                                else "danger-600"
-                                if _delta > 0
-                                else "neutral-500"
-                            )
-                        _is_pb_col = col_key == "pb"
-                        _pace_color = (
-                            "neutral-300"
-                            if _is_pb_col and not _ev_enabled
-                            else "neutral-900"
-                        )
-                        _result_color = (
-                            "neutral-300"
-                            if _is_pb_col and not _ev_enabled
-                            else "neutral-500"
-                        )
-                        with hd.box(
-                            padding=0.5,
-                            background_color=_row_bg,
-                            border_top="1px solid neutral-200",
-                        ):
-                            if _pace_val:
-                                with hd.hbox(gap=0.5):
-                                    hd.text(
-                                        _pace_val,
-                                        font_size="large",
-                                        font_weight="semibold",
-                                        font_color=_pace_color,
-                                    )
-                                    if has_delta:
-                                        hd.text(
-                                            _delta_s,
-                                            font_size="small",
-                                            font_color=_delta_color,
-                                        )
-                                hd.text(
-                                    _result_val or "",
-                                    font_size="x-small",
-                                    font_color=_result_color,
-                                )
-                            else:
-                                hd.text(
-                                    "—",
-                                    font_size="small",
-                                    font_color="neutral-300",
-                                )
-
-        # ── accuracy row ──────────────────────────────────────────────────
-        # Accuracy label cell
-        with hd.scope("acc_label"):
-            with hd.box(
-                padding=1,
-                background_color=_ACC_BG,
-                border_top="2px solid neutral-300",
-                border_right="1px solid neutral-200",
-            ):
-                with hd.hbox(gap=0.5, align="center"):
-                    hd.text(
-                        "Accuracy",
-                        font_size="small",
-                        font_weight="semibold",
-                        font_color="neutral-600",
-                    )
-                    with hd.tooltip(
-                        "RMSE (root mean square error) in sec/500m and R² "
-                        "across enabled events where both a prediction and "
-                        "a PB exist. Lower RMSE and higher R² are better. "
-                        "Disabled events (toggled off) are excluded."
-                    ):
-                        hd.icon(
-                            "question-circle",
-                            font_size="small",
-                            font_color="neutral-600",
-                        )
-
-        # PB column accuracy cell (always —)
-        with hd.scope("acc_pb"):
-            with hd.box(
-                padding=0.5,
-                background_color=_ACC_BG,
-                border_top="2px solid neutral-300",
-            ):
-                hd.text("—", font_size="small", font_color="neutral-600")
-
-        # Other model accuracy cells
-        for _ck, _cl, _ct in _PRED_COLS[1:]:
-            with hd.scope(f"acc_{_ck}"):
-                _av = accuracy.get(_ck, {"rmse": None, "r2": None, "n": 0})
-                with hd.box(
-                    padding=0.5,
-                    background_color=_ACC_BG,
-                    border_top="2px solid neutral-300",
-                ):
-                    if _av["rmse"] is not None:
-                        hd.text(
-                            f"{_av['rmse']:.2f}s",
-                            font_size="large",
-                            font_weight="semibold",
-                            font_color="neutral-800",
-                        )
-                        if _av["r2"] is not None:
-                            hd.text(
-                                f"R²={_av['r2']:.3f}",
-                                font_size="small",
-                                font_color="neutral-600",
-                            )
-                        hd.text(
-                            f"n={_av['n']}",
-                            font_size="small",
-                            font_color="neutral-600",
-                        )
-                    else:
-                        hd.text("—", font_size="small", font_color="neutral-600")
-
-
 # ---------------------------------------------------------------------------
 # Pure data helpers
 # ---------------------------------------------------------------------------
@@ -981,14 +709,16 @@ def compute_axis_bounds(
 # ---------------------------------------------------------------------------
 
 
+@hd.cached
 def _page_header(
-    state,
     *,
     timeline_date: date,
 ) -> None:
     """
     Renders the page title bar: best_filter dropdown, events dropdown, date label.
     """
+    state = PowerCurveState()
+
     _date_label = timeline_date.strftime("%b %d, %Y")
     _best_long = {
         "All": "All Great Efforts",
@@ -1006,62 +736,59 @@ def _page_header(
                 justify="center",
                 wrap="wrap",
             ):
-                with hd.scope("best_filter_dd"):
-                    with hd.dropdown() as _bf_dd:
-                        _bf_btn = hd.button(
-                            _cur_best_lbl,
-                            caret=True,
-                            label_style=hd.style(padding_right=0),
-                            border="none",
-                            font_color="neutral-800",
-                            font_size=2,
-                            font_weight="bold",
-                            padding=(1, 0.5, 1, 0),
-                            slot=_bf_dd.trigger,
+                with hd.dropdown() as _bf_dd:
+                    _bf_btn = hd.button(
+                        _cur_best_lbl,
+                        caret=True,
+                        label_style=hd.style(padding_right=0),
+                        border="none",
+                        font_color="neutral-800",
+                        font_size=2,
+                        font_weight="bold",
+                        padding=(1, 0.5, 1, 0),
+                        slot=_bf_dd.trigger,
+                    )
+                    if _bf_btn.clicked:
+                        _bf_dd.opened = not _bf_dd.opened
+                    with hd.box(
+                        padding=1,
+                        gap=1,
+                        background_color="neutral-0",
+                        min_width=24,
+                    ):
+                        # ── Plot in graph ─────────────────────────────
+                        hd.text(
+                            "Plot in graph",
+                            font_size="small",
+                            font_weight="semibold",
+                            font_color="neutral-500",
                         )
-                        if _bf_btn.clicked:
-                            _bf_dd.opened = not _bf_dd.opened
-                        with hd.box(
-                            padding=1,
-                            gap=1,
-                            background_color="neutral-0",
-                            min_width=24,
-                        ):
-                            # ── Plot in graph ─────────────────────────────
-                            hd.text(
-                                "Plot in graph",
-                                font_size="small",
-                                font_weight="semibold",
-                                font_color="neutral-500",
-                            )
-                            with hd.scope("best_filter_rg"):
-                                with radio_group(
-                                    value=state.best_filter, size="small"
-                                ) as _bf_rg:
-                                    hd.radio_button("All Great Efforts", value="All")
-                                    hd.radio_button("PBs only", value="PBs")
-                                    hd.radio_button("SBs only", value="SBs")
-                                if _bf_rg.changed:
-                                    state.best_filter = _bf_rg.value
+                        with radio_group(
+                            value=state.best_filter, size="small"
+                        ) as _bf_rg:
+                            hd.radio_button("All Great Efforts", value="All")
+                            hd.radio_button("PBs only", value="PBs")
+                            hd.radio_button("SBs only", value="SBs")
+                        if _bf_rg.changed:
+                            state.best_filter = _bf_rg.value
 
-                            hd.divider()
+                        hd.divider()
 
-                            # ── Draw a Power Curve for ────────────────────
-                            hd.text(
-                                "Draw a Power Curve for",
-                                font_size="small",
-                                font_weight="semibold",
-                                font_color="neutral-500",
-                            )
-                            with hd.scope("draw_curves_rg"):
-                                with radio_group(
-                                    value=state.overlay_bests, size="small"
-                                ) as _dpc_rg:
-                                    hd.radio_button("SBs", value="SBs")
-                                    hd.radio_button("PBs", value="PBs")
-                                    hd.radio_button("None", value="None")
-                                if _dpc_rg.changed:
-                                    state.overlay_bests = _dpc_rg.value
+                        # ── Draw a Power Curve for ────────────────────
+                        hd.text(
+                            "Draw a Power Curve for",
+                            font_size="small",
+                            font_weight="semibold",
+                            font_color="neutral-500",
+                        )
+                        with radio_group(
+                            value=state.overlay_bests, size="small"
+                        ) as _dpc_rg:
+                            hd.radio_button("SBs", value="SBs")
+                            hd.radio_button("PBs", value="PBs")
+                            hd.radio_button("None", value="None")
+                        if _dpc_rg.changed:
+                            state.overlay_bests = _dpc_rg.value
 
                 # ---- Events dropdown ----
                 _n_ev_sel = sum(state.dist_enabled) + sum(state.time_enabled)
@@ -1102,38 +829,36 @@ def _page_header(
                                     False for _ in RANKED_DISTANCES
                                 )
                                 state.time_enabled = tuple(False for _ in RANKED_TIMES)
-                        with hd.scope(str(state.dist_enabled)):
-                            with hd.hbox(gap=0.5, wrap="wrap"):
-                                for i, (dist, label) in enumerate(RANKED_DISTANCES):
-                                    with hd.scope(f"dist_{dist}"):
-                                        cb = hd.checkbox(
-                                            label, checked=state.dist_enabled[i]
-                                        )
-                                        if cb.changed:
-                                            flags = list(state.dist_enabled)
-                                            flags[i] = cb.checked
-                                            state.dist_enabled = tuple(flags)
-                                        if cb.checked != state.dist_enabled[i]:
-                                            cb.checked = state.dist_enabled[i]
+                        with hd.hbox(gap=0.5, wrap="wrap"):
+                            for i, (dist, label) in enumerate(RANKED_DISTANCES):
+                                with hd.scope(f"dist_{dist} {state.dist_enabled}"):
+                                    cb = hd.checkbox(
+                                        label, checked=state.dist_enabled[i]
+                                    )
+                                    if cb.changed:
+                                        flags = list(state.dist_enabled)
+                                        flags[i] = cb.checked
+                                        state.dist_enabled = tuple(flags)
+                                    if cb.checked != state.dist_enabled[i]:
+                                        cb.checked = state.dist_enabled[i]
                         hd.text(
                             "— timed —",
                             font_color="neutral-300",
                             font_size="x-small",
                             padding_top=0.25,
                         )
-                        with hd.scope(str(state.time_enabled)):
-                            with hd.hbox(gap=0.5, wrap="wrap"):
-                                for i, (tenths, label) in enumerate(RANKED_TIMES):
-                                    with hd.scope(f"time_{tenths}"):
-                                        cb = hd.checkbox(
-                                            label, checked=state.time_enabled[i]
-                                        )
-                                        if cb.changed:
-                                            flags = list(state.time_enabled)
-                                            flags[i] = cb.checked
-                                            state.time_enabled = tuple(flags)
-                                        if cb.checked != state.time_enabled[i]:
-                                            cb.checked = state.time_enabled[i]
+                        with hd.hbox(gap=0.5, wrap="wrap"):
+                            for i, (tenths, label) in enumerate(RANKED_TIMES):
+                                with hd.scope(f"time_{tenths} {state.time_enabled}"):
+                                    cb = hd.checkbox(
+                                        label, checked=state.time_enabled[i]
+                                    )
+                                    if cb.changed:
+                                        flags = list(state.time_enabled)
+                                        flags[i] = cb.checked
+                                        state.time_enabled = tuple(flags)
+                                    if cb.checked != state.time_enabled[i]:
+                                        cb.checked = state.time_enabled[i]
 
                 hd.text(
                     f"through {_date_label}",
@@ -1149,47 +874,66 @@ def _page_header(
 # ---------------------------------------------------------------------------
 
 
+@hd.global_state
+class PowerCurveState(hd.BaseState):
+    dist_enabled = hd.Prop(hd.Any, tuple(True for _ in RANKED_DISTANCES))
+    time_enabled = hd.Prop(hd.Any, tuple(True for _ in RANKED_TIMES))
+    best_filter = hd.Prop(hd.String, "SBs")
+    chart_log_x = hd.Prop(hd.Bool, True)
+    chart_log_y = hd.Prop(hd.Bool, False)
+    chart_y_metric = hd.Prop(hd.String, "pace")
+    chart_x_metric = hd.Prop(hd.String, "distance")
+    chart_predictor = hd.Prop(hd.String, "critical_power")
+    chart_show_components = hd.Prop(hd.Bool, False)
+    overlay_bests = hd.Prop(hd.String, "PBs")
+    sim_playing = hd.Prop(hd.Bool, False)
+    timeline_day = hd.Prop(hd.Any, None)
+    sim_speed = hd.Prop(hd.String, "1x")
+    sim_bundle = (
+        hd.Prop(hd.Any, None)
+        # final js_payload (current bundle_data + style wrapper + merged snapshots)
+    )
+    sim_bundle_key = hd.Prop(hd.String, "")
+    # combined identity-selection-style key baked into sim_bundle
+    sim_snapshot_cache = hd.Prop(
+        hd.Any, {}
+    )  # {selection_key: (bundle_data, pred_lookup)}; LRU, bounded
+    sim_full_selections = hd.Prop(
+        hd.Any, frozenset()
+    )  # selections whose bg build has finished (fast-bundle replaced)
+    sim_identity_key = hd.Prop(
+        hd.String, ""
+    )  # hash of selection-independent data inputs; change -> clear cache
+    sim_pred_lookup = hd.Prop(
+        hd.Any, {}
+    )  # current selection's {keyframe_day: {pred_rows, pauls_k_fit, accuracy}}
+    last_sim_day_out = hd.Prop(hd.Int, -1)  # tracks chart.sim_day_out changes
+    last_sim_done = hd.Prop(hd.Int, 0)  # tracks chart.sim_done changes
+    chart_compare_wc = hd.Prop(hd.Bool, False)
+    wr_fetch_key = hd.Prop(hd.String, "")
+    wr_fetch_done = hd.Prop(hd.Bool, False)
+    wr_data = hd.Prop(hd.Any, None)
+    workout_view = hd.Prop(
+        hd.Any, None
+    )  # WorkoutView: collapses the 4 pipeline stages + all_seasons
+    _view_key = hd.Prop(
+        hd.Any, ()
+    )  # cache key for workout_view: (hash(filters), len(workouts))
+    _annot_key = hd.Prop(hd.Any, ())  # cache key for slider annotations
+    _annot_data = hd.Prop(hd.Any, None)  # cached list of {day, label, color} dicts
+    _bounds_key = hd.Prop(hd.Any, ())  # cache key for compute_axis_bounds
+    _bounds_data = hd.Prop(hd.Any, None)  # cached (x_bounds, y_bounds)
+    _wk_prop_key = hd.Prop(hd.Any, ())  # cache key for workouts/season_meta props
+    _wk_prop_data = hd.Prop(hd.Any, None)  # cached (workouts_prop, season_meta_prop)
+
+
 def power_curve_page() -> None:
     """
     Top-level entry point for the Performance tab.
     Fetches data, computes all derived state, then calls sub-components.
     """
     gstate = GlobalFilters()
-    state = hd.state(
-        dist_enabled=tuple(True for _ in RANKED_DISTANCES),
-        time_enabled=tuple(True for _ in RANKED_TIMES),
-        best_filter="SBs",
-        chart_log_x=True,
-        chart_log_y=False,
-        chart_y_metric="pace",
-        chart_x_metric="distance",
-        chart_predictor="critical_power",
-        chart_show_components=False,
-        overlay_bests="PBs",
-        sim_playing=False,
-        timeline_day=None,
-        sim_speed="1x",
-        sim_bundle=None,  # final js_payload (current bundle_data + style wrapper + merged snapshots)
-        sim_bundle_key="",  # combined identity-selection-style key baked into sim_bundle
-        sim_snapshot_cache={},  # {selection_key: (bundle_data, pred_lookup)}; LRU, bounded
-        sim_full_selections=frozenset(),  # selections whose bg build has finished (fast-bundle replaced)
-        sim_identity_key="",  # hash of selection-independent data inputs; change -> clear cache
-        sim_pred_lookup={},  # current selection's {keyframe_day: {pred_rows, pauls_k_fit, accuracy}}
-        last_sim_day_out=-1,  # tracks chart.sim_day_out changes
-        last_sim_done=0,  # tracks chart.sim_done changes
-        chart_compare_wc=False,
-        wr_fetch_key="",
-        wr_fetch_done=False,
-        wr_data=None,
-        workout_view=None,  # WorkoutView: collapses the 4 pipeline stages + all_seasons
-        _view_key=(),  # cache key for workout_view: (hash(filters), len(workouts))
-        _annot_key=(),  # cache key for slider annotations
-        _annot_data=None,  # cached list of {day, label, color} dicts
-        _bounds_key=(),  # cache key for compute_axis_bounds
-        _bounds_data=None,  # cached (x_bounds, y_bounds)
-        _wk_prop_key=(),  # cache key for workouts/season_meta props
-        _wk_prop_data=None,  # cached (workouts_prop, season_meta_prop)
-    )
+    state = PowerCurveState()
 
     excluded_seasons = gstate.excluded_seasons
     machine = gstate.machine
@@ -1331,12 +1075,10 @@ def power_curve_page() -> None:
     with hd.box(gap=5, align="center", padding=2, min_height="80vh"):
         with hd.box(width="100%", align="center"):
             _page_header(
-                state,
                 timeline_date=timeline_date,
             )
 
             _chart_section(
-                state,
                 rl_predictions=rl_predictions,
                 profile=profile,
                 show_watts=show_watts,
@@ -1366,8 +1108,7 @@ def power_curve_page() -> None:
                 padding_bottom=1,
             )
 
-            _prediction_table(
-                state,
+            prediction_table(
                 pred_rows,
                 accuracy,
                 rl_available=rl_available,

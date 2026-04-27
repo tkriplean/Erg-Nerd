@@ -1013,19 +1013,12 @@ def _render_table(rows: list[dict], state) -> None:
     if not rows:
         return
     columns = _columns_for(state.ranking_focus)
-    scope_key = (
-        f"rank_tbl_{state.ranking_focus}_{state.include_filter}"
-        f"_{len(state.modifier_must_have_events)}"
-        f"_{int(state.modifier_exclude_unverified)}"
-        f"_{state.modifier_min_performances}"
+    WorkoutTable(
+        rows,
+        columns,
+        default_sort_col="event",
+        default_sort_asc=True,
     )
-    with hd.scope(scope_key):
-        WorkoutTable(
-            rows,
-            columns,
-            default_sort_col="event",
-            default_sort_asc=True,
-        )
 
 
 def _render_c2_comparison_explainer(state) -> None:
@@ -1156,13 +1149,12 @@ def _render_filters_dropdown(state) -> None:
                 hd.divider()
 
                 # ── Exclude unverified ───────────────────────────────────
-                with hd.scope("ex_unv"):
-                    cb = hd.checkbox(
-                        "Exclude unverified performances",
-                        checked=state.modifier_exclude_unverified,
-                    )
-                    if cb.changed:
-                        state.modifier_exclude_unverified = cb.checked
+                cb = hd.checkbox(
+                    "Exclude unverified performances",
+                    checked=state.modifier_exclude_unverified,
+                )
+                if cb.changed:
+                    state.modifier_exclude_unverified = cb.checked
 
                 # ── Reset ────────────────────────────────────────────────
                 if active_count:

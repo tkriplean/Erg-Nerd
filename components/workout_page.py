@@ -1395,35 +1395,34 @@ def workout_page(session_id: int) -> None:
                         else None
                     )
 
-                    with hd.scope("chart"):
-                        cfg = build_stroke_chart_config(
-                            strokes,
-                            workout,
-                            metric=state.metric,
-                            focused_interval_idx=(
-                                None if state.stack else state.focused_interval
-                            ),
-                            is_dark=_theme.is_dark,
-                            stack=state.stack,
-                            show_pace=state.show_pace,
-                            show_spm=state.show_spm,
-                            show_hr=state.show_hr,
-                            custom_splits=state.custom_splits,
-                            compare_series=compare_series,
-                        )
-                        chart = StrokeChart(config=cfg, height="50vh")
-                        # Fire only on *new* clicks — the plugin's
-                        # clicked_band_idx prop keeps its last value across
-                        # renders, so we key off a monotonic seq counter
-                        # instead.  Without this, Reset zoom would re-focus
-                        # the stale band on the next render.
-                        if (
-                            not state.stack
-                            and chart.click_seq > state.last_click_seq
-                            and chart.clicked_band_idx >= 0
-                        ):
-                            state.focused_interval = chart.clicked_band_idx
-                            state.last_click_seq = chart.click_seq
+                    cfg = build_stroke_chart_config(
+                        strokes,
+                        workout,
+                        metric=state.metric,
+                        focused_interval_idx=(
+                            None if state.stack else state.focused_interval
+                        ),
+                        is_dark=_theme.is_dark,
+                        stack=state.stack,
+                        show_pace=state.show_pace,
+                        show_spm=state.show_spm,
+                        show_hr=state.show_hr,
+                        custom_splits=state.custom_splits,
+                        compare_series=compare_series,
+                    )
+                    chart = StrokeChart(config=cfg, height="50vh")
+                    # Fire only on *new* clicks — the plugin's
+                    # clicked_band_idx prop keeps its last value across
+                    # renders, so we key off a monotonic seq counter
+                    # instead.  Without this, Reset zoom would re-focus
+                    # the stale band on the next render.
+                    if (
+                        not state.stack
+                        and chart.click_seq > state.last_click_seq
+                        and chart.clicked_band_idx >= 0
+                    ):
+                        state.focused_interval = chart.clicked_band_idx
+                        state.last_click_seq = chart.click_seq
 
                     if compare_loading:
                         with hd.hbox(gap=0.5, align="center"):

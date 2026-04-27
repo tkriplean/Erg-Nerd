@@ -154,129 +154,123 @@ def profile_page() -> None:
     )  # "publish_all_<ts>" | "publish_profile_<ts>" | "unpublish_<ts>"
 
     if publish_action.action_key and ctx.user_id:
-        with hd.scope(publish_action.action_key):
-            pt = hd.task()
-            if publish_action.action_key.startswith("publish_all_"):
+        pt = hd.task()
+        if publish_action.action_key.startswith("publish_all_"):
 
-                def _do_publish_all(uid, prof, dn, wkts):
-                    public_profiles.publish_all(uid, prof, wkts, display_name=dn)
+            def _do_publish_all(uid, prof, dn, wkts):
+                public_profiles.publish_all(uid, prof, wkts, display_name=dn)
 
-                if not pt.running and not pt.done:
-                    pt.run(
-                        _do_publish_all,
-                        ctx.user_id,
-                        get_profile(),
-                        display_name or "Rower",
-                        ctx.workouts_dict or {},
-                    )
-            elif publish_action.action_key.startswith("publish_profile_"):
+            if not pt.running and not pt.done:
+                pt.run(
+                    _do_publish_all,
+                    ctx.user_id,
+                    get_profile(),
+                    display_name or "Rower",
+                    ctx.workouts_dict or {},
+                )
+        elif publish_action.action_key.startswith("publish_profile_"):
 
-                def _do_publish_profile(uid, prof, dn):
-                    public_profiles.publish_profile(uid, prof, display_name=dn)
+            def _do_publish_profile(uid, prof, dn):
+                public_profiles.publish_profile(uid, prof, display_name=dn)
 
-                if not pt.running and not pt.done:
-                    pt.run(
-                        _do_publish_profile,
-                        ctx.user_id,
-                        get_profile(),
-                        display_name or "Rower",
-                    )
-            elif publish_action.action_key.startswith("unpublish_"):
+            if not pt.running and not pt.done:
+                pt.run(
+                    _do_publish_profile,
+                    ctx.user_id,
+                    get_profile(),
+                    display_name or "Rower",
+                )
+        elif publish_action.action_key.startswith("unpublish_"):
 
-                def _do_unpublish(uid):
-                    public_profiles.unpublish(uid)
+            def _do_unpublish(uid):
+                public_profiles.unpublish(uid)
 
-                if not pt.running and not pt.done:
-                    pt.run(_do_unpublish, ctx.user_id)
+            if not pt.running and not pt.done:
+                pt.run(_do_unpublish, ctx.user_id)
 
-            if pt.running:
-                state.publish_status = "publishing"
-            elif pt.done and state.task_processed_key != publish_action.action_key:
-                state.task_processed_key = publish_action.action_key
-                if pt.error:
-                    state.publish_status = "error"
-                    # Roll back optimistic state changes so the switch
-                    # reflects reality (and ctx/LS are consistent).
-                    if publish_action.action_key.startswith("publish_all_"):
-                        if state.public:
-                            state.public = False
-                            _save_via_state(state)
-                    print(f"[profile] publish task failed: {pt.error}")
-                else:
-                    state.publish_status = "published"
+        if pt.running:
+            state.publish_status = "publishing"
+        elif pt.done and state.task_processed_key != publish_action.action_key:
+            state.task_processed_key = publish_action.action_key
+            if pt.error:
+                state.publish_status = "error"
+                # Roll back optimistic state changes so the switch
+                # reflects reality (and ctx/LS are consistent).
+                if publish_action.action_key.startswith("publish_all_"):
+                    if state.public:
+                        state.public = False
+                        _save_via_state(state)
+                print(f"[profile] publish task failed: {pt.error}")
+            else:
+                state.publish_status = "published"
 
     # ── Render form ──────────────────────────────────────────────────────────
     with hd.box(gap=1.5, padding=3):
         with hd.box():
             # Gender — radio group; saves immediately (no keyboard focus to lose)
             hd.text("Gender", font_weight="semibold", font_size="small")
-            with hd.scope("gender"):
-                with hd.radio_group(value=state.gender) as rg:
-                    hd.radio_button("Male")
-                    hd.radio_button("Female")
-                if rg.changed:
-                    state.gender = rg.value
-                    _save()
+
+            with hd.radio_group(value=state.gender) as rg:
+                hd.radio_button("Male")
+                hd.radio_button("Female")
+            if rg.changed:
+                state.gender = rg.value
+                _save()
 
         with hd.box():
             # Date of birth — text input (YYYY-MM-DD); buffered
             hd.text("Date of Birth", font_weight="semibold", font_size="small")
-            with hd.scope("dob"):
-                computed_age = age_from_dob(state.dob)
-                dob_input = hd.text_input(
-                    value=state.dob,
-                    placeholder="YYYY-MM-DD",
-                    width=14,
-                )
-                if dob_input.changed:
-                    state.dob = dob_input.value
-                    state.dirty = True
+            computed_age = age_from_dob(state.dob)
+            dob_input = hd.text_input(
+                value=state.dob,
+                placeholder="YYYY-MM-DD",
+                width=14,
+            )
+            if dob_input.changed:
+                state.dob = dob_input.value
+                state.dirty = True
 
         with hd.box():
             # Bodyweight — text input; buffered
             hd.text("Bodyweight", font_weight="semibold", font_size="small")
             with hd.hbox(gap=2, align="center"):
-                with hd.scope("weight"):
-                    weight_input = hd.text_input(
-                        value=state.weight,
-                        input_type="number",
-                        placeholder="e.g. 75",
-                        width=10,
-                    )
-                    if weight_input.changed:
-                        state.weight = weight_input.value
-                        state.dirty = True
-                with hd.scope("weight_unit"):
-                    with hd.radio_group(value=state.weight_unit) as rg:
-                        hd.radio_button("kg")
-                        hd.radio_button("lbs")
-                    if rg.changed:
-                        state.weight_unit = rg.value
-                        _save()
+                weight_input = hd.text_input(
+                    value=state.weight,
+                    input_type="number",
+                    placeholder="e.g. 75",
+                    width=10,
+                )
+                if weight_input.changed:
+                    state.weight = weight_input.value
+                    state.dirty = True
+                with hd.radio_group(value=state.weight_unit) as rg:
+                    hd.radio_button("kg")
+                    hd.radio_button("lbs")
+                if rg.changed:
+                    state.weight_unit = rg.value
+                    _save()
         with hd.box():
             # Weight class — radio group; saves immediately
             hd.text("Weight Class", font_weight="semibold", font_size="small")
-            with hd.scope("weight_class"):
-                with hd.radio_group(value=state.weight_class) as rg:
-                    hd.radio_button("Heavyweight")
-                    hd.radio_button("Lightweight")
-                if rg.changed:
-                    state.weight_class = rg.value
-                    _save()
+            with hd.radio_group(value=state.weight_class) as rg:
+                hd.radio_button("Heavyweight")
+                hd.radio_button("Lightweight")
+            if rg.changed:
+                state.weight_class = rg.value
+                _save()
         with hd.box():
             # Max heart rate — text input; buffered
             suggested_hr = max(100, 220 - computed_age) if computed_age else None
             hd.text("Max Heart Rate", font_weight="semibold", font_size="small")
-            with hd.scope("max_hr"):
-                mhr_input = hd.text_input(
-                    value=state.max_heart_rate,
-                    input_type="number",
-                    placeholder=f"e.g. {suggested_hr}" if suggested_hr else "e.g. 185",
-                    width=10,
-                )
-                if mhr_input.changed:
-                    state.max_heart_rate = mhr_input.value
-                    state.dirty = True
+            mhr_input = hd.text_input(
+                value=state.max_heart_rate,
+                input_type="number",
+                placeholder=f"e.g. {suggested_hr}" if suggested_hr else "e.g. 185",
+                width=10,
+            )
+            if mhr_input.changed:
+                state.max_heart_rate = mhr_input.value
+                state.dirty = True
 
         # Update button — only visible when text fields have unsaved changes
         if state.dirty:

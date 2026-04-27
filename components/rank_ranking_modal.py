@@ -124,14 +124,14 @@ def render_rankings_modal(
                         ):
                             hd.text(f"… ({seg_lo - prev_hi:,} rows hidden) …")
                     for i in range(seg_lo, seg_hi):
-                        entry = ordered[i]
-                        rank_1b = i + 1
-                        is_user = bool(entry.get("_is_user"))
-                        bg = "primary-100" if is_user else None
-                        v = entry.get("value_tenths") or 0
-                        pt = _pace_tenths_for(event_kind, event_value, v)
-                        result = _result_str(event_kind, event_value, v)
                         with hd.scope(f"row_{i}"):
+                            entry = ordered[i]
+                            rank_1b = i + 1
+                            is_user = bool(entry.get("_is_user"))
+                            bg = "primary-100" if is_user else None
+                            v = entry.get("value_tenths") or 0
+                            pt = _pace_tenths_for(event_kind, event_value, v)
+                            result = _result_str(event_kind, event_value, v)
                             with hd.box(
                                 direction="horizontal",
                                 padding=0.3,

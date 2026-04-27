@@ -408,7 +408,9 @@ def render_quality_cell(workout: dict, is_dark: bool) -> None:
             )
 
 
-def _spread_cell_factory(zone_names, zone_colors, score_field, bar_field, bin_field, skip):
+def _spread_cell_factory(
+    zone_names, zone_colors, score_field, bar_field, bin_field, skip
+):
     def _render(w):
         render_spread_cell(
             score=w.get(score_field),
@@ -419,6 +421,7 @@ def _spread_cell_factory(zone_names, zone_colors, score_field, bar_field, bin_fi
             is_dark=hd.theme().is_dark,
             skip_indices=skip,
         )
+
     return _render
 
 
@@ -583,10 +586,13 @@ def WorkoutTable(
         # Data cells
         for i, w in enumerate(page_rows):
             with hd.scope(w.get("id", id(w))):
-                is_hl = highlight(w) if highlight else False
-                row_bg = "primary-50" if is_hl else (_ROW_ALT_BG if i % 2 else None)
                 for col in columns:
                     with hd.scope(col.key):
+                        is_hl = highlight(w) if highlight else False
+                        row_bg = (
+                            "primary-50" if is_hl else (_ROW_ALT_BG if i % 2 else None)
+                        )
+
                         with hd.box(
                             padding=(0.5, 0.75),
                             background_color=row_bg,

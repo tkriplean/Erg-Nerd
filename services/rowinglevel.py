@@ -365,29 +365,27 @@ def fetch_rowinglevel(state, profile: dict, chart_workouts: list) -> dict:
             )
         ).encode()
     ).hexdigest()[:10]
-    scope_key = f"rl_{profile_key}_{lbest_hash}"
 
-    with hd.scope(scope_key):
-        rl_task = hd.task()
+    rl_task = hd.task()
 
-        def _do_scrape(gender_, age_, wkg, lb, lb_anchor, lb_dates):
-            return fetch_all_pb_predictions(
-                [], lb, lb_anchor, gender_, age_, wkg, lbest_dates=lb_dates
-            )
-
-        print("FETCHING ROWING LEVEL ")
-        rl_task.run(
-            _do_scrape,
-            gender,
-            current_age,
-            weight_kg,
-            miss_lbest,
-            miss_anchor,
-            miss_dates,
+    def _do_scrape(gender_, age_, wkg, lb, lb_anchor, lb_dates):
+        return fetch_all_pb_predictions(
+            [], lb, lb_anchor, gender_, age_, wkg, lbest_dates=lb_dates
         )
-        if rl_task.done and rl_task.result:
-            print("ROWING LEVEL DONE")
-            return {**hits, **rl_task.result}
+
+    print("FETCHING ROWING LEVEL ")
+    rl_task.run(
+        _do_scrape,
+        gender,
+        current_age,
+        weight_kg,
+        miss_lbest,
+        miss_anchor,
+        miss_dates,
+    )
+    if rl_task.done and rl_task.result:
+        print("ROWING LEVEL DONE")
+        return {**hits, **rl_task.result}
 
     return hits
 
