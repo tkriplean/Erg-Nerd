@@ -11,15 +11,19 @@ back or a loading sentinel.
     load_world_record_data(state, profile) -> wr_data | None
         Fetch world-class CP data for the user's (gender, age, weight) bucket.
 
-    strokes_for(ctx, workout) -> {'strokes', 'status', 'error'}
+    strokes_for(workout) -> {'strokes', 'status', 'error'}
         Single-workout stroke fetcher.  Uniform across owner / public modes;
         handles the localStorage cache, on-owner-view mirror to the
         public-profile directory, and the "not yet cached" public-mode case.
 
-    strokes_batch(ctx, workouts) -> {'by_id', 'done', 'total', 'is_loading',
-                                     'uncached_count'}
+    strokes_batch(workouts) -> {'by_id', 'done', 'total', 'is_loading',
+                                'uncached_count'}
         Queue-with-progress fetcher (race page).  Owner: one-at-a-time API
         fetch; public: synchronous disk reads from .public_profiles.
+
+The mode-aware helpers (``get_all_workouts``, ``sync_workouts``,
+``strokes_for``, ``strokes_batch``) read mode/user_id/client from
+``components.app_context.AppContext`` rather than taking a ``ctx`` argument.
 
 The stroke helpers store **raw** Concept2 API strokes
 (``[{t: tenths, d: decimeters, p, spm, hr, …}]``) — workout_page consumes
@@ -47,6 +51,7 @@ from services.concept2_records import (
 from services.rowing_utils import age_from_dob, get_season
 
 from services.global_state import GlobalFilters
+from components.app_context import AppContext
 
 
 def _fmt_month_year(date_str: str) -> str:
@@ -57,8 +62,8 @@ def _fmt_month_year(date_str: str) -> str:
         return date_str[:7]
 
 
-def get_all_workouts(ctx):
-    result = sync_from_context(ctx)
+def get_all_workouts():
+    result = sync_workouts()
     if result is None:
         hd.box(padding=2, min_height="80vh")
         return None
@@ -81,14 +86,15 @@ def get_all_workouts(ctx):
     return workouts_dict, all_workouts
 
 
-def sync_from_context(ctx) -> tuple | None:
+def sync_workouts() -> tuple | None:
     """
-    Return (workouts_dict, sorted_workouts) for the active ViewContext.
+    Return (workouts_dict, sorted_workouts) for the active AppContext.
 
-    Owner mode: delegate to ``concept2_sync(ctx.client)`` (fetches + syncs).
+    Owner mode: delegate to ``concept2_sync(client)`` (fetches + syncs).
     Public mode: return the pre-loaded snapshot the dashboard wired in from
     ``services.public_profiles`` — no I/O, no sync task.
     """
+    ctx = AppContext()
     if ctx.mode == "public":
         return ctx.public_workouts_dict, ctx.public_sorted_workouts
     return concept2_sync(ctx.client)
@@ -149,9 +155,7 @@ def concept2_sync(client) -> tuple | None:
         # legacy entries already in localStorage get fixed on next sync too.
         try:
             profile = (
-                json.loads(sync_state.profile_blob)
-                if sync_state.profile_blob
-                else {}
+                json.loads(sync_state.profile_blob) if sync_state.profile_blob else {}
             )
         except Exception:
             profile = {}
@@ -440,7 +444,7 @@ def _persist_strokes(
     _mirror_strokes_to_public(user_id, wid, strokes, public_enabled)
 
 
-def strokes_for(ctx, workout: dict) -> dict:
+def strokes_for(workout: dict) -> dict:
     """
     Fetch raw stroke data for a single workout.  Uniform across modes.
 
@@ -463,6 +467,7 @@ def strokes_for(ctx, workout: dict) -> dict:
     if wid is None or not workout.get("stroke_data"):
         return {"strokes": None, "status": "no_strokes", "error": None}
 
+    ctx = AppContext()
     if ctx.mode == "public":
         from services import public_profiles
 
@@ -508,7 +513,7 @@ def strokes_for(ctx, workout: dict) -> dict:
     return {"strokes": None, "status": "loading", "error": None}
 
 
-def strokes_batch(ctx, workouts: list) -> dict:
+def strokes_batch(workouts: list) -> dict:
     """
     Batch stroke fetcher for views that want a single progress bar.
 
@@ -537,6 +542,7 @@ def strokes_batch(ctx, workouts: list) -> dict:
     # 0/0 between every completed fetch.
     batch_state = hd.state(batch_key="", queue=(), total=0, done=0, by_id_snapshot={})
 
+    ctx = AppContext()
     ids = tuple(
         w.get("id") for w in workouts if w.get("id") and w.get("stroke_data", False)
     )

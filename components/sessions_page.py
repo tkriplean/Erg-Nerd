@@ -13,9 +13,9 @@ from components.concept2_sync import get_all_workouts
 # ---------------------------------------------------------------------------
 
 
-def sessions_page(ctx) -> None:
+def sessions_page() -> None:
     """Top-level component for the Sessions tab."""
-    result = get_all_workouts(ctx)
+    result = get_all_workouts()
 
     if not result:
         with hd.box(padding=4, align="center"):
@@ -25,4 +25,4 @@ def sessions_page(ctx) -> None:
     # ── Pace-vs-date scatter + windowed workouts table ────────────────────────
     all_workouts = result[1]
     with hd.box(padding=2, min_height="80vh", gap=2):
-        sessions_chart(all_workouts, ctx=ctx)
+        sessions_chart(all_workouts)

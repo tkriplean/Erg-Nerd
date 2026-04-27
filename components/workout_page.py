@@ -59,7 +59,7 @@ from components.workout_table import (
     render_quality_cell,
     render_spread_cell,
 )
-from components.profile_page import get_profile_from_context
+from components.profile_page import get_profile
 from services.heartrate_utils import (
     HR_ZONE_COLORS,
     HR_ZONE_NAMES,
@@ -88,7 +88,7 @@ from services.rowing_utils import (
 )
 
 from components.hyperdiv_extensions import radio_group
-from components.concept2_sync import sync_from_context, strokes_for
+from components.concept2_sync import sync_workouts, strokes_for
 
 
 # ---------------------------------------------------------------------------
@@ -1201,7 +1201,7 @@ def _chart_controls(
 # ---------------------------------------------------------------------------
 
 
-def workout_page(session_id: int, ctx) -> None:
+def workout_page(session_id: int) -> None:
     """Render the full-screen workout detail overlay."""
     _theme = hd.theme()
 
@@ -1219,7 +1219,7 @@ def workout_page(session_id: int, ctx) -> None:
     )
 
     # ── Pre-fetch workout list (task-cached; free on repeat renders) ────────
-    sync_result = sync_from_context(ctx)
+    sync_result = sync_workouts()
     if sync_result is None:
         hd.box(padding=2, min_height="80vh")
         return
@@ -1231,7 +1231,7 @@ def workout_page(session_id: int, ctx) -> None:
     # can render them.  Best-effort: if reference watts haven't loaded yet,
     # the fields stay as None and the summary row hides the cells.
     if workout is not None:
-        profile = get_profile_from_context(ctx) or {}
+        profile = get_profile() or {}
         max_hr, _ = resolve_max_hr(profile, all_workouts)
         try:
             attach_spread_and_quality([workout], all_workouts, max_hr)
@@ -1244,7 +1244,7 @@ def workout_page(session_id: int, ctx) -> None:
     wtype = workout.get("workout_type", "")
     is_interval = wtype in INTERVAL_WORKOUT_TYPES
 
-    stroke_result = strokes_for(ctx, workout)
+    stroke_result = strokes_for(workout)
     stroke_status = stroke_result["status"]
     stroke_error = stroke_result["error"]
     strokes = stroke_result["strokes"]
@@ -1255,7 +1255,7 @@ def workout_page(session_id: int, ctx) -> None:
     compare_loading = False
     for cid in state.compared_workouts:
         cw = _workouts_dict.get(str(cid)) or {"id": cid, "stroke_data": True}
-        cr = strokes_for(ctx, cw)
+        cr = strokes_for(cw)
         if cr["status"] == "loaded":
             compare_results[cid] = cr["strokes"] or []
         elif cr["status"] == "loading":

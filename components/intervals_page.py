@@ -104,7 +104,7 @@ import hyperdiv as hd
 from services.rowing_utils import INTERVAL_WORKOUT_TYPES, get_season
 from components.concept2_sync import get_all_workouts
 from components.reference_watts_loader import reference_watts_loader
-from components.view_context import your
+from components.app_context import your
 from services.interval_utils import (
     avg_workpace_tenths,
     avg_work_spm,
@@ -133,7 +133,7 @@ from components.workout_table import (
     WorkoutTable,
     always_white,
 )
-from components.profile_page import get_profile_from_context
+from components.profile_page import get_profile
 from components.shared_ui import global_filter_ui
 from components.spread_quality_legends import spread_quality_legends
 
@@ -974,17 +974,17 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
 # ---------------------------------------------------------------------------
 
 
-def intervals_page(ctx) -> None:
+def intervals_page() -> None:
     """Top-level HyperDiv component for the Interval Workouts tab."""
 
     print("syncing from intervals page")
-    result = get_all_workouts(ctx)
+    result = get_all_workouts()
     if result is None:
         hd.box(padding=2, min_height="80vh")
         return
     _workouts_dict, all_workouts = result
 
-    profile = get_profile_from_context(ctx) or {}
+    profile = get_profile() or {}
     max_hr, _max_hr_estimated = resolve_max_hr(profile, all_workouts)
 
     # Time-aware thresholds: block on the reference-watts loader so the
@@ -1107,8 +1107,8 @@ def intervals_page(ctx) -> None:
 
     with hd.box(align="center", gap=1, padding=2, min_height="80vh"):
         with hd.box(gap=0.2, align="center"):
-            hd.h1(f"Review {your(ctx)} Fondest Interval Sessions")
-            global_filter_ui(ctx)
+            hd.h1(f"Review {your()} Fondest Interval Sessions")
+            global_filter_ui()
 
         with hd.box(width="100%", gap=2):
             # Pre-compute non-cell filters so the grid counts stay in sync with

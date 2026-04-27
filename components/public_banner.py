@@ -12,8 +12,11 @@ Shows:
 
 import hyperdiv as hd
 
+from components.app_context import AppContext
 
-def public_banner(ctx) -> None:
+
+def public_banner() -> None:
+    ctx = AppContext()
     if ctx.mode != "public":
         return
 

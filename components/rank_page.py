@@ -3,7 +3,7 @@ Rank Page — "how do I rank?" view comparing a user's ranked performances
 against the world record or the Concept2 rankings field.
 
 Exported:
-    rank_page(ctx)
+    rank_page()
         Top-level HyperDiv component; call from app.py.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -83,8 +83,8 @@ from services.concept2_rankings_index import (
 )
 
 from components.concept2_sync import get_all_workouts
-from components.profile_page import get_profile_from_context
-from components.view_context import your
+from components.profile_page import get_profile
+from components.app_context import your
 from components.rank_chart_plugin import RankChart
 from components.rank_distribution import distribution_svg
 from components.rank_ranking_modal import render_rankings_modal
@@ -601,10 +601,10 @@ def _build_wr_series(rows: list[dict], state) -> list:
 # ──────────────────────────────────────────────────────────────────────────
 
 
-def rank_page(ctx) -> None:
+def rank_page() -> None:
     """Top-level Rank Page component. Called from app.py."""
-    sync = get_all_workouts(ctx)
-    profile = get_profile_from_context(ctx)
+    sync = get_all_workouts()
+    profile = get_profile()
 
     if sync is None or profile is None:
         hd.box(padding=2, min_height="80vh")
@@ -645,7 +645,7 @@ def rank_page(ctx) -> None:
         with hd.box(gap=0.2, align="center"):
             with hd.h1(font_weight="normal"):
                 with hd.hbox(gap=0.2, align="center", wrap="wrap"):
-                    hd.text(f"{your(ctx)}")
+                    hd.text(f"{your()}")
                     header_dropdown(
                         state,
                         key="inc_dd",
@@ -661,7 +661,7 @@ def rank_page(ctx) -> None:
                         current_value=state.ranking_focus,
                         field="ranking_focus",
                     )
-            global_filter_ui(ctx)
+            global_filter_ui()
 
         # ── Chart ──────────────────────────────────────────────────────────
         y_label = (

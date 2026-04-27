@@ -65,7 +65,7 @@ from services.stroke_utils import (
 )
 from services.rowing_utils import season_color
 from services.concept2_records import get_age_group_records
-from components.profile_page import get_profile_from_context
+from components.profile_page import get_profile
 from services.rowing_utils import (
     apply_quality_filters,
     is_rankable_noninterval,
@@ -73,7 +73,7 @@ from services.rowing_utils import (
 )
 
 from components.concept2_sync import get_all_workouts, strokes_batch
-from components.view_context import your
+from components.app_context import AppContext, your
 from components.race_chart_plugin import RaceChart
 from components.hyperdiv_extensions import radio_group
 from components.workout_chart_builder import (
@@ -420,7 +420,8 @@ def _results_table(workouts: list, etype: str, pb_id: int | None) -> None:
 # ── Main page entry point ─────────────────────────────────────────────────────
 
 
-def race_page(ctx) -> None:
+def race_page() -> None:
+    ctx = AppContext()
     """
     Top-level entry point for the Race tab.
 
@@ -456,9 +457,9 @@ def race_page(ctx) -> None:
 
     is_dark = hd.theme().is_dark
 
-    profile = get_profile_from_context(ctx)
+    profile = get_profile()
 
-    result = get_all_workouts(ctx)
+    result = get_all_workouts()
 
     if result is None or profile is None:
         hd.box(padding=2, min_height="80vh")
@@ -541,7 +542,7 @@ def race_page(ctx) -> None:
     # Owner mode: one API fetch per render; public mode: synchronous disk
     # reads of the cache-on-owner-view directory.  Strokes are stored as raw
     # Concept2 format in the unified cache — normalize at the boundary.
-    batch = strokes_batch(ctx, racing_workouts)
+    batch = strokes_batch(racing_workouts)
     raw_by_id = batch["by_id"]
     strokes_by_id = {k: normalize_strokes(v) for k, v in raw_by_id.items()}
     uncached_public_count = batch["uncached_count"]
@@ -623,7 +624,7 @@ def race_page(ctx) -> None:
             with hd.box(gap=0.2, align="center"):
                 with hd.h1(font_weight="normal"):
                     with hd.hbox(gap=0.2, align="center", wrap="wrap"):
-                        hd.text(f"A Race Between {your(ctx)}")
+                        hd.text(f"A Race Between {your()}")
 
                         header_dropdown(
                             state,
@@ -646,7 +647,7 @@ def race_page(ctx) -> None:
                             field="event",
                         )
 
-                global_filter_ui(ctx)
+                global_filter_ui()
 
             # ── Loading progress bar ──────────────────────────────────────────────────
             if is_loading:
@@ -706,7 +707,7 @@ def race_page(ctx) -> None:
 
         with hd.box(gap=1, align="center"):
             with hd.h2():
-                _poss = your(ctx)
+                _poss = your()
                 if state.include_filter == "All":
                     hd.text(f"{_poss} Quality {_cur_event_lbl} Efforts")
                 elif state.include_filter == "SBs":

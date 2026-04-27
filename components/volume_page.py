@@ -37,7 +37,7 @@ import sys
 
 from components.concept2_sync import get_all_workouts
 from components.reference_watts_loader import reference_watts_loader
-from components.view_context import your
+from components.app_context import AppContext, your
 from services.formatters import fmt_meters
 from services.rowing_utils import get_season, profile_complete
 from services.threshold_cache import make_thresholds_resolver
@@ -62,7 +62,7 @@ from services.heartrate_utils import (
     is_valid_hr,
 )
 from services.workout_quality import QUALITY_STYLE
-from components.profile_page import get_profile_from_context
+from components.profile_page import get_profile
 from components.volume_chart_builder import build_volume_chart_config, get_period_rows
 from components.volume_chart_plugin import VolumeChart
 from components.hyperdiv_extensions import grid_box
@@ -455,7 +455,6 @@ def _volume_section(
     all_workouts: list,
     profile: dict,
     is_owner: bool = True,
-    ctx=None,
 ) -> None:
     """Render the volume controls + stacked bar chart."""
 
@@ -468,8 +467,8 @@ def _volume_section(
 
     with hd.box(gap=1, align="center"):
         with hd.box(gap=0.2, align="center"):
-            hd.h1(f"How Does {your(ctx)} Work Stack Up?")
-            global_filter_ui(ctx)
+            hd.h1(f"How Does {your()} Work Stack Up?")
+            global_filter_ui()
 
         # ── HR callout (only in HR mode) — must come before chart to resolve max_hr ──
         max_hr, is_estimated = resolve_max_hr(profile, all_workouts)
@@ -608,12 +607,13 @@ def _volume_section(
 # ---------------------------------------------------------------------------
 
 
-def volume_page(ctx) -> None:
+def volume_page() -> None:
     """Top-level component for the Volume tab."""
 
-    result = get_all_workouts(ctx)
+    ctx = AppContext()
+    result = get_all_workouts()
 
-    profile = get_profile_from_context(ctx)
+    profile = get_profile()
 
     if result is None or not profile:
         hd.box(padding=2, min_height="80vh")
@@ -631,5 +631,4 @@ def volume_page(ctx) -> None:
             all_workouts,
             profile,
             is_owner=ctx.is_owner,
-            ctx=ctx,
         )

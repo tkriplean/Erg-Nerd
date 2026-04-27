@@ -127,8 +127,8 @@ from services.rowing_utils import (
     RANKED_DISTANCES,
     RANKED_TIMES,
 )
-from components.concept2_sync import sync_from_context
-from components.profile_page import get_profile_from_context
+from components.concept2_sync import sync_workouts
+from components.profile_page import get_profile
 from services.rowing_utils import profile_complete
 from services.rowinglevel import async_fetch_rowinglevel
 
@@ -614,7 +614,6 @@ def _prediction_table(
     accuracy: dict,
     rl_available: bool = True,
     pauls_k: float = 5.0,
-    ctx=None,
 ) -> None:
     """
     Renders the multi-model prediction grid (Your PB, CP, Log-Log, Paul's Law,
@@ -635,10 +634,10 @@ def _prediction_table(
     ):
         return
 
-    from components.view_context import your as _your
+    from components.app_context import your as _your
 
-    _poss = _your(ctx)
-    _poss_lower = _your(ctx, capitalize=False)
+    _poss = _your()
+    _poss_lower = _your(capitalize=False)
     _pl_tip = (
         f"Predicts +{pauls_k:.1f} s/500m for each doubling of distance "
         f"({_poss_lower} personalised value), applied from each anchor PB and averaged."
@@ -983,7 +982,6 @@ def compute_axis_bounds(
 
 def _page_header(
     state,
-    ctx,
     *,
     timeline_date: date,
 ) -> None:
@@ -1142,7 +1140,7 @@ def _page_header(
                     min_width="225px",
                 )
 
-        global_filter_ui(ctx)
+        global_filter_ui()
 
 
 # ---------------------------------------------------------------------------
@@ -1150,7 +1148,7 @@ def _page_header(
 # ---------------------------------------------------------------------------
 
 
-def power_curve_page(ctx) -> None:
+def power_curve_page() -> None:
     """
     Top-level entry point for the Performance tab.
     Fetches data, computes all derived state, then calls sub-components.
@@ -1198,8 +1196,8 @@ def power_curve_page(ctx) -> None:
     is_dark = hd.theme().is_dark
 
     # ── Profile & Data ───────────────────────────────────────────────────────────────
-    profile = get_profile_from_context(ctx)
-    sync_result = sync_from_context(ctx)
+    profile = get_profile()
+    sync_result = sync_workouts()
 
     if sync_result is None or profile is None:
         hd.box(padding=2, min_height="80vh")
@@ -1333,7 +1331,6 @@ def power_curve_page(ctx) -> None:
         with hd.box(width="100%", align="center"):
             _page_header(
                 state,
-                ctx,
                 timeline_date=timeline_date,
             )
 
@@ -1374,14 +1371,13 @@ def power_curve_page(ctx) -> None:
                 accuracy,
                 rl_available=rl_available,
                 pauls_k=pauls_k,
-                ctx=ctx,
             )
 
         with hd.box(align="center"):
             with hd.h2():
-                from components.view_context import your as _your_local
+                from components.app_context import your as _your_local
 
-                _poss_h2 = _your_local(ctx)
+                _poss_h2 = _your_local()
                 if state.best_filter == "All":
                     hd.text("High Quality Efforts")
                 elif state.best_filter == "SBs":

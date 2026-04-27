@@ -18,6 +18,7 @@ import hyperdiv as hd
 from services.rowing_utils import age_from_dob
 from services.local_storage_compression import decompress_workouts
 from services import public_profiles
+from components.app_context import AppContext
 
 
 # ---------------------------------------------------------------------------
@@ -35,7 +36,7 @@ _PROFILE_DEFAULTS: dict = {
 }
 
 
-def get_profile():
+def _get_owner_profile():
     # ── Profile ───────────────────────────────────────────────────────────────
     ls_profile = hd.local_storage.get_item("profile")
     if not ls_profile.done:
@@ -83,22 +84,24 @@ def _public_profile_to_local_shape(pub: dict) -> dict:
     return out
 
 
-def get_profile_from_context(ctx):
+def get_profile():
     """
-    Return the profile dict for the active ViewContext.
+    Return the profile dict for the active AppContext.
 
-    Owner mode: read from localStorage via ``get_profile()`` (may render a
-    spinner and return None while the async read is in flight).
+    Owner mode: read from localStorage (may render a spinner and return
+    None while the async read is in flight).
 
     Public mode: adapt the server-side scrubbed profile into the
     localStorage shape so pages can use it identically.
     """
+    ctx = AppContext()
     if ctx.mode == "public":
         return _public_profile_to_local_shape(ctx.public_profile or {})
-    return get_profile()
+    return _get_owner_profile()
 
 
-def profile_page(ctx=None) -> None:
+def profile_page() -> None:
+    ctx = AppContext()
     # ── One-time load from localStorage ─────────────────────────────────────
     state = hd.state(
         loaded=False,
@@ -164,7 +167,7 @@ def profile_page(ctx=None) -> None:
     # Concept2 first name is used as the published display name. Public-mode
     # profile_page is blocked upstream, so ctx.client is guaranteed non-None.
     display_name = ""
-    if ctx is not None and ctx.client is not None:
+    if ctx.client is not None:
         user_task = hd.task()
 
         def _fetch_user():
@@ -207,7 +210,7 @@ def profile_page(ctx=None) -> None:
         action_key=""
     )  # "publish_all_<ts>" | "publish_profile_<ts>" | "unpublish_<ts>"
 
-    if publish_action.action_key and ctx is not None and ctx.user_id:
+    if publish_action.action_key and ctx.user_id:
         with hd.scope(publish_action.action_key):
             pt = hd.task()
             if publish_action.action_key.startswith("publish_all_"):
@@ -338,7 +341,7 @@ def profile_page(ctx=None) -> None:
                 if hd.button("Update", variant="primary", size="small").clicked:
                     _save()
                     # If public, push the updated profile server-side.
-                    if state.public and ctx is not None and ctx.user_id:
+                    if state.public and ctx.user_id:
                         import time as _t
 
                         publish_action.action_key = f"publish_profile_{_t.time()}"
@@ -346,10 +349,11 @@ def profile_page(ctx=None) -> None:
         # ── Public profile toggle ───────────────────────────────────────────
         hd.divider()
 
-        _public_profile_section(ctx, state, publish_action, display_name)
+        _public_profile_section(state, publish_action, display_name)
 
 
-def _public_profile_section(ctx, state, publish_action, display_name: str) -> None:
+def _public_profile_section(state, publish_action, display_name: str) -> None:
+    ctx = AppContext()
     """Render the 'Public profile' controls: explainer, toggle, share URL,
     and the make-private confirmation dialog."""
 
@@ -425,7 +429,7 @@ def _public_profile_section(ctx, state, publish_action, display_name: str) -> No
                         confirm_private_open.opened = False
                         sw.checked = False
 
-        if sw.changed and ctx is not None and ctx.user_id:
+        if sw.changed and ctx.user_id:
             import time as _t
 
             if sw.checked and not state.public:
@@ -445,7 +449,7 @@ def _public_profile_section(ctx, state, publish_action, display_name: str) -> No
                 confirm_private_open.opened = True
 
         # Share URL when public
-        if state.public and ctx is not None and ctx.user_id:
+        if state.public and ctx.user_id:
             share_url = f"{get_server_url()}/u/{ctx.user_id}"
             with hd.hbox(gap=1, align="center", padding_top=0.5, wrap="wrap"):
                 hd.text(

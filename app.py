@@ -49,9 +49,10 @@ from components.workout_page import workout_page
 from components.sessions_page import sessions_page
 from components.volume_page import volume_page
 from components.concept2_sync import concept2_sync
-from components.view_context import (
-    build_owner_context,
-    build_public_context,
+from components.app_context import (
+    AppContext,
+    populate_owner,
+    populate_public,
 )
 from components.public_banner import public_banner
 from services import public_profiles
@@ -309,9 +310,10 @@ def _app_footer() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _dashboard_view(ctx, app_state, path_suffix: str | None = None) -> None:
+def _dashboard_view(app_state, path_suffix: str | None = None) -> None:
     _ScrollToTop()
 
+    ctx = AppContext()
     is_public = ctx.mode == "public"
 
     # Owner mode: fetch user profile for the display-name link. Public mode:
@@ -350,7 +352,7 @@ def _dashboard_view(ctx, app_state, path_suffix: str | None = None) -> None:
     # route that 404s in public mode.
     _hidden_nav_pages = {"Profile"}
 
-    public_banner(ctx)
+    public_banner()
 
     with hd.box(padding=2, gap=1, padding_top=0):
         with hd.hbox(gap=2, align="center"):
@@ -449,25 +451,25 @@ def _dashboard_view(ctx, app_state, path_suffix: str | None = None) -> None:
                 session_id = None
             if session_id is not None:
                 with hd.scope(session_id):
-                    workout_page(session_id, ctx)
+                    workout_page(session_id)
         elif current_page == "Volume":
-            volume_page(ctx)
+            volume_page()
         elif current_page == "Sessions":
-            sessions_page(ctx)
+            sessions_page()
         elif current_page == "Intervals":
-            intervals_page(ctx)
+            intervals_page()
         elif current_page == "Power Curve":
-            power_curve_page(ctx)
+            power_curve_page()
         elif current_page == "Race":
-            race_page(ctx)
+            race_page()
         elif current_page == "Rank":
-            rank_page(ctx)
+            rank_page()
         else:
             # Profile page is owner-only; public-mode requests render 404.
             if is_public:
                 _public_404_view(ctx.user_id)
             else:
-                profile_page(ctx)
+                profile_page()
 
     _app_footer()
 
@@ -552,11 +554,10 @@ def _main_body() -> None:
         if not public_uid:
             _public_404_view()
             return
-        ctx = build_public_context(public_uid)
-        if ctx is None:
+        if not populate_public(public_uid):
             _public_404_view(public_uid)
             return
-        _dashboard_view(ctx, app_state, path_suffix=suffix)
+        _dashboard_view(app_state, path_suffix=suffix)
         return
 
     # Flush any user_id set by the OAuth callback into browser localStorage
@@ -597,8 +598,8 @@ def _main_body() -> None:
         _login_view()
         return
 
-    ctx = build_owner_context(client, user_id)
-    _dashboard_view(ctx, app_state)
+    populate_owner(client, user_id)
+    _dashboard_view(app_state)
 
 
 _BASE_URL = get_server_url()

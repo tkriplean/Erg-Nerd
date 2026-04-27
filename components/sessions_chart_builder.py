@@ -51,7 +51,7 @@ from components.workout_table import (
     COL_HR_SPREAD,
     COL_QUALITY,
 )
-from components.profile_page import get_profile_from_context
+from components.profile_page import get_profile
 from components.reference_watts_loader import reference_watts_loader
 from components.shared_ui import global_filter_ui, header_dropdown
 from components.spread_quality_legends import spread_quality_legends
@@ -479,7 +479,7 @@ def step_ms(all_ms: list, window_size: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def sessions_chart(workouts: list, ctx=None) -> None:
+def sessions_chart(workouts: list) -> None:
     """
     Render the pace-vs-date focus+context chart with brush navigator,
     session filters, and an in-window workouts table.
@@ -505,7 +505,7 @@ def sessions_chart(workouts: list, ctx=None) -> None:
     # Block on the reference-watts loader so quality colouring + filters work.
     if not reference_watts_loader(workouts):
         return
-    profile = get_profile_from_context(ctx) or {}
+    profile = get_profile() or {}
     max_hr, _ = resolve_max_hr(profile, workouts)
     attach_spread_and_quality(workouts, workouts, max_hr)
 
@@ -581,9 +581,9 @@ def sessions_chart(workouts: list, ctx=None) -> None:
                         field="color_mode",
                     )
                     with hd.dropdown() as _sessions_dd:
-                        from components.view_context import your as _your
+                        from components.app_context import your as _your
 
-                        _poss = _your(ctx)
+                        _poss = _your()
                         _sessions_label = f"All {_poss}{" Long " if state.filter_10k else " "} {" " if state.filter_ivl == "All" else state.filter_ivl} Work"
                         _sessions_btn = hd.button(
                             _sessions_label, caret=True, size="small", font_color="neutral-800",font_size=2,font_weight="bold", padding=(1, 0, 1, 0),border="none",label_style=hd.style(padding_right=0), slot=_sessions_dd.trigger
@@ -603,7 +603,7 @@ def sessions_chart(workouts: list, ctx=None) -> None:
                                 cb_10k = hd.checkbox("10k+", checked=state.filter_10k)
                                 if cb_10k.changed:
                                     state.filter_10k = cb_10k.checked
-            global_filter_ui(ctx)
+            global_filter_ui()
 
 
         # with hd.hbox(gap=2, align="center", wrap="wrap", padding_bottom=1):

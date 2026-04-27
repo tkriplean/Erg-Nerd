@@ -2,12 +2,11 @@ import hyperdiv as hd
 from services.local_storage_compression import decompress_workouts
 from services.formatters import machine_label
 from services.rowing_utils import get_season
-from components.concept2_sync import sync_from_context
 from services.global_state import GlobalFilters
 from config import SYNTHETIC_MODE
 
 
-def global_filter_ui(ctx) -> None:
+def global_filter_ui() -> None:
     """
     Render the global Season and Machine filter controls.
     Called from the nav-bar row in _dashboard_view.

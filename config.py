@@ -10,4 +10,4 @@ SYNTHETIC_MODE = False
 
 # Set to True to record per-render call trees + a combined session report
 # under .profiles/ via pyinstrument. See services/profiling.py for details.
-PROFILE_ENABLE = True
+PROFILE_ENABLE = False
