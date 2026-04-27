@@ -3,35 +3,46 @@ Render-time application context, kept in a per-connection ``@hd.global_state``.
 
 The dashboard has two modes:
 
-- **Owner mode** — the logged-in user browsing their own data. ``app.py``
-  calls ``concept2_sync(ctx.client)`` once per session inside
-  ``_dashboard_view``; the result is cached on ``ctx.workouts_dict`` /
-  ``ctx.sorted_workouts``. ``get_profile()`` pulls the profile from
-  localStorage.
+- **Owner mode** — the logged-in user browsing their own data. Boot-time
+  ``_main_body`` reads a single combined localStorage key (see
+  ``_SESSION_LS_KEY``) carrying both ``user_id`` and the user's profile dict,
+  then calls ``populate_owner(user_id, profile)``. ``app.py:_dashboard_view``
+  fires ``concept2_sync(ctx.client)`` once per session; the sync result is
+  cached on ``ctx.workouts_dict`` / ``ctx.sorted_workouts``.
 
 - **Public mode** — anyone (no login required) viewing someone else's
-  opt-in public profile at ``/u/{user_id}``. There is no ``Concept2Client``;
-  ``app.py`` pre-loads workouts and profile from
-  ``services.public_profiles`` into the same ``ctx.workouts_dict`` /
-  ``ctx.sorted_workouts`` slots before rendering the dashboard. Pages call
-  ``sync_workouts()`` / ``get_profile()`` which short-circuit to the
-  pre-loaded values with no I/O.
+  opt-in public profile at ``/u/{user_id}``. ``app.py`` calls
+  ``populate_public()`` which pre-loads workouts + profile from
+  ``services.public_profiles`` into ``ctx.workouts_dict`` /
+  ``ctx.sorted_workouts`` / ``ctx.profile``. There is no ``Concept2Client``;
+  pages call ``sync_workouts()`` / ``get_profile()`` which short-circuit
+  to the pre-loaded values with no I/O.
 
 ``AppContext`` is a hyperdiv ``@hd.global_state`` BaseState. Each websocket
 connection (i.e. each user session) has its own AppRunner, so different
 viewers do not share state. Pages call ``AppContext()`` from anywhere to
-read the active mode, user_id, client, etc. — no need to thread ``ctx``
-through every signature.
+read the active mode, user_id, client, profile, etc. — no need to thread
+``ctx`` through every signature.
 
-The ``client`` and the workout snapshot props are stored as ``hd.Any``
-because they are arbitrary Python objects that live purely server-side
-(BaseState is ``collect=False``).
+The ``client``, ``profile``, and workout snapshot props are stored as
+``hd.Any`` because they are arbitrary Python objects that live purely
+server-side (BaseState is ``collect=False``).
+
+Combined session key: ``c2_user_id`` and ``profile`` used to be two
+separate localStorage keys, each requiring its own async fetch on every
+boot. They are now packed into a single JSON object under ``app_session``
+so the boot flow makes one round-trip. The helpers ``write_session_ls``
+and ``clear_session_ls`` keep the on-disk shape in sync with AppContext.
 """
 
+import json
 import time
 from typing import Optional
 
 import hyperdiv as hd
+
+
+_SESSION_LS_KEY = "app_session"
 
 
 @hd.global_state
@@ -44,6 +55,11 @@ class AppContext(hd.BaseState):
     # ``populate_owner`` so it can short-circuit per-render Concept2Client
     # construction when the cached token is still valid.
     token_expires_at = hd.Prop(hd.Float, 0.0)
+    # User profile dict — uniform shape across modes. Owner mode: stored
+    # under the combined ``app_session`` localStorage key. Public mode:
+    # adapted from the scrubbed server-side public profile via
+    # ``components.profile_page._public_profile_to_local_shape``.
+    profile = hd.Prop(hd.Any, None)
     # Workout snapshot — populated once per session.
     # Owner mode: written by ``concept2_sync`` after the API sync completes.
     # Public mode: written by ``populate_public`` from disk-stored snapshots.
@@ -64,14 +80,40 @@ class AppContext(hd.BaseState):
         return self.mode == "public"
 
 
-def populate_owner(user_id: str, display_name: str = "") -> bool:
+# ---------------------------------------------------------------------------
+# Combined session localStorage helpers
+# ---------------------------------------------------------------------------
+
+
+def write_session_ls(user_id: str, profile: Optional[dict] = None) -> None:
+    """Persist ``user_id`` + ``profile`` to the combined session key.
+
+    Call after any change to the user's profile so the next boot reads
+    fresh values without an extra round-trip.
+    """
+    payload = {"user_id": str(user_id), "profile": profile or {}}
+    hd.local_storage.set_item(_SESSION_LS_KEY, json.dumps(payload))
+
+
+def clear_session_ls() -> None:
+    """Remove the combined session key (used on Disconnect / token loss)."""
+    hd.local_storage.remove_item(_SESSION_LS_KEY)
+
+
+# ---------------------------------------------------------------------------
+# Population helpers
+# ---------------------------------------------------------------------------
+
+
+def populate_owner(user_id: str, profile: Optional[dict] = None) -> bool:
     """Populate AppContext for owner mode.  Returns True on success; False if
-    no valid token exists for ``user_id`` (caller should clear localStorage
-    and show the login view).
+    no valid token exists for ``user_id`` (caller should clear the session
+    key and show the login view).
 
     Fast path: when the same user is already populated and the cached
     ``ctx.client``'s token has not yet expired, this is an O(1) timestamp
-    compare — no disk read, no httpx Client construction.
+    compare — no disk read, no httpx Client construction. ``profile`` is
+    refreshed in place so callers can re-call after editing the profile.
 
     Cold path: loads (and refreshes if expired) the OAuth token from disk
     via ``get_valid_token`` and constructs a fresh ``Concept2Client``.  The
@@ -87,6 +129,8 @@ def populate_owner(user_id: str, display_name: str = "") -> bool:
     # Fast path: cached client whose token is still valid (60s safety margin
     # mirrors ``services.concept2.is_token_expired``).
     if same_user and ctx.client is not None and time.time() < ctx.token_expires_at - 60:
+        if profile is not None:
+            ctx.profile = profile
         return True
 
     token_data = get_valid_token(uid)
@@ -99,12 +143,13 @@ def populate_owner(user_id: str, display_name: str = "") -> bool:
     ctx.mode = "owner"
     ctx.user_id = uid
     if not same_user:
-        ctx.display_name = display_name or ""
+        ctx.display_name = ""
         ctx.workouts_dict = None
         ctx.sorted_workouts = None
         ctx.all_seasons = []
         ctx.all_machines = []
         ctx.public_profile = None
+    ctx.profile = profile or {}
     ctx.client = Concept2Client(token_data["access_token"], user_id=uid)
     ctx.token_expires_at = expires_at
     return True
@@ -124,6 +169,7 @@ def populate_public(user_id: str) -> bool:
         load_public_workouts,
     )
     from services.rowing_utils import derive_filter_metadata
+    from components.profile_page import _public_profile_to_local_shape
 
     if not pp_exists(user_id):
         return False
@@ -147,6 +193,7 @@ def populate_public(user_id: str) -> bool:
     ctx.sorted_workouts = sorted_workouts
     ctx.all_seasons, ctx.all_machines = derive_filter_metadata(workouts_dict)
     ctx.public_profile = profile
+    ctx.profile = _public_profile_to_local_shape(profile)
     return True
 
 

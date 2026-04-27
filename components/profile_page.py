@@ -2,23 +2,23 @@
 Profile tab — user's personal data used for RowingLevel predictions and
 heart-rate zone calculations.
 
-Profile is stored in browser localStorage under the key "profile" as a JSON
-string.  It is loaded once on first render (initial_loaded guard) to avoid
-re-reading after writes, which would cause focus loss on text inputs.
+Profile lives on ``AppContext.profile``. The combined ``app_session``
+localStorage key (see ``components.app_context``) carries it across browser
+sessions; ``write_session_ls`` re-serializes the dict whenever a field is
+edited here.
 
-All editable values are buffered in hd.state().  Changes are only persisted
-to localStorage when the user clicks "Update" — radio-group fields (Gender,
-Weight Unit) save immediately on change since they never hold keyboard focus.
+Editable values are buffered in ``hd.state()`` so re-renders during typing
+do not steal focus. Changes are persisted (LS write + ``ctx.profile``
+update) when the user clicks "Update"; radio-group fields (Gender, Weight
+Unit, Weight Class) save immediately on change since they never hold
+keyboard focus.
 """
-
-import json
 
 import hyperdiv as hd
 
 from services.rowing_utils import age_from_dob
-from services.local_storage_compression import decompress_workouts
 from services import public_profiles
-from components.app_context import AppContext
+from components.app_context import AppContext, write_session_ls
 
 
 # ---------------------------------------------------------------------------
@@ -34,24 +34,6 @@ _PROFILE_DEFAULTS: dict = {
     "max_heart_rate": None,  # None = not set
     "public": False,  # True = profile + workouts published at /u/{user_id}
 }
-
-
-def _get_owner_profile():
-    # ── Profile ───────────────────────────────────────────────────────────────
-    ls_profile = hd.local_storage.get_item("profile")
-    if not ls_profile.done:
-        with hd.box(align="center", padding=4):
-            hd.spinner()
-        return None
-
-    profile = {**_PROFILE_DEFAULTS}
-    if ls_profile.result:
-        try:
-            profile = {**_PROFILE_DEFAULTS, **json.loads(ls_profile.result)}
-            return profile
-        except Exception:
-            pass
-    return profile
 
 
 def _public_profile_to_local_shape(pub: dict) -> dict:
@@ -84,25 +66,19 @@ def _public_profile_to_local_shape(pub: dict) -> dict:
     return out
 
 
-def get_profile():
+def get_profile() -> dict:
     """
-    Return the profile dict for the active AppContext.
-
-    Owner mode: read from localStorage (may render a spinner and return
-    None while the async read is in flight).
-
-    Public mode: adapt the server-side scrubbed profile into the
-    localStorage shape so pages can use it identically.
+    Return the active profile dict, with ``_PROFILE_DEFAULTS`` merged in so
+    callers can rely on every key being present. Reads from
+    ``AppContext.profile`` — populated at boot for both owner and public
+    modes, so this is a pure synchronous read.
     """
-    ctx = AppContext()
-    if ctx.mode == "public":
-        return _public_profile_to_local_shape(ctx.public_profile or {})
-    return _get_owner_profile()
+    return {**_PROFILE_DEFAULTS, **(AppContext().profile or {})}
 
 
 def profile_page() -> None:
     ctx = AppContext()
-    # ── One-time load from localStorage ─────────────────────────────────────
+    # ── One-time buffer init from ctx.profile ───────────────────────────────
     state = hd.state(
         loaded=False,
         # Buffered field values
@@ -113,10 +89,6 @@ def profile_page() -> None:
         weight_class="",
         max_heart_rate="",
         public=False,
-        # Fresh workouts blob (kept in sync with localStorage each render) so
-        # the publish task sees the latest data even if the user toggles
-        # public ON just as concept2_sync finishes.
-        ls_workouts_blob="",
         # Dirty flag — True when text fields have unsaved changes
         dirty=False,
         # Confirmation dialog for make-private
@@ -129,18 +101,7 @@ def profile_page() -> None:
     )
 
     if not state.loaded:
-        ls_profile = hd.local_storage.get_item("profile")
-        ls_workouts = hd.local_storage.get_item("workouts")
-        if not ls_profile.done or not ls_workouts.done:
-            with hd.box(align="center", padding=4):
-                hd.spinner()
-            return
-        p = {**_PROFILE_DEFAULTS}
-        if ls_profile.result:
-            try:
-                p = {**_PROFILE_DEFAULTS, **json.loads(ls_profile.result)}
-            except Exception:
-                pass
+        p = get_profile()
         state.gender = p.get("gender", "")
         state.dob = p.get("dob", "")
         state.weight = str(p["weight"]) if p.get("weight") else ""
@@ -150,18 +111,7 @@ def profile_page() -> None:
             str(p["max_heart_rate"]) if p.get("max_heart_rate") else ""
         )
         state.public = bool(p.get("public", False))
-        state.ls_workouts_blob = ls_workouts.result or ""
         state.loaded = True
-
-    # Keep the cached workouts blob in sync with localStorage — a user who
-    # toggles public ON right after concept2_sync writes new data needs the
-    # publish task to see the fresh blob, not the stale value from initial
-    # load.
-    ls_workouts_live = hd.local_storage.get_item("workouts")
-    if ls_workouts_live.done:
-        fresh = ls_workouts_live.result or ""
-        if fresh != state.ls_workouts_blob:
-            state.ls_workouts_blob = fresh
 
     # ── Display-name lookup (owner only) ─────────────────────────────────────
     # Concept2 first name is used as the published display name. Public-mode
@@ -200,9 +150,11 @@ def profile_page() -> None:
             "public": state.public,
         }
 
-    # ── Save helper — writes buffered state to localStorage ──────────────────
+    # ── Save helper — updates ctx.profile + the combined session LS key ──────
     def _save():
-        hd.local_storage.set_item("profile", json.dumps(_current_profile()))
+        new_profile = _current_profile()
+        ctx.profile = new_profile
+        write_session_ls(ctx.user_id, new_profile)
         state.dirty = False
 
     # ── Publish tasks (scoped by action key so rerenders don't refire) ───────
@@ -224,7 +176,7 @@ def profile_page() -> None:
                         ctx.user_id,
                         _current_profile(),
                         display_name or "Rower",
-                        _workouts_from_blob(state),
+                        ctx.workouts_dict or {},
                     )
             elif publish_action.action_key.startswith("publish_profile_"):
 
@@ -253,7 +205,7 @@ def profile_page() -> None:
                 if pt.error:
                     state.publish_status = "error"
                     # Roll back optimistic state changes so the switch
-                    # reflects reality (and localStorage is consistent).
+                    # reflects reality (and ctx/LS are consistent).
                     if publish_action.action_key.startswith("publish_all_"):
                         if state.public:
                             state.public = False
@@ -436,7 +388,7 @@ def _public_profile_section(state, publish_action, display_name: str) -> None:
                 # OFF → ON: validate workouts are available first. Toggling
                 # before the initial sync completes would publish an empty
                 # dict, which publish_workouts rejects with ValueError.
-                if not _workouts_from_blob(state):
+                if not (ctx.workouts_dict or {}):
                     state.publish_status = "need_sync"
                 else:
                     state.publish_status = "publishing"
@@ -467,20 +419,11 @@ def _public_profile_section(state, publish_action, display_name: str) -> None:
                 )
 
 
-def _workouts_from_blob(state) -> dict:
-    try:
-        return (
-            decompress_workouts(state.ls_workouts_blob)
-            if state.ls_workouts_blob
-            else {}
-        )
-    except Exception:
-        return {}
-
-
 def _save_via_state(state) -> None:
-    """Persist the current buffered state to localStorage. Mirrors the inner
-    ``_save`` closure in ``profile_page`` but usable from helper scope."""
+    """Persist the current buffered state to ``ctx.profile`` and the combined
+    session LS key. Mirrors the inner ``_save`` closure in ``profile_page``
+    but usable from helper scope."""
+    ctx = AppContext()
     try:
         weight_val = float(state.weight) if state.weight else 0.0
     except ValueError:
@@ -491,18 +434,15 @@ def _save_via_state(state) -> None:
             mhr = None
     except ValueError:
         mhr = None
-    hd.local_storage.set_item(
-        "profile",
-        json.dumps(
-            {
-                "gender": state.gender,
-                "dob": state.dob,
-                "weight": weight_val,
-                "weight_unit": state.weight_unit,
-                "weight_class": state.weight_class,
-                "max_heart_rate": mhr,
-                "public": bool(state.public),
-            }
-        ),
-    )
+    new_profile = {
+        "gender": state.gender,
+        "dob": state.dob,
+        "weight": weight_val,
+        "weight_unit": state.weight_unit,
+        "weight_class": state.weight_class,
+        "max_heart_rate": mhr,
+        "public": bool(state.public),
+    }
+    ctx.profile = new_profile
+    write_session_ls(ctx.user_id, new_profile)
     state.dirty = False

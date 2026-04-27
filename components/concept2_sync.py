@@ -42,7 +42,6 @@ The stroke helpers store **raw** Concept2 API strokes
 this shape directly; race_page runs ``normalize_strokes`` at the boundary.
 """
 
-import json
 from datetime import datetime
 
 import hyperdiv as hd
@@ -132,24 +131,21 @@ def concept2_sync(client) -> None:
         initial_loaded=False,
         synth_cache=None,
         # Public-profile push-on-sync state. Set once per sync-completion; the
-        # publish task reads ``profile`` from localStorage and pushes the
-        # server snapshot. Bool not timestamp — we only want one push per
-        # sync per component render tree.
+        # publish task reads ``ctx.profile`` and pushes the server snapshot.
+        # Bool not timestamp — we only want one push per sync per component
+        # render tree.
         published=False,
-        profile_blob="",
     )
 
     if not sync_state.initial_loaded:
         ls_wkts = hd.local_storage.get_item("workouts")
-        ls_profile = hd.local_storage.get_item("profile")
-        if not ls_wkts.done or not ls_profile.done:
+        if not ls_wkts.done:
             with hd.box(align="center", padding=4):
                 hd.spinner()
             return
         sync_state.initial_workouts = (
             decompress_workouts(ls_wkts.result) if ls_wkts.result else {}
         )
-        sync_state.profile_blob = ls_profile.result or ""
         sync_state.initial_loaded = True
 
     # ── Step 2: background API sync ──────────────────────────────────────────
@@ -173,12 +169,7 @@ def concept2_sync(client) -> None:
         # Data-integrity pass: drop bogus HR readings and repair corrupt splits
         # before anything is persisted or returned to consumers.  Idempotent so
         # legacy entries already in localStorage get fixed on next sync too.
-        try:
-            profile = (
-                json.loads(sync_state.profile_blob) if sync_state.profile_blob else {}
-            )
-        except Exception:
-            profile = {}
+        profile = ctx.profile or {}
         max_hr = profile.get("max_heart_rate")
         workouts_dict = normalize_workouts_dict(workouts_dict, max_hr=max_hr)
         sorted_workouts = sorted(
@@ -193,7 +184,7 @@ def concept2_sync(client) -> None:
         # the fresh profile + workouts to the server-side public-profile
         # directory. Runs once per component lifetime; failures log but never
         # break the dashboard. Skipped in synthetic mode (no real workouts).
-        if not sync_state.published and not SYNTHETIC_MODE and sync_state.profile_blob:
+        if not sync_state.published and not SYNTHETIC_MODE and ctx.profile:
             _maybe_push_on_sync(client, sync_state, workouts_dict)
 
         if SYNTHETIC_MODE:
@@ -256,16 +247,9 @@ def _maybe_push_on_sync(client, sync_state, workouts_dict: dict) -> None:
     push. Failures are logged to stdout only — a dashboard user should not
     see an error if the public mirror fails.
     """
-    import json as _json
-
     from services import public_profiles
 
-    try:
-        profile = (
-            _json.loads(sync_state.profile_blob) if sync_state.profile_blob else {}
-        )
-    except Exception:
-        profile = {}
+    profile = AppContext().profile or {}
 
     if not profile.get("public"):
         sync_state.published = True  # no-op; don't re-check every render
@@ -397,15 +381,9 @@ def _is_raw_strokes(strokes) -> bool:
 
 
 def _public_enabled() -> bool:
-    """Read ``profile.public`` from localStorage.  Returns False while still
-    loading or on any parse error."""
-    ls = hd.local_storage.get_item("profile")
-    if not ls.done or not ls.result:
-        return False
-    try:
-        return bool(json.loads(ls.result).get("public"))
-    except Exception:
-        return False
+    """Read ``profile.public`` from ``AppContext``. Synchronous — boot has
+    already populated the profile from the combined session LS key."""
+    return bool((AppContext().profile or {}).get("public"))
 
 
 def _load_strokes_cache() -> tuple[dict, bool]:

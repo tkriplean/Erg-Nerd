@@ -5,14 +5,16 @@ is on ``/u/{user_id}``.
 Shows:
   - "Viewing {display_name}'s public profile"
   - A link back to the logged-in dashboard ("/")
-  - If the viewer's own ``c2_user_id`` in localStorage matches the public
-    profile id, a small "(This is how others see your profile.)" hint —
-    useful for owner QA without needing an incognito window.
+  - If the viewer's own user_id (from the combined session LS key) matches
+    the public profile id, a small "(This is how others see your profile.)"
+    hint — useful for owner QA without needing an incognito window.
 """
+
+import json
 
 import hyperdiv as hd
 
-from components.app_context import AppContext
+from components.app_context import AppContext, _SESSION_LS_KEY
 
 
 def public_banner() -> None:
@@ -20,10 +22,14 @@ def public_banner() -> None:
     if ctx.mode != "public":
         return
 
-    ls_uid = hd.local_storage.get_item("c2_user_id")
-    is_self_view = (
-        ls_uid.done and ls_uid.result and str(ls_uid.result) == str(ctx.user_id)
-    )
+    ls_session = hd.local_storage.get_item(_SESSION_LS_KEY)
+    viewer_uid = ""
+    if ls_session.done and ls_session.result:
+        try:
+            viewer_uid = json.loads(ls_session.result).get("user_id") or ""
+        except Exception:
+            viewer_uid = ""
+    is_self_view = bool(viewer_uid) and str(viewer_uid) == str(ctx.user_id)
 
     with hd.hbox(
         padding=1,

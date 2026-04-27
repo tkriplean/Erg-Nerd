@@ -52,6 +52,9 @@ from components.app_context import (
     AppContext,
     populate_owner,
     populate_public,
+    write_session_ls,
+    clear_session_ls,
+    _SESSION_LS_KEY,
 )
 from components.public_banner import public_banner
 from services import public_profiles
@@ -437,9 +440,8 @@ def _dashboard_view(app_state, path_suffix: str | None = None) -> None:
                             except Exception as _exc:
                                 print(f"[disconnect] unpublish failed: {_exc}")
                             clear_token(ctx.user_id)
-                            hd.local_storage.remove_item("c2_user_id")
+                            clear_session_ls()
                             hd.local_storage.remove_item("workouts")
-                            hd.local_storage.remove_item("profile")
                             loc.go(path="/")
 
         # ── One-time workout sync ─────────────────────────────────────────
@@ -570,42 +572,71 @@ def _main_body() -> None:
         _dashboard_view(app_state, path_suffix=suffix)
         return
 
-    # Flush any user_id set by the OAuth callback into browser localStorage
-    if app_state.pending_user_id:
-        hd.local_storage.set_item("c2_user_id", app_state.pending_user_id)
-        app_state.pending_user_id = None
-
-    # Pre-fill profile from Concept2 data (only on first login — skipped if
-    # a profile already exists in localStorage).
-    if app_state.pending_profile is not None:
-        ls_existing_profile = hd.local_storage.get_item("profile")
-        if not ls_existing_profile.done:
-            with hd.box(height="100vh", align="center", justify="center"):
-                hd.spinner()
-            return
-        if not ls_existing_profile.result:
-            hd.local_storage.set_item("profile", json.dumps(app_state.pending_profile))
-        app_state.pending_profile = None
-
-    # Async gate — read user_id from localStorage
-    ls_uid = hd.local_storage.get_item("c2_user_id")
-    if not ls_uid.done:
+    # ── Combined session-key gate ────────────────────────────────────────────
+    # One async fetch carries both ``user_id`` and ``profile`` so the boot
+    # path doesn't pay for two LS round-trips on every render.
+    ls_session = hd.local_storage.get_item(_SESSION_LS_KEY)
+    if not ls_session.done:
         with hd.box(height="100vh", align="center", justify="center"):
             hd.spinner()
         return
 
-    # No user_id → show login
-    if not ls_uid.result:
+    # Flush any pending OAuth-callback result into the combined session key.
+    # If a session already exists for this user (e.g. logged out and back in
+    # without clearing the LS), preserve its profile so user-edited values
+    # survive the round-trip.
+    if app_state.pending_user_id:
+        new_uid = app_state.pending_user_id
+        new_profile = app_state.pending_profile or {}
+        if ls_session.result:
+            try:
+                existing = json.loads(ls_session.result)
+                if existing.get("user_id") == new_uid and existing.get("profile"):
+                    new_profile = existing["profile"]
+            except Exception:
+                pass
+        write_session_ls(new_uid, new_profile)
+        app_state.pending_user_id = None
+        app_state.pending_profile = None
+        return  # next render will re-read the combined key
+
+    # No session data → check legacy keys for one-time migration, else login.
+    if not ls_session.result:
+        ls_uid_legacy = hd.local_storage.get_item("c2_user_id")
+        ls_profile_legacy = hd.local_storage.get_item("profile")
+        if not ls_uid_legacy.done or not ls_profile_legacy.done:
+            with hd.box(height="100vh", align="center", justify="center"):
+                hd.spinner()
+            return
+        if ls_uid_legacy.result:
+            legacy_profile: dict = {}
+            if ls_profile_legacy.result:
+                try:
+                    legacy_profile = json.loads(ls_profile_legacy.result)
+                except Exception:
+                    legacy_profile = {}
+            write_session_ls(ls_uid_legacy.result, legacy_profile)
+            hd.local_storage.remove_item("c2_user_id")
+            hd.local_storage.remove_item("profile")
+            return  # next render will read the migrated combined key
         _login_view()
         return
 
-    # Load token and run the app.  ``populate_owner`` owns the token →
-    # Concept2Client lifecycle and short-circuits on subsequent renders when
-    # the cached token is still valid.
-    user_id = ls_uid.result
-    if not populate_owner(user_id):
-        # Token file missing or corrupt — clear stale user_id and show login
-        hd.local_storage.remove_item("c2_user_id")
+    # Have session data — parse and populate AppContext.
+    try:
+        data = json.loads(ls_session.result)
+    except Exception:
+        data = {}
+    user_id = data.get("user_id") or ""
+    profile = data.get("profile") or {}
+
+    if not user_id:
+        _login_view()
+        return
+
+    if not populate_owner(user_id, profile=profile):
+        # Token file missing or corrupt — clear stale session and show login
+        clear_session_ls()
         _login_view()
         return
 
