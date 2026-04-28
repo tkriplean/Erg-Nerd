@@ -55,7 +55,9 @@ from services.rowing_utils import (
     get_season,
     compute_pace,
     compute_watts as _compute_watts,
+    INTERVAL_WORKOUT_TYPES,
 )
+from services.interval_utils import get_rep_count, interval_structure_key
 from services.volume_bins import BIN_NAMES, BIN_COLORS, swatch_svg
 from services.heartrate_utils import HR_ZONE_NAMES, HR_ZONE_COLORS
 from services.workout_quality import QUALITY_STYLE
@@ -184,6 +186,26 @@ COL_DATE = ColumnDef(
     width="10rem",
     render_value=lambda w: render_date(w.get("date", "")),
     sort_value=lambda w: w.get("date", ""),
+)
+
+
+def _render_structure(w: dict) -> str:
+    if w.get("workout_type") not in INTERVAL_WORKOUT_TYPES:
+        return ""
+    reps = get_rep_count(w)
+    label = interval_structure_key(w, compact=True)
+    if not reps or not label:
+        return ""
+    return f"{reps} x {label}"
+
+
+COL_STRUCTURE = ColumnDef(
+    key="structure",
+    header="Structure",
+    width="9rem",
+    render_value=_render_structure,
+    sort_value=_render_structure,
+    align="start",
 )
 
 
@@ -480,7 +502,7 @@ COL_QUALITY = ColumnDef(
     render_cell=lambda w: render_quality_cell(
         w.get("_quality"),
         w.get("_quality_score", 0.0),
-        ((cat, e) for cat, e in w.get("_quality_energy", {}).items() if e > 0),
+        ((cat, e) for cat, e in (w.get("_quality_energy", {}) or {}).items() if e > 0),
         hd.theme().is_dark,
     ),
     sort_value=lambda w: w.get("_quality_score")
