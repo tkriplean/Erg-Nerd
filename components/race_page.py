@@ -170,7 +170,7 @@ def _event_workouts(workouts: list, etype: str, evalue: int, machine: str) -> li
     return out
 
 
-def _include_filtered(state, workouts: list, include_filter: str) -> list:
+def _include_filtered(state, event_type, workouts: list, include_filter: str) -> list:
     if include_filter == "All":
         return workouts
     elif include_filter == "top":
@@ -514,7 +514,9 @@ def race_page() -> None:
     )
 
     # Race scope: additionally apply include_filter
-    racing_workouts = _include_filtered(state, all_event_workouts, state.include_filter)
+    racing_workouts = _include_filtered(
+        state, event_type, all_event_workouts, state.include_filter
+    )
 
     # PB identification
     pb_id: int | None = None
