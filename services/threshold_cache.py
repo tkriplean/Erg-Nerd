@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from services.reference_watts import get_reference_watts
+from services.reference_watts import _reference_watts_from_index, resolve_index
 from services.rowing_utils import parse_date
 from services.volume_bins import compute_bin_thresholds
 
@@ -31,11 +31,12 @@ def make_thresholds_resolver(
     workout's date.  Workouts sharing a date hit the cache.
     """
     cache: dict = {}
+    index = resolve_index(all_workouts)
 
     def _resolve(workout: dict):
         d = parse_date(workout.get("date", ""))
         if d not in cache:
-            ref = get_reference_watts(d, all_workouts)
+            ref = _reference_watts_from_index(d, index, all_workouts)
             cache[d] = (ref, compute_bin_thresholds(ref))
         return cache[d]
 

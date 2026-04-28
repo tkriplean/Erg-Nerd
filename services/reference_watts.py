@@ -111,6 +111,12 @@ PAULS_DEFAULT_K = 5.0
 
 _INDEX_CACHE: dict = {}  # input_hash → Index dict
 
+# Identity-keyed memo: callers within a single render reuse the same workouts
+# list object, so `id` + `len` + `id(first)` is a safe O(1) cache key. A false
+# hit would require list-object reuse with identical length and identical first
+# element after the previous list was gc'd — see `input_hash` for details.
+_HASH_MEMO: dict = {"id": None, "len": -1, "first_id": None, "hash": ""}
+
 
 def input_hash(all_workouts: list) -> str:
     """Stable sha1 over the identity tuples of `all_workouts`.
@@ -119,6 +125,15 @@ def input_hash(all_workouts: list) -> str:
     tuples hash identically, so the loader can detect when localStorage is
     still valid for the current workouts.
     """
+    lid = id(all_workouts)
+    n = len(all_workouts)
+    first_id = id(all_workouts[0]) if n else None
+    if (
+        _HASH_MEMO["id"] == lid
+        and _HASH_MEMO["len"] == n
+        and _HASH_MEMO["first_id"] == first_id
+    ):
+        return _HASH_MEMO["hash"]
     ids = sorted(
         (
             (w.get("date") or "")[:10],
@@ -131,7 +146,12 @@ def input_hash(all_workouts: list) -> str:
     h = hashlib.sha1()
     for t in ids:
         h.update(repr(t).encode("utf-8"))
-    return h.hexdigest()
+    digest = h.hexdigest()
+    _HASH_MEMO["id"] = lid
+    _HASH_MEMO["len"] = n
+    _HASH_MEMO["first_id"] = first_id
+    _HASH_MEMO["hash"] = digest
+    return digest
 
 
 def seed_reference_watts_index(index: dict) -> None:
@@ -152,10 +172,29 @@ def get_reference_watts(when: date, all_workouts: list) -> dict:
     Builds the index synchronously on cache miss (loader normally warms it
     first for a better UX).
     """
+    index = resolve_index(all_workouts)
+    return _reference_watts_from_index(when, index, all_workouts)
+
+
+def resolve_index(all_workouts: list) -> dict:
+    """Return the cached index for ``all_workouts``, building on miss.
+
+    Hot-path callers that look up many dates against the same workouts list
+    (e.g. ``make_thresholds_resolver``) should call this once and pass the
+    result to ``_reference_watts_from_index`` per date — avoiding even the
+    memoized ``input_hash`` lookup in the inner loop.
+    """
     h = input_hash(all_workouts)
     index = _INDEX_CACHE.get(h)
     if index is None:
-        index = build_reference_watts_index(all_workouts)
+        index = build_reference_watts_index(all_workouts, _known_hash=h)
+    return index
+
+
+def _reference_watts_from_index(
+    when: date, index: dict, all_workouts: list
+) -> dict:
+    """Index-aware core of ``get_reference_watts`` — no hashing, no cache lookup."""
     watts = _interpolate(when, index)
     if index.get("markers") and when >= index["markers"][-1]["date"]:
         last_date = index["markers"][-1]["date"]
@@ -166,14 +205,18 @@ def get_reference_watts(when: date, all_workouts: list) -> dict:
 def build_reference_watts_index(
     all_workouts: list,
     on_progress=None,
+    _known_hash: Optional[str] = None,
 ) -> dict:
     """Run the full quarterly build; return the index and cache it.
 
     ``on_progress(i, n, label)`` is invoked once per marker (0-indexed) and one
     final time with (n, n, "done").  Idempotent: repeated calls with the same
     ``all_workouts`` return the cached index immediately.
+
+    ``_known_hash`` is an internal optimization: callers that already computed
+    the input hash can pass it through to avoid recomputing it here.
     """
-    h = input_hash(all_workouts)
+    h = _known_hash if _known_hash is not None else input_hash(all_workouts)
     cached = _INDEX_CACHE.get(h)
     if cached is not None:
         if on_progress:
