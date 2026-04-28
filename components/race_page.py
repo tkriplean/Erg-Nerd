@@ -702,7 +702,7 @@ def race_page() -> None:
             if state.show_wr_boat and _wr_boat is not None and isinstance(_rec, dict):
                 _wr_caption(ds_event_type, ds_event_value, _rec)
 
-        with hd.box(gap=1, align="center"):
+        with hd.box(gap=1, align="center", width="100%"):
             with hd.h2():
                 _poss = your()
                 if state.include_filter == "All":
@@ -740,24 +740,21 @@ def race_page() -> None:
             # include_filter is intentionally ignored here — the scatter is
             # for spotting trends across all efforts, not just the bests).
             if all_event_workouts and len(all_event_workouts) >= 1:
-                with hd.box(padding_top=2, gap=0.5):
-                    with hd.hbox(justify="space-between", align="center"):
-                        hd.text(
-                            f"Pace over time — {_fmt_event_long(event_type, event_value)}",
-                            font_color="neutral-700" if not is_dark else "neutral-300",
-                            font_size="small",
-                        )
-                        with radio_group(
-                            value=state.scatter_metric, size="small"
-                        ) as srg:
-                            hd.radio_button("Pace", value="pace")
-                            hd.radio_button("Watts", value="watts")
-                        if srg.changed:
-                            state.scatter_metric = srg.value
-                    _scatter_cfg = build_race_scatter_config(
-                        all_event_workouts,
-                        metric=state.scatter_metric,
-                        is_dark=is_dark,
-                        pb_id=pb_id,
+                _scatter_cfg = build_race_scatter_config(
+                    all_event_workouts,
+                    metric=state.scatter_metric,
+                    is_dark=is_dark,
+                    pb_id=pb_id,
+                )
+
+                with hd.box(padding_top=2, gap=0.5, width="100%", align="center"):
+                    hd.h2(
+                        f"{_fmt_event_long(event_type, event_value)}s Over Time",
                     )
+
                     RaceScatterChart(config=_scatter_cfg, height="40vh")
+                    with radio_group(value=state.scatter_metric, size="small") as srg:
+                        hd.radio_button("Pace", value="pace")
+                        hd.radio_button("Watts", value="watts")
+                    if srg.changed:
+                        state.scatter_metric = srg.value

@@ -10,8 +10,8 @@ without bundling ``chartjs-adapter-date-fns``.
 Exported:
     build_race_scatter_config(racing_workouts, *, metric, is_dark, pb_id) -> dict
 
-The scatter shows one dot per qualifying workout, colored by season, with
-a dashed OLS best-fit line.  Y-axis is pace (sec/500m, inverted) or watts.
+The scatter shows one dot per qualifying workout, colored by season.
+Y-axis is pace (sec/500m, inverted) or watts.
 """
 
 from __future__ import annotations
@@ -86,35 +86,6 @@ def _parse_date_ms(date_str: str) -> Optional[int]:
     return int(dt.timestamp() * 1000)
 
 
-def _ols_endpoints(points: list[dict]) -> Optional[list[dict]]:
-    """Fit ``y = a*x + b`` and return ``[first, last]`` endpoints for a best-fit
-    line.  Returns ``None`` when fewer than two points or x range is zero."""
-    if len(points) < 2:
-        return None
-    xs = [p["x"] for p in points]
-    ys = [p["y"] for p in points]
-    x_min, x_max = min(xs), max(xs)
-    if x_max == x_min:
-        return None
-    n = len(points)
-    # Normalise x to days-from-min to keep the slope numerically stable.
-    day_ms = 1000 * 60 * 60 * 24
-    xn = [(x - x_min) / day_ms for x in xs]
-    mean_x = sum(xn) / n
-    mean_y = sum(ys) / n
-    num = sum((xn[i] - mean_x) * (ys[i] - mean_y) for i in range(n))
-    den = sum((xn[i] - mean_x) ** 2 for i in range(n))
-    if den == 0:
-        return None
-    slope = num / den
-    intercept = mean_y - slope * mean_x
-    x_end_days = (x_max - x_min) / day_ms
-    return [
-        {"x": x_min, "y": intercept},
-        {"x": x_max, "y": intercept + slope * x_end_days},
-    ]
-
-
 def build_race_scatter_config(
     racing_workouts: list[dict],
     *,
@@ -170,22 +141,6 @@ def build_race_scatter_config(
             "showLine": False,
         }
     ]
-
-    fit = _ols_endpoints(points)
-    if fit is not None:
-        datasets.append(
-            {
-                "type": "line",
-                "label": "Trend",
-                "data": fit,
-                "borderColor": tick_color,
-                "borderWidth": 1.5,
-                "borderDash": [4, 4],
-                "pointRadius": 0,
-                "showLine": True,
-                "fill": False,
-            }
-        )
 
     y_ticks: dict = {"color": tick_color}
     if not show_watts:
