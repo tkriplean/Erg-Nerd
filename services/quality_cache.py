@@ -22,7 +22,7 @@ from typing import Optional
 from services.workout_quality import compute_workout_quality
 
 _QUALITY_CACHE: dict[tuple, Optional[dict]] = {}
-_QUALITY_CACHE_MAX = 10000
+_QUALITY_CACHE_MAX = 1000000
 
 # Sentinel for "we tried and there's no result" so a None doesn't fall through
 # to recompute on every call.
