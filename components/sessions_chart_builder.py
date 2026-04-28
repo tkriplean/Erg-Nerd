@@ -54,7 +54,7 @@ from components.workout_table import (
 from components.app_context import get_profile
 from components.reference_watts_loader import reference_watts_loader
 from components.shared_ui import global_filter_ui, header_dropdown
-from components.spread_quality_legends import spread_quality_legends
+from components.spread_quality_legends import spread_quality_legends, SpreadQualityFilters
 from services.heartrate_utils import (
     hr_bin_passes,
     resolve_max_hr,
@@ -494,9 +494,6 @@ def sessions_chart(workouts: list) -> None:
         filter_ivl="All",  # "All" | "Intervals Only" | "No Intervals"
         show_watts=False,  # False = pace (sec/500m), True = watts
         color_mode="gander",  # "gander" | "quality"
-        active_bins=tuple(),
-        active_hr_bins=tuple(),
-        active_quality=tuple(),
     )
 
     workouts = _apply_outlier_filter(workouts)
@@ -529,22 +526,24 @@ def sessions_chart(workouts: list) -> None:
             r for r in filtered if r.get("workout_type") not in INTERVAL_WORKOUT_TYPES
         ]
 
+
+    spread_quality_filters = SpreadQualityFilters()
     # Apply Power Spread / HR Spread / Quality legend filters (disjunctive within,
     # conjunctive across).
-    if state.active_bins:
-        sel = set(state.active_bins)
+    if spread_quality_filters.active_bins:
+        sel = set(spread_quality_filters.active_bins)
         filtered = [
             r for r in filtered
             if any(power_bin_passes(r.get("_bin_meters") or [], i) for i in sel)
         ]
-    if state.active_hr_bins:
-        sel = set(state.active_hr_bins)
+    if spread_quality_filters.active_hr_bins:
+        sel = set(spread_quality_filters.active_hr_bins)
         filtered = [
             r for r in filtered
             if any(hr_bin_passes(r.get("_hr_bin_meters"), i) for i in sel)
         ]
-    if state.active_quality:
-        sel = set(state.active_quality)
+    if spread_quality_filters.active_quality:
+        sel = set(spread_quality_filters.active_quality)
         filtered = [r for r in filtered if r.get("_quality") in sel]
 
     sb_ids = compute_sb_ids(filtered)
@@ -664,13 +663,7 @@ def sessions_chart(workouts: list) -> None:
                 hd.location().go(path=f"/session/{chart.clicked_workout_id}")
 
         # ── Spread + Quality legend (Power Spread / HR Spread / Quality) ──────────
-        # ref_watts dates to the most recent workout in view so the (?) tooltip
-        # under "Power Spread" reflects current fitness.
-        today_ref_watts = None
-        if filtered:
-            today_d = parse_date(filtered[0].get("date", ""))
-            today_ref_watts = get_reference_watts(today_d, workouts)
-        spread_quality_legends(state, max_hr, today_ref_watts)
+        spread_quality_legends(max_hr)
 
         # ── Workouts-in-view table ────────────────────────────────────────────────
         in_window = [

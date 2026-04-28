@@ -57,7 +57,7 @@ from services.rowing_utils import (
 # ---------------------------------------------------------------------------
 # Index 0 = Rest (interval rest distance), 1-6 = power zones fastest → slowest.
 
-BIN_NAMES = [
+BIN_NAMES = (
     "Rest",
     "Fast",
     "2k",
@@ -65,11 +65,11 @@ BIN_NAMES = [
     "Threshold",
     "Fast Aerobic",
     "Slow Aerobic",
-]
+)
 N_BINS = len(BIN_NAMES)
 
 # (dark_rgba, light_rgba) per bin — indexed identically to BIN_NAMES.
-BIN_COLORS = [
+BIN_COLORS = (
     ("rgba(120,120,120,1)", "rgba(155,155,155,1)"),  # 0 Rest
     ("rgba(215,55,55,1)", "rgba(195,35,35,1)"),  # 1 Fast
     ("rgba(225,125,35,1)", "rgba(205,95,15,1)"),  # 2 2k
@@ -77,7 +77,7 @@ BIN_COLORS = [
     ("rgba(55,180,80,1)", "rgba(25,150,50,1)"),  # 4 Threshold
     ("rgba(50,130,220,1)", "rgba(20,105,195,1)"),  # 5 Fast Aerobic
     ("rgba(115,170,230,1)", "rgba(80,140,205,1)"),  # 6 Slow Aerobic
-]
+)
 
 # 3-zone model — maps the 6 power bins onto the Z1/Z2/Z3 framework used in
 # the volume distribution table and interval tab.
@@ -230,7 +230,7 @@ def _empty_bins() -> list:
     return [0.0] * N_BINS
 
 
-def workout_bin_meters(workout: dict, thresholds: Optional[dict]) -> list:
+def workout_bin_meters(workout: dict, thresholds: Optional[dict]) -> tuple:
     """
     Return ``[m0, m1, …, m6]`` — meter counts per power bin for one workout.
 
@@ -269,7 +269,7 @@ def workout_bin_meters(workout: dict, thresholds: Optional[dict]) -> list:
             if pace is not None and PACE_MIN <= pace <= PACE_MAX:
                 bins[classify_watts(compute_watts(pace), thresholds)] += dist
 
-    return bins
+    return tuple(bins)
 
 
 def power_spread_score(bin_meters: list) -> Optional[float]:

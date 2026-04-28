@@ -65,7 +65,7 @@ def _parse_rgba(rgba_str: str) -> tuple:
         return (128, 128, 128, 0.8)
 
 
-def _power_scale_tooltip_content(tt, ref_watts: dict | None, is_dark: bool) -> None:
+def _power_scale_tooltip_content(tt, is_dark: bool) -> None:
     """Graphical zone-scale explainer rendered into a tooltip's content slot."""
     with hd.box(slot=tt.content_slot, padding=0.5, gap=0.4, min_width=32):
         hd.text("Power Spread zones", font_size="small", font_weight="bold")
@@ -107,19 +107,6 @@ def _power_scale_tooltip_content(tt, ref_watts: dict | None, is_dark: bool) -> N
                                 font_size="x-small",
                                 font_color="neutral-500",
                             )
-                            w = ref_watts.get(evt_key) if ref_watts else None
-                            if w:
-                                hd.text(
-                                    f"{int(w)}W",
-                                    font_size="x-small",
-                                    font_color="neutral-500",
-                                )
-                            else:
-                                hd.text(
-                                    "—",
-                                    font_size="x-small",
-                                    font_color="neutral-400",
-                                )
 
 
 def _chip_tooltip_content(tt, heading: str, definition: str, filter_rule: str) -> None:
@@ -177,10 +164,16 @@ def legend_chip(
     return btn.clicked
 
 
+@hd.global_state
+class SpreadQualityFilters(hd.BaseState):
+    active_bins = hd.Prop(hd.List(hd.Any), [])
+    active_hr_bins = hd.Prop(hd.List(hd.Any), [])
+    active_quality = hd.Prop(hd.List(hd.Any), [])
+
+
+@hd.cached
 def spread_quality_legends(
-    state,
     max_hr: int | None,
-    ref_watts: dict | None = None,
 ) -> None:
     """Render Power Spread + HR Spread + Quality filter chips.
 
@@ -188,6 +181,8 @@ def spread_quality_legends(
     ``state.active_quality`` on click.
     """
     is_dark = hd.theme().is_dark
+
+    state = SpreadQualityFilters()
 
     # ── Power Spread legend ──────────────────────────────────────────────
     active_bins: set[int] = set(state.active_bins)
@@ -207,7 +202,7 @@ def spread_quality_legends(
                     font_color="neutral-600",
                 )
                 with hd.tooltip() as tt:
-                    _power_scale_tooltip_content(tt, ref_watts, is_dark)
+                    _power_scale_tooltip_content(tt, is_dark)
                     hd.icon(
                         "question-circle",
                         font_size="small",

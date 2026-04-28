@@ -135,7 +135,10 @@ from components.workout_table import (
 )
 from components.app_context import get_profile
 from components.shared_ui import global_filter_ui
-from components.spread_quality_legends import spread_quality_legends
+from components.spread_quality_legends import (
+    spread_quality_legends,
+    SpreadQualityFilters,
+)
 
 # ---------------------------------------------------------------------------
 # color helpers
@@ -1005,11 +1008,10 @@ def intervals_page() -> None:
             hd.text("No interval workouts found.", font_color="neutral-500")
         return
 
+    spread_quality_state = SpreadQualityFilters()
+
     state = hd.state(
         active_cells=tuple(),  # tuple[str] — "col,row" keys of selected cells
-        active_bins=tuple(),  # tuple[int] — pace bin indices (1–6) for OR filter
-        active_hr_bins=tuple(),  # tuple[int] — HR bin indices (1–5) for OR filter
-        active_quality=tuple(),  # tuple[str] — quality buckets (Low/Medium/High/Ultra) for OR filter
         structure_filter=None,  # str | None — filter table to this structure key
     )
 
@@ -1113,18 +1115,18 @@ def intervals_page() -> None:
             # the active pace-zone, HR-zone, and structure filters.
             pre_filtered = _filter_disjunctive(
                 all_intervals,
-                set(state.active_bins),
+                set(spread_quality_state.active_bins),
                 power_bin_passes,
                 "_bin_meters",
             )
             pre_filtered = _filter_disjunctive(
                 pre_filtered,
-                set(state.active_hr_bins),
+                set(spread_quality_state.active_hr_bins),
                 hr_bin_passes,
                 "_hr_bin_meters",
             )
-            if state.active_quality:
-                sel_quality = set(state.active_quality)
+            if spread_quality_state.active_quality:
+                sel_quality = set(spread_quality_state.active_quality)
                 pre_filtered = [
                     r for r in pre_filtered if r.get("_quality") in sel_quality
                 ]
@@ -1138,13 +1140,7 @@ def intervals_page() -> None:
             # 2D grid browser — counts reflect pace/HR/structure filters
             _grid_browser(pre_filtered, state)
 
-            # Dual labelled legends (Pace + HR) with rich chip tooltips.
-            # ref_watts dates to the most recent workout so the (?) tooltip
-            # under "Power Spread" reflects current fitness.
-            today_ref_watts = (
-                _ref_watts_for(all_intervals[0]) if all_intervals else None
-            )
-            spread_quality_legends(state, max_hr, today_ref_watts)
+            spread_quality_legends(max_hr)
 
             # Apply cell filter on top of already pace/HR/structure filtered
             active_cells = frozenset(state.active_cells)
@@ -1176,9 +1172,9 @@ def intervals_page() -> None:
             # internal hd.state to reinitialise, resetting page to 0.
             filter_key = (
                 f"{state.structure_filter or 'all'}"
-                f"_{sorted(list(state.active_bins))}"
-                f"_{sorted(list(state.active_hr_bins))}"
-                f"_{sorted(list(state.active_quality))}"
+                f"_{sorted(list(spread_quality_state.active_bins))}"
+                f"_{sorted(list(spread_quality_state.active_hr_bins))}"
+                f"_{sorted(list(spread_quality_state.active_quality))}"
                 f"_{sorted(list(state.active_cells))}"
             )
             WorkoutTable(

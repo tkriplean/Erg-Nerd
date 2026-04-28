@@ -186,7 +186,7 @@ def profile_complete(profile: dict) -> bool:
 
 def compute_pace(r: dict) -> Optional[float]:
     """Return pace in seconds per 500m, or None if either field is missing."""
-    t, d = r.get("time"), r.get("distance")
+    t, d = r.get("time", None), r.get("distance", None)
     if not t or not d:
         return None
     return (t / 10.0) / (d / 500.0)

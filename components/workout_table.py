@@ -158,10 +158,11 @@ def _time_value(w: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _link_cell(w: dict) -> None:
+@hd.cached
+def _link_cell(id) -> None:
     hd.link(
         "view",
-        href=f"/session/{w.get('id')}",
+        href=f"/session/{id}",
         font_size="small",
         underline=False,
         text_align="center",
@@ -171,14 +172,19 @@ def _link_cell(w: dict) -> None:
 # ---------------------------------------------------------------------------
 # Pre-defined column constants
 # ---------------------------------------------------------------------------
+@hd.cached
+def render_date(d):
+    return fmt_date(d)
+
 
 COL_DATE = ColumnDef(
     key="date",
     header="Date",
     width="10rem",
-    render_value=lambda w: fmt_date(w.get("date", "")),
+    render_value=lambda w: render_date(w.get("date", "")),
     sort_value=lambda w: w.get("date", ""),
 )
+
 
 COL_TYPE = ColumnDef(
     key="type",
@@ -188,11 +194,17 @@ COL_TYPE = ColumnDef(
     sort_value=lambda w: machine_label(w.get("type", "")),
 )
 
+
+@hd.cached
+def render_distance(d):
+    return fmt_distance(d)
+
+
 COL_DISTANCE = ColumnDef(
     key="distance",
     header="Distance",
     width="7rem",
-    render_value=lambda w: fmt_distance(w.get("distance")),
+    render_value=lambda w: render_distance(w.get("distance")),
     sort_value=lambda w: w.get("distance") or 0,
     align="end",
 )
@@ -206,14 +218,21 @@ COL_TIME = ColumnDef(
     align="end",
 )
 
+
+@hd.cached
+def render_pace(d):
+    return fmt_split(d)
+
+
 COL_PACE = ColumnDef(
     key="pace",
     header="Pace /500m",
     width="7rem",
-    render_value=lambda w: fmt_split(pace_tenths(w)),
+    render_value=lambda w: render_pace(pace_tenths(w)),
     sort_value=_pace_sort,
     default_asc=True,
 )
+
 
 COL_WATTS = ColumnDef(
     key="watts",
@@ -247,11 +266,17 @@ COL_HR = ColumnDef(
     sort_value=_hr_sort,
 )
 
+
+@hd.cached
+def render_season(d):
+    return get_season(d)
+
+
 COL_SEASON = ColumnDef(
     key="season",
     header="Season",
     width="6rem",
-    render_value=lambda w: get_season(w.get("date", "")),
+    render_value=lambda w: render_season(w.get("date", "")),
     sort_value=lambda w: w.get("date", ""),
 )
 
@@ -260,7 +285,7 @@ COL_LINK = ColumnDef(
     header="",
     width="2.5rem",
     render_value=lambda w: "",
-    render_cell=_link_cell,
+    render_cell=lambda w: _link_cell(w.get("id")),
     sortable=False,
     align="center",
 )
@@ -286,13 +311,14 @@ def always_white(is_dark: bool) -> str:
 def render_spread_cell(
     score: float | None,
     bar_uri: str | None,
-    bin_meters: list | None,
-    zone_names: list[str],
-    zone_colors: list[tuple[str, str]],
+    bin_meters: tuple | None,
+    zone_names: tuple[str],
+    zone_colors: tuple[tuple[str, str]],
     is_dark: bool,
     *,
     skip_indices: tuple[int, ...] = (0,),
 ) -> None:
+    print(bin_meters)
     """
     Cell renderer for Power Spread / HR Spread columns.
 

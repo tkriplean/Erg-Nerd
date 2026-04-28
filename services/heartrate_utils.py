@@ -56,7 +56,7 @@ from typing import Optional
 # Bin metadata
 # ---------------------------------------------------------------------------
 
-HR_ZONE_NAMES: list[str] = [
+HR_ZONE_NAMES: tuple[str] = (
     "Rest",  # 0
     "Z5 Max",  # 1 — > 90 % HRmax
     "Z4 Threshold",  # 2 — 80–90 %
@@ -64,11 +64,11 @@ HR_ZONE_NAMES: list[str] = [
     "Z2 Aerobic",  # 4 — 60–70 %
     "Z1 Recovery",  # 5 — < 60 %
     "No HR",  # 6 — no valid HR data
-]
+)
 
 # (dark_rgba, light_rgba) per bin — intentionally parallel to BIN_COLORS so
 # the chart builder can treat them identically.
-HR_ZONE_COLORS: list[tuple[str, str]] = [
+HR_ZONE_COLORS: tuple[tuple[str, str]] = (
     ("rgba(120,120,120,0.65)", "rgba(155,155,155,0.65)"),  # 0 Rest (same as pace)
     ("rgba(215,55,55,0.85)", "rgba(195,35,35,0.85)"),  # 1 Z5 Max (red)
     ("rgba(225,125,35,0.85)", "rgba(205,95,15,0.85)"),  # 2 Z4 Threshold (orange)
@@ -76,7 +76,7 @@ HR_ZONE_COLORS: list[tuple[str, str]] = [
     ("rgba(50,130,220,0.85)", "rgba(20,105,195,0.85)"),  # 4 Z2 Aerobic (blue)
     ("rgba(115,170,230,0.75)", "rgba(80,140,205,0.75)"),  # 5 Z1 Recovery (light blue)
     ("rgba(195,195,195,0.45)", "rgba(210,210,210,0.55)"),  # 6 No HR (neutral grey)
-]
+)
 
 # Draw order for stacked bar (bottom → top): No HR, Z1, Z2, Z3, Z4, Z5, Rest
 HR_ZONE_DRAW_ORDER: list[int] = [1, 2, 3, 4, 5, 0, 6]
@@ -242,7 +242,7 @@ def _empty_bins() -> list[float]:
     return [0.0] * len(HR_ZONE_NAMES)
 
 
-def workout_hr_meters(workout: dict, max_hr: int) -> list[float]:
+def workout_hr_meters(workout: dict, max_hr: int) -> tuple[float]:
     """
     Return a 7-element HR-zone bin vector for a single workout.
 
@@ -283,7 +283,7 @@ def workout_hr_meters(workout: dict, max_hr: int) -> list[float]:
                 bins[hr_zone_idx(hr_val, max_hr)] += dist
             else:
                 bins[6] += dist  # No HR
-        return bins
+        return tuple(bins)
 
     # ── Case 2: per-interval HR ──────────────────────────────────────────────
     intervals = workout_data.get("intervals") or []
@@ -301,7 +301,7 @@ def workout_hr_meters(workout: dict, max_hr: int) -> list[float]:
                 bins[hr_zone_idx(hr_val, max_hr)] += dist
             else:
                 bins[6] += dist  # No HR
-        return bins
+        return tuple(bins)
 
     # ── Case 3: top-level HR ─────────────────────────────────────────────────
     top_hr = _extract_hr(workout.get("heart_rate"))
@@ -323,7 +323,7 @@ def workout_hr_meters(workout: dict, max_hr: int) -> list[float]:
         work_dist = max(0.0, total_dist - rest_dist)
         bins[0] += rest_dist
         bins[hr_zone_idx(top_hr, max_hr)] += work_dist
-        return bins
+        return tuple(bins)
 
     # ── Case 4: no HR data ───────────────────────────────────────────────────
     # Keep interval rest in bin 0; work meters → No HR (bin 6).
@@ -338,7 +338,7 @@ def workout_hr_meters(workout: dict, max_hr: int) -> list[float]:
         )
     bins[0] += rest_dist
     bins[6] += max(0.0, total_dist - rest_dist)
-    return bins
+    return tuple(bins)
 
 
 # ---------------------------------------------------------------------------
