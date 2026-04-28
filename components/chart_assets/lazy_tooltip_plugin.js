@@ -1,0 +1,255 @@
+/**
+ * LazyTooltip — HyperDiv plugin that defers tooltip body construction until
+ * the user first hovers (or tabs to) the trigger.  See the docstring of
+ * components/lazy_tooltip_plugin.py for config shapes.
+ *
+ * Three trigger kinds — all rendered from the `config` prop:
+ *   "spread"  — bold score on top of a small zone bar (image)
+ *   "quality" — rounded coloured pill with a label
+ *   "info"    — Shoelace question-circle icon
+ *
+ * The first mouseenter on the trigger lazily creates an <sl-tooltip>, moves
+ * the trigger inside it, builds the rich body, and forces it open for that
+ * hover.  Subsequent shows are handled natively by Shoelace.
+ */
+
+window.hyperdiv.registerPlugin("LazyTooltip", (ctx) => {
+  const root = ctx.domElement; // shadowRoot
+
+  // Style is intentionally tiny — we lean on the document's Shoelace CSS
+  // custom properties (which inherit through shadow DOM) for fonts/colours.
+  const style = document.createElement("style");
+  style.textContent = `
+    :host { display: inline-block; }
+    .trigger {
+      display: inline-flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.2rem;
+      cursor: default;
+    }
+    .score { font-weight: bold; font-size: var(--sl-font-size-medium, 1rem); line-height: 1.2; }
+    .bar { display: block; }
+    .pill {
+      display: inline-flex;
+      padding: 0.15rem 0.5rem;
+      border-radius: var(--sl-border-radius-medium, 0.25rem);
+      align-items: center;
+      justify-content: center;
+    }
+    .pill-label {
+      font-size: var(--sl-font-size-x-small, 0.75rem);
+      font-weight: bold;
+      color: #fff;
+      line-height: 1.2;
+    }
+    .info-wrap { display: inline-flex; padding: 0 0.3rem 0.3rem 0; }
+    sl-icon { font-size: 0.95rem; }
+    .tt-body {
+      padding: 0.4rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+      min-width: 12rem;
+    }
+    .tt-body.quality, .tt-body.info { min-width: 0; max-width: 24rem; gap: 0.3rem; }
+    .row { display: flex; align-items: center; gap: 0.4rem; }
+    .row img { width: 0.6rem; height: 0.6rem; display: block; }
+    .row .pct {
+      font-size: var(--sl-font-size-x-small, 0.75rem);
+      font-weight: bold;
+    }
+    .tt-title { font-size: var(--sl-font-size-small, 0.875rem); font-weight: bold; }
+    .tt-headline { font-size: var(--sl-font-size-x-small, 0.75rem); }
+    .tt-label {
+      font-size: var(--sl-font-size-x-small, 0.75rem);
+      color: var(--sl-color-neutral-500);
+    }
+    .tt-item { font-size: var(--sl-font-size-x-small, 0.75rem); }
+  `;
+  root.appendChild(style);
+
+  let trigger = null;
+  let slTooltip = null;
+  let armed = false;
+
+  function buildTrigger(cfg) {
+    const el = document.createElement("div");
+    el.className = "trigger";
+
+    if (cfg.kind === "spread") {
+      const score = document.createElement("div");
+      score.className = "score";
+      score.textContent = cfg.score;
+      el.appendChild(score);
+      if (cfg.bar_uri) {
+        const bar = document.createElement("img");
+        bar.className = "bar";
+        bar.src = cfg.bar_uri;
+        bar.style.width = (cfg.bar_w || 5) + "rem";
+        bar.style.height = (cfg.bar_h || 0.5) + "rem";
+        el.appendChild(bar);
+      }
+    } else if (cfg.kind === "quality") {
+      const pill = document.createElement("div");
+      pill.className = "pill";
+      pill.style.background = cfg.bg;
+      const lbl = document.createElement("span");
+      lbl.className = "pill-label";
+      lbl.textContent = cfg.label;
+      pill.appendChild(lbl);
+      el.appendChild(pill);
+    } else if (cfg.kind === "info") {
+      const wrap = document.createElement("span");
+      wrap.className = "info-wrap";
+      const icon = document.createElement("sl-icon");
+      icon.setAttribute("name", "question-circle");
+      if (cfg.color) icon.style.color = cfg.color;
+      wrap.appendChild(icon);
+      el.appendChild(wrap);
+    }
+    return el;
+  }
+
+  function buildBody(cfg) {
+    const body = document.createElement("div");
+    body.className = "tt-body";
+
+    if (cfg.kind === "spread") {
+      for (const it of cfg.items || []) {
+        const row = document.createElement("div");
+        row.className = "row";
+        const img = document.createElement("img");
+        img.src = it.swatch_uri;
+        const pct = document.createElement("span");
+        pct.className = "pct";
+        pct.textContent = it.pct_text;
+        row.appendChild(img);
+        row.appendChild(pct);
+        body.appendChild(row);
+      }
+    } else if (cfg.kind === "quality") {
+      body.classList.add("quality");
+      if (cfg.tt_title) {
+        const t = document.createElement("div");
+        t.className = "tt-title";
+        t.textContent = cfg.tt_title;
+        body.appendChild(t);
+      }
+      if (cfg.headline) {
+        const h = document.createElement("div");
+        h.className = "tt-headline";
+        h.textContent = cfg.headline;
+        body.appendChild(h);
+      }
+      if (cfg.top && cfg.top.length) {
+        const lbl = document.createElement("div");
+        lbl.className = "tt-label";
+        lbl.textContent = "Top contributions:";
+        body.appendChild(lbl);
+        for (const c of cfg.top) {
+          const row = document.createElement("div");
+          row.className = "tt-item";
+          row.textContent = `  • ${c.name}: ${c.pct_text}`;
+          body.appendChild(row);
+        }
+      }
+    } else if (cfg.kind === "info") {
+      body.classList.add("info");
+      body.style.maxWidth = (cfg.max_width || 24) + "rem";
+      if (cfg.title || cfg.subtitle) {
+        const head = document.createElement("div");
+        head.style.display = "flex";
+        head.style.flexWrap = "wrap";
+        head.style.alignItems = "center";
+        head.style.gap = "0.5rem";
+        if (cfg.title) {
+          const t = document.createElement("span");
+          t.style.fontWeight = "bold";
+          t.style.fontSize = "var(--sl-font-size-medium, 1rem)";
+          t.textContent = cfg.title;
+          head.appendChild(t);
+        }
+        if (cfg.subtitle) {
+          const s = document.createElement("span");
+          s.style.fontSize = "var(--sl-font-size-small, 0.875rem)";
+          s.style.color = "var(--sl-color-neutral-300)";
+          s.textContent = cfg.subtitle;
+          head.appendChild(s);
+        }
+        body.appendChild(head);
+      }
+      if (cfg.body) {
+        const b = document.createElement("div");
+        b.style.fontSize = "var(--sl-font-size-small, 0.875rem)";
+        if (cfg.body_muted) b.style.color = "var(--sl-color-neutral-300)";
+        b.textContent = cfg.body;
+        body.appendChild(b);
+      }
+      if (cfg.example) {
+        const e = document.createElement("div");
+        e.style.fontSize = "var(--sl-font-size-small, 0.875rem)";
+        e.style.color = "var(--sl-color-neutral-300)";
+        e.style.fontStyle = "italic";
+        e.textContent = cfg.example;
+        body.appendChild(e);
+      }
+    }
+    return body;
+  }
+
+  function teardown() {
+    if (slTooltip) {
+      slTooltip.remove();
+      slTooltip = null;
+    }
+    if (trigger) {
+      trigger.remove();
+      trigger = null;
+    }
+    armed = false;
+  }
+
+  function render(cfg, placement) {
+    teardown();
+    if (!cfg) return;
+    trigger = buildTrigger(cfg);
+    root.appendChild(trigger);
+
+    const arm = () => {
+      if (armed || !trigger) return;
+      armed = true;
+      slTooltip = document.createElement("sl-tooltip");
+      slTooltip.setAttribute("placement", placement || "top");
+      slTooltip.setAttribute("hoist", "");
+      // Reparent the trigger inside the tooltip so it acts as the anchor.
+      slTooltip.appendChild(trigger);
+      const body = buildBody(cfg);
+      body.setAttribute("slot", "content");
+      slTooltip.appendChild(body);
+      root.appendChild(slTooltip);
+      // The mouseenter that armed us has already fired; show explicitly so
+      // there's no perceptible delay before the tooltip appears.
+      requestAnimationFrame(() => {
+        try {
+          slTooltip.show();
+        } catch (e) {
+          /* ignore */
+        }
+      });
+    };
+
+    trigger.addEventListener("mouseenter", arm, { once: true });
+    trigger.addEventListener("focusin", arm, { once: true });
+  }
+
+  let cfg = ctx.initialProps.config || null;
+  let placement = ctx.initialProps.placement || "top";
+  render(cfg, placement);
+
+  ctx.onPropUpdate((propName, propValue) => {
+    if (propName === "config") cfg = propValue;
+    else if (propName === "placement") placement = propValue;
+    render(cfg, placement);
+  });
+});

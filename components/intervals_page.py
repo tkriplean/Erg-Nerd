@@ -124,6 +124,7 @@ from services.heartrate_utils import (
 )
 from services.formatters import fmt_date, fmt_distance, fmt_split, format_time
 from components.hyperdiv_extensions import aligned_button, grid_box
+from components.lazy_tooltip_plugin import LazyTooltip
 from components.workout_table import (
     COL_HR_SPREAD,
     COL_LINK,
@@ -726,39 +727,34 @@ def _cell_key(col: int, row: int) -> str:
     return f"{col},{row}"
 
 
-def _grid_cell_tooltip_content(tt, row_idx: int, col_idx: int) -> None:
+def _grid_cell_tooltip_config(row_idx: int, col_idx: int) -> dict:
     info = _cell_info(row_idx, col_idx)
     col_label = _DUR_COLS[col_idx][0]
     row_label, ratio_range, _, _ = _RATIO_ROWS[row_idx]
 
-    with hd.box(slot=tt.content_slot, gap=0.4, max_width=40):
-        with hd.hbox(gap=0.5, align="center", wrap="wrap"):
-            hd.text(
-                info["name"] if info else f"Other ({row_label})",
-                font_weight="bold",
-                font_size="medium",
-            )
-            hd.text(
-                f"{col_label} work · {ratio_range}",
-                font_size="small",
-                font_color="neutral-300",
-            )
-        if info:
-            hd.text(info["description"], font_size="small")
-            hd.text(
-                f"E.g. {info['example']}",
-                font_size="small",
-                font_color="neutral-300",
-                font_style="italic",
-            )
-        else:
-            hd.text(
-                "This combination of work duration and work:rest ratio is "
-                "uncommon in structured training.  Workouts that land here "
-                "are shown for completeness.",
-                font_size="small",
-                font_color="neutral-300",
-            )
+    title = info["name"] if info else f"Other ({row_label})"
+    subtitle = f"{col_label} work · {ratio_range}"
+    if info:
+        return {
+            "kind": "info",
+            "max_width": 40,
+            "title": title,
+            "subtitle": subtitle,
+            "body": info["description"],
+            "example": f"E.g. {info['example']}",
+        }
+    return {
+        "kind": "info",
+        "max_width": 40,
+        "title": title,
+        "subtitle": subtitle,
+        "body": (
+            "This combination of work duration and work:rest ratio is "
+            "uncommon in structured training.  Workouts that land here "
+            "are shown for completeness."
+        ),
+        "body_muted": True,
+    }
 
 
 def _grid_browser(zone_workouts: list[dict], state) -> None:
@@ -961,14 +957,13 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                                             font_color=white_token,
                                         )
 
-                                with hd.tooltip() as tt:
-                                    _grid_cell_tooltip_content(tt, ri, ci)
-                                    hd.icon(
-                                        "question-circle",
-                                        font_color=white_token,
-                                        padding_right=0.3,
-                                        padding_bottom=0.3,
-                                    )
+                                LazyTooltip(
+                                    config={
+                                        **_grid_cell_tooltip_config(ri, ci),
+                                        "color": "#fff",
+                                    },
+                                    placement="top",
+                                )
 
 
 # ---------------------------------------------------------------------------

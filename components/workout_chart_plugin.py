@@ -46,7 +46,7 @@ class StrokeChart(hd.Plugin):
         hd.Plugin.js_link(
             "https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3/dist/chartjs-plugin-annotation.min.js"
         ),
-        hd.Plugin.js(_STROKE_CHART_JS),
+        ("js-link", os.path.join(_HERE, "chart_assets", "workout_chart_plugin.js")),
     ]
 
     # ── Python → JS ──────────────────────────────────────────────────────────

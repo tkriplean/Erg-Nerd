@@ -40,6 +40,7 @@ from typing import Callable
 import hyperdiv as hd
 
 from components.hyperdiv_extensions import grid_box
+from components.lazy_tooltip_plugin import LazyTooltip
 from services.formatters import (
     fmt_date,
     fmt_split,
@@ -323,60 +324,55 @@ def render_spread_cell(
     Cell renderer for Power Spread / HR Spread columns.
 
     Layout: score (bold) on top, a small stacked zone bar (half-width)
-    underneath, and a rich content-slot tooltip listing each non-empty zone
-    with its swatch and percentage.  Workouts with no meaningful meters
-    (score is None) render as a single "—" with no bar.
+    underneath, and a rich tooltip — built lazily by LazyTooltip on first
+    hover — listing each non-empty zone with its swatch and percentage.
+    Workouts with no meaningful meters (score is None) render as a single
+    "—" with no bar and no tooltip.
 
     skip_indices — zone indices to exclude entirely from the tooltip (e.g.
     Rest, or Rest + No HR).  They are also excluded from the percentage
     denominator so the zone percentages sum to 100%.
     """
-    # Lazy import — avoid hard dependency on swatch_svg at module load.
-
     if score is None or bin_meters is None:
         hd.text("—", font_size="medium", font_color="neutral-400")
         return
 
     skip_set = set(skip_indices)
     total = sum(m for idx, m in enumerate(bin_meters) if idx not in skip_set)
-    with hd.tooltip() as tt:
-        with hd.box(slot=tt.content_slot, padding=0.4, gap=0.2, min_width=12):
-            for idx, name in enumerate(zone_names):
-                with hd.scope(f"{idx} {name}"):
-                    if idx in skip_set:
-                        continue
-                    meters = bin_meters[idx] if idx < len(bin_meters) else 0
-                    if meters <= 0:
-                        continue
-                    pct = (meters / total) if total > 0 else 0.0
-                    if pct < 0.005:
-                        continue
-                    color_str = zone_colors[idx][0 if is_dark else 1]
-                    tooltip_swatch(color_str, pct)
-
-        with hd.box(align="start", gap=0.2):
-            hd.text(f"{score:.0f}", font_size="medium", font_weight="bold")
-            if bar_uri:
-                hd.image(
-                    src=bar_uri,
-                    width=_SPREAD_BAR_WIDTH,
-                    height=_SPREAD_BAR_HEIGHT,
-                )
-
-
-@hd.cached
-def tooltip_swatch(color_str, pct):
-    with hd.hbox(gap=0.4, align="center"):
-        hd.image(
-            src=swatch_svg(color_str, size=10, radius=2),
-            width=0.6,
-            height=0.6,
+    items = []
+    for idx in range(len(zone_names)):
+        if idx in skip_set:
+            continue
+        meters = bin_meters[idx] if idx < len(bin_meters) else 0
+        if meters <= 0:
+            continue
+        pct = (meters / total) if total > 0 else 0.0
+        if pct < 0.005:
+            continue
+        color_str = zone_colors[idx][0 if is_dark else 1]
+        items.append(
+            {
+                "swatch_uri": swatch_svg(color_str, size=10, radius=2),
+                "pct_text": f"{pct:.0%}",
+            }
         )
-        hd.text(
-            f"{pct:.0%}",
-            font_size="x-small",
-            font_weight="bold",
-        )
+
+    LazyTooltip(
+        config={
+            "kind": "spread",
+            "score": f"{score:.0f}",
+            "bar_uri": bar_uri,
+            "bar_w": _SPREAD_BAR_WIDTH,
+            "bar_h": _SPREAD_BAR_HEIGHT,
+            "items": items,
+        },
+        placement="top",
+    )
+
+
+def _rgba_css(rgba: tuple) -> str:
+    r, g, b, a = rgba
+    return f"rgba({r},{g},{b},{a})"
 
 
 @hd.cached
@@ -408,36 +404,27 @@ def render_quality_cell(
         headline = f"Quality score {score:.2f} — clears the 0.75 High threshold."
     else:  # Ultra
         headline = f"Quality score {score:.2f} — beyond reference power."
-    with hd.tooltip() as tt:
-        with hd.box(slot=tt.content_slot, padding=0.4, gap=0.3, max_width=24):
-            hd.text(f"{q} quality", font_size="small", font_weight="bold")
-            hd.text(headline, font_size="x-small")
-            if top_cats:
-                total = sum(e for _, e in top_cats) or 1.0
-                hd.text(
-                    "Top contributions:",
-                    font_size="x-small",
-                    font_color="neutral-500",
-                )
-                for cat, e in top_cats:
-                    with hd.scope(f"{cat} {e}"):
-                        hd.text(
-                            f"  • {cat}: {100.0 * e / total:.0f}%",
-                            font_size="x-small",
-                        )
-        with hd.box(
-            padding=(0.15, 0.5, 0.15, 0.5),
-            border_radius="medium",
-            background_color=style["bg"],
-            align="center",
-            justify="center",
-        ):
-            hd.text(
-                style["label"],
-                font_size="x-small",
-                font_weight="bold",
-                font_color=always_white(is_dark),
-            )
+
+    if top_cats:
+        total = sum(e for _, e in top_cats) or 1.0
+        top = [
+            {"name": cat, "pct_text": f"{100.0 * e / total:.0f}%"}
+            for cat, e in top_cats
+        ]
+    else:
+        top = []
+
+    LazyTooltip(
+        config={
+            "kind": "quality",
+            "label": style["label"],
+            "bg": _rgba_css(style["bg"]),
+            "tt_title": f"{q} quality",
+            "headline": headline,
+            "top": top,
+        },
+        placement="top",
+    )
 
 
 def _spread_cell_factory(

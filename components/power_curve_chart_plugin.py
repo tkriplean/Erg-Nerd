@@ -57,8 +57,6 @@ import os
 import hyperdiv as hd
 
 _HERE = os.path.dirname(__file__)
-with open(os.path.join(_HERE, "chart_assets", "power_curve_chart_plugin.js")) as _f:
-    _PERFORMANCE_CHART_JS = _f.read()
 
 
 class PowerCurveChart(hd.Plugin):
@@ -70,7 +68,7 @@ class PowerCurveChart(hd.Plugin):
         hd.Plugin.js_link(
             "https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"
         ),
-        hd.Plugin.js(_PERFORMANCE_CHART_JS),
+        ("js-link", os.path.join(_HERE, "chart_assets", "power_curve_chart_plugin.js")),
     ]
 
     # All quality workouts with pre-computed numeric fields.  JS builds scatter
