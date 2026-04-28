@@ -674,8 +674,8 @@ def sessions_chart(workouts: list) -> None:
         ]
         in_window.sort(key=lambda r: r.get("date", ""), reverse=True)
         if in_window:
-            with hd.box(padding=(2, 0, 0, 0)):
-                hd.h3(f"Workouts in View  ({len(in_window)})")
+            with hd.box(padding=(2, 0, 0, 0), align="center"):
+                hd.h2(f"Workouts in View  ({len(in_window)})")
                 WorkoutTable(
                     in_window,
                     [
