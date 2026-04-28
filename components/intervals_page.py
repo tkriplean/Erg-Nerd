@@ -1012,10 +1012,11 @@ def intervals_page() -> None:
     )
 
     # ── Interval-specific column definitions (capture state for filter button) ──
-    def _render_structure_cell(w):
-        is_active = state.structure_filter == w["_structure_key"]
+    @hd.cached
+    def _render_structure_cell(structure_key):
+        is_active = state.structure_filter == structure_key
         btn = hd.button(
-            w["_structure_key"],
+            structure_key,
             variant="text",
             size="medium",
             padding=(0, 0),
@@ -1023,7 +1024,7 @@ def intervals_page() -> None:
             font_color="primary-500" if is_active else "neutral-700",
         )
         if btn.clicked:
-            state.structure_filter = None if is_active else w["_structure_key"]
+            state.structure_filter = None if is_active else structure_key
 
     @hd.cached
     def _render_stimulus_cell(s):
@@ -1051,7 +1052,7 @@ def intervals_page() -> None:
             "structure",
             "Structure",
             "minmax(8rem,1fr)",
-            render_cell=_render_structure_cell,
+            render_cell=lambda w: _render_structure_cell(w.get("_structure_key")),
             sortable=False,
         ),
         ColumnDef(
