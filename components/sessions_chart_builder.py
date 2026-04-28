@@ -39,6 +39,7 @@ from components.sessions_chart_plugin import SessionsChart
 from components.workout_table import (
     WorkoutTable,
     COL_DATE,
+    COL_STRUCTURE,
     COL_DISTANCE,
     COL_TIME,
     COL_PACE,
@@ -679,6 +680,7 @@ def sessions_chart(workouts: list) -> None:
                     in_window,
                     [
                         COL_DATE,
+                        COL_STRUCTURE,
                         COL_DISTANCE,
                         COL_TIME,
                         COL_PACE,

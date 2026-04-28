@@ -16,6 +16,23 @@ import hyperdiv as hd
 from services.formatters import fmt_split, format_time, fmt_distance
 
 
+def _season_label(season) -> str:
+    """Format a season as 'YYYY-YY'.
+
+    Accepts an int season-end year (Concept2 ranking entries) or an existing
+    'YYYY-YY' string (passthrough for the user's own entry).
+    """
+    if season is None or season == "":
+        return ""
+    if isinstance(season, str):
+        return season if "-" in season else ""
+    try:
+        y = int(season)
+    except (TypeError, ValueError):
+        return ""
+    return f"{y - 1}-{str(y)[2:]}"
+
+
 def _pace_tenths_for(
     event_kind: str, event_value: int, value_tenths: int
 ) -> Optional[int]:
@@ -50,6 +67,7 @@ def render_rankings_modal(
     user_row_label: str,
     user_age: int = 0,
     user_date_label: str = "",
+    user_season: Optional[str] = None,
 ) -> None:
     """Populate ``dialog`` with a rankings table. Call while dialog is open."""
     # Sort pool best → worst for display.
@@ -65,6 +83,7 @@ def render_rankings_modal(
         "country": "",
         "value_tenths": user_value_tenths,
         "verified": "",
+        "season": user_season,
         "_is_user": True,
     }
     insert_idx = max(0, min(len(ordered), user_rank - 1))
@@ -101,6 +120,7 @@ def render_rankings_modal(
                 font_size="small",
             ):
                 hd.text("Rank", width="4rem")
+                hd.text("Season", width="5rem")
                 hd.text("Name", width="14rem")
                 hd.text("Age", width="3rem")
                 hd.text("Country", width="5rem")
@@ -140,6 +160,10 @@ def render_rankings_modal(
                                 border_bottom="1px solid neutral-100",
                             ):
                                 hd.text(f"{rank_1b:,}", width="4rem")
+                                hd.text(
+                                    _season_label(entry.get("season")),
+                                    width="5rem",
+                                )
                                 hd.text(entry.get("name", ""), width="14rem")
                                 hd.text(str(entry.get("age", "")), width="3rem")
                                 hd.text(entry.get("country", ""), width="5rem")

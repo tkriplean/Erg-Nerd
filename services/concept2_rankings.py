@@ -61,7 +61,7 @@ from urllib.parse import urlencode
 import httpx
 from bs4 import BeautifulSoup
 
-from services.rowing_utils import RANKED_DISTANCES, RANKED_TIMES
+from services.rowing_utils import RANKED_DISTANCES, RANKED_TIMES, compute_watts
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -937,7 +937,9 @@ class RankingModifiers:
     name_event_sets: Optional[dict] = None
 
 
-def _apply_modifiers(entries: list[dict], modifiers: Optional[RankingModifiers]) -> list[dict]:
+def _apply_modifiers(
+    entries: list[dict], modifiers: Optional[RankingModifiers]
+) -> list[dict]:
     if modifiers is None:
         return entries
     out = entries
@@ -950,7 +952,9 @@ def _apply_modifiers(entries: list[dict], modifiers: Optional[RankingModifiers])
     if modifiers.must_have_event_kinds and modifiers.name_event_sets is not None:
         nes = modifiers.name_event_sets
         required = modifiers.must_have_event_kinds
-        out = [e for e in out if required.issubset(nes.get(e.get("name", ""), frozenset()))]
+        out = [
+            e for e in out if required.issubset(nes.get(e.get("name", ""), frozenset()))
+        ]
     return out
 
 
@@ -965,21 +969,13 @@ def filter_matched_rankings(
 ) -> list[dict]:
     """Age-matched pool: rows within ``target_age ± k`` of the given age.
 
-    ``gender`` is ``"M"`` / ``"F"``; ``weight_class`` is ``"H"`` / ``"L"`` /
-    ``None`` (youth). Entries must have the expected fields from the index
-    (``gender``, ``weight``, ``age``).
+    ``gender`` and ``weight_class`` are accepted for API symmetry, but
+    ``load_event_slices`` already filters to a single (gender, weight) at the
+    slice-file level — every entry passed in is guaranteed to match those, so
+    only the ``age`` window needs to be re-checked here.
     """
     lo, hi = target_age - k, target_age + k
-    out: list[dict] = []
-    for e in entries:
-        if e.get("gender") != gender:
-            continue
-        if e.get("weight") != weight_class:
-            continue
-        a = e.get("age", -1)
-        if a < lo or a > hi:
-            continue
-        out.append(e)
+    out = [e for e in entries if lo <= e["age"] <= hi]
     return _apply_modifiers(out, modifiers)
 
 
@@ -991,17 +987,13 @@ def age_group_matched_rankings(
     weight_class: Optional[str],
     modifiers: Optional[RankingModifiers] = None,
 ) -> list[dict]:
-    """Age-group pool: rows whose cached ``age_band`` matches exactly."""
-    out: list[dict] = []
-    for e in entries:
-        if e.get("gender") != gender:
-            continue
-        if e.get("weight") != weight_class:
-            continue
-        if e.get("age_band") != age_band:
-            continue
-        out.append(e)
-    return _apply_modifiers(out, modifiers)
+    """Age-group pool: rows whose cached ``age_band`` matches exactly.
+
+    ``load_event_slices`` is called with ``k=0`` for this focus, so the input
+    entries are already restricted to a single (gender, weight, age_band).
+    The kwargs are kept for API symmetry but require no per-entry filtering.
+    """
+    return _apply_modifiers(entries, modifiers)
 
 
 def rank_in_pool(
@@ -1019,9 +1011,9 @@ def rank_in_pool(
     if total == 0:
         return 0, 0, 0.0
     if event_kind == "dist":
-        better = sum(1 for e in pool if e.get("value_tenths", 0) < user_value_tenths)
+        better = sum(1 for e in pool if e["value_tenths"] < user_value_tenths)
     else:
-        better = sum(1 for e in pool if e.get("value_tenths", 0) > user_value_tenths)
+        better = sum(1 for e in pool if e["value_tenths"] > user_value_tenths)
     rank = better + 1
     pct = 100.0 * (total - rank + 1) / total
     return rank, total, pct
@@ -1035,7 +1027,6 @@ def entry_watts(entry: dict, event_kind: str, event_value: int) -> Optional[floa
     ``event_value`` metres. Time events: ``value_tenths`` is metres rowed in
     ``event_value`` tenths-of-a-second.
     """
-    from services.rowing_utils import compute_watts
 
     v = entry.get("value_tenths")
     if v is None or v <= 0:
@@ -1065,12 +1056,15 @@ def histogram_watts(
 ) -> tuple[list[int], float, float]:
     """Bin ``pool`` values as watts. Returns (counts, min_watts, max_watts).
 
-    Converts each entry's ``value_tenths`` → pace → watts via
-    ``services.rowing_utils.compute_watts``. Returns zeros + (0,0) on empty.
+    Reads each entry's precomputed ``_watts`` field (populated at slice-cache
+    load time). For pools that bypass that path (e.g. tests passing raw
+    dicts), falls back to ``entry_watts``. Returns zeros + (0,0) on empty.
     """
     watts_list: list[float] = []
     for e in pool:
-        w = entry_watts(e, event_kind, event_value)
+        w = e.get("_watts")
+        if w is None and "_watts" not in e:
+            w = entry_watts(e, event_kind, event_value)
         if w is None:
             continue
         watts_list.append(w)

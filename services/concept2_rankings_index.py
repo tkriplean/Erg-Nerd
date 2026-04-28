@@ -266,8 +266,17 @@ def _delete_existing_slices(event_kind: str, event_value: int) -> None:
             pass
 
 
+def _invalidate_slice_cache(event_kind: str, event_value: int) -> None:
+    """Drop cached entries for one event so the next read re-parses from disk."""
+    prefix = f"{event_kind}_{event_value}_"
+    for p in list(_SLICE_CACHE.keys()):
+        if p.parent == INDEX_DIR and p.name.startswith(prefix):
+            del _SLICE_CACHE[p]
+
+
 def rebuild_event_index(event_kind: str, event_value: int) -> None:
     """Walk the scraper cache and rewrite every slice file for the event."""
+    _invalidate_slice_cache(event_kind, event_value)
     url_id = _url_id_for(event_kind, event_value)
 
     buckets: dict[tuple[str, str, str], list[dict]] = {}
@@ -313,34 +322,56 @@ def rebuild_event_index(event_kind: str, event_value: int) -> None:
         )
 
 
-def _attach_slice_metadata(entries: list[dict], data: dict) -> list[dict]:
-    """Re-add file-level (gender, age_band, weight) to each entry so downstream
-    filters that read those keys (e.g. ``filter_matched_rankings``) keep
-    working. ``weight`` is mapped from sentinel ``"X"`` back to ``None``."""
+# Module-level cache of parsed slice files. Keyed by Path; ``None`` is cached
+# for missing or invalid files so the rebuild-on-miss retry preserves its
+# semantics. Entries inside cached payloads are eagerly enriched with
+# slice-level metadata (gender / age_band / weight) and a precomputed
+# ``_watts`` value, so downstream consumers do not pay per-call dict copies
+# or watts re-derivation. Slice files are immutable build artifacts during a
+# process lifetime, so the cache is never invalidated.
+_SLICE_CACHE: dict[Path, Optional[dict]] = {}
+
+
+def _enrich_entries_in_place(data: dict) -> None:
+    """Mutate ``data['entries']`` to carry slice metadata + precomputed watts.
+
+    Called once per slice file at cache-population time. Entries are not yet
+    user-visible at this point, so in-place mutation is safe.
+    """
     gender = data.get("gender")
     age_band = data.get("age_band")
     weight_sentinel = data.get("weight")
     weight = None if weight_sentinel == WEIGHT_NONE_SENTINEL else weight_sentinel
-    out: list[dict] = []
-    for e in entries:
-        e2 = dict(e)
-        e2["gender"] = gender
-        e2["age_band"] = age_band
-        e2["weight"] = weight
-        out.append(e2)
-    return out
+    event_kind = data.get("event_kind")
+    event_value = data.get("event_value")
+    for e in data.get("entries") or []:
+        e["gender"] = gender
+        e["age_band"] = age_band
+        e["weight"] = weight
+        e["_watts"] = entry_watts(e, event_kind, event_value)
 
 
 def _read_slice_file(path: Path) -> Optional[dict]:
-    """Read one slice file. Returns None on missing / wrong schema / corrupt."""
+    """Read one slice file, caching the parsed + enriched payload.
+
+    Returns None on missing / wrong schema / corrupt, also cached so repeated
+    misses do not re-stat the filesystem.
+    """
+    if path in _SLICE_CACHE:
+        return _SLICE_CACHE[path]
     if not path.exists():
+        _SLICE_CACHE[path] = None
         return None
     try:
         data = json.loads(path.read_text())
     except Exception:
+        _SLICE_CACHE[path] = None
         return None
     if data.get("schema_version") != SCHEMA_VERSION:
+        _SLICE_CACHE[path] = None
         return None
+    _enrich_entries_in_place(data)
+    _SLICE_CACHE[path] = data
     return data
 
 
@@ -385,7 +416,9 @@ def load_event_slices(
     youth = weight_sentinel == WEIGHT_NONE_SENTINEL
     bands = _age_bands_for_window(target_age, k, youth=youth)
 
-    out: list[dict] = []
+    # Resolve every band first so we can short-circuit to a cached list when
+    # only one band is involved (the typical k=0 path).
+    datas: list[dict] = []
     needs_rebuild = False
     for band in bands:
         path = _slice_path(
@@ -395,9 +428,17 @@ def load_event_slices(
         if data is None:
             needs_rebuild = True
             break
-        out.extend(_attach_slice_metadata(data.get("entries") or [], data))
+        datas.append(data)
 
-    if needs_rebuild and rebuild_if_missing:
+    if not needs_rebuild:
+        if len(datas) == 1:
+            return datas[0].get("entries") or []
+        out: list[dict] = []
+        for data in datas:
+            out.extend(data.get("entries") or [])
+        return out
+
+    if rebuild_if_missing:
         rebuild_event_index(event_kind, event_value)
         return load_event_slices(
             event_kind,
@@ -408,7 +449,7 @@ def load_event_slices(
             weight=weight,
             rebuild_if_missing=False,
         )
-    return out
+    return []
 
 
 def iter_event_entries(
@@ -435,7 +476,7 @@ def iter_event_entries(
         data = _read_slice_file(p)
         if data is None:
             continue
-        for e in _attach_slice_metadata(data.get("entries") or [], data):
+        for e in data.get("entries") or []:
             yield e
 
 

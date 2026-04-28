@@ -299,6 +299,7 @@ def _build_rows(
         load_k = 0
     needs_entries = state.ranking_focus in ("c2_age_matched", "c2_age_group")
 
+    print("BUILDING ROWS")
     rows: list[dict] = []
     for w in qualifying:
         ck = workout_cat_key(w)
@@ -817,6 +818,7 @@ def _render_rank_cell(r: dict) -> None:
             user_row_label=f"You — {r['date_label']}",
             user_age=r["age"],
             user_date_label=r["date_label"],
+            user_season=r["season"],
         )
 
 
