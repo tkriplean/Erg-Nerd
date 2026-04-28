@@ -602,6 +602,7 @@ def _enrich_workouts(
     workouts: list[dict],
     thresholds_for,
     ref_watts_for,
+    reference_pbs_for,
     max_hr: int | None,
 ) -> list[dict]:
     """
@@ -658,6 +659,7 @@ def _enrich_workouts(
             max_hr,
             thresholds_for=thresholds_for,
             ref_watts_for=ref_watts_for,
+            reference_pbs_for=reference_pbs_for,
         )
         bm = r["_bin_meters"]
         work_total = sum(bm[1:])
@@ -993,10 +995,12 @@ def intervals_page() -> None:
     # Per-date cache so we don't recompute thresholds when many workouts
     # share a date.  Both the ref-watts dict (for Quality) and the derived
     # bin thresholds are cached.
-    _thresholds_for, _ref_watts_for = make_thresholds_resolver(all_workouts)
+    _thresholds_for, _ref_watts_for, _reference_pbs_for = make_thresholds_resolver(
+        all_workouts
+    )
 
     all_intervals = _enrich_workouts(
-        all_workouts, _thresholds_for, _ref_watts_for, max_hr
+        all_workouts, _thresholds_for, _ref_watts_for, _reference_pbs_for, max_hr
     )
 
     if not all_intervals:

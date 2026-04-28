@@ -16,6 +16,14 @@ Mutates each workout dict in-place to attach:
   _quality            str | None     "Low"/"Medium"/"High"/"Ultra"
   _quality_score      float | None   Continuous quality score
   _quality_energy     dict | None    Per-category energy breakdown
+
+The quality fields are routed through ``services.quality_cache`` so that
+repeated renders (and other pages requesting the same workout) reuse the
+result instead of recomputing from scratch.
+
+``attach_quality_only`` is a lightweight variant that attaches only the
+``_quality*`` fields — used by the Volume page's quality mode where the
+spread/HR fields would be discarded.
 """
 
 from __future__ import annotations
@@ -23,13 +31,14 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from services.heartrate_utils import hr_spread_score, workout_hr_meters
+from services.quality_cache import get_or_compute_quality
+from services.reference_watts import input_hash
 from services.threshold_cache import make_thresholds_resolver
 from services.volume_bins import (
     bin_bar_svg,
     power_spread_score,
     workout_bin_meters,
 )
-from services.workout_quality import compute_workout_quality
 
 
 def attach_spread_and_quality(
@@ -39,19 +48,24 @@ def attach_spread_and_quality(
     *,
     thresholds_for: Optional[Callable] = None,
     ref_watts_for: Optional[Callable] = None,
+    reference_pbs_for: Optional[Callable] = None,
 ) -> None:
     """Attach spread and quality fields to each workout dict in ``workouts``.
 
     ``all_workouts`` is the full corpus used to resolve reference watts at
     each workout's date.  ``max_hr``, if None, leaves all HR fields as None.
 
-    ``thresholds_for`` and ``ref_watts_for`` may be supplied by callers that
-    already built a per-date resolver (e.g. the Intervals page builds one for
-    its own enrichment loop and reuses it here).  When omitted, this builds
-    a fresh resolver internally.
+    ``thresholds_for``, ``ref_watts_for``, and ``reference_pbs_for`` may be
+    supplied by callers that already built a per-date resolver (e.g. the
+    Intervals page builds one for its own enrichment loop and reuses it
+    here).  When omitted, this builds a fresh resolver internally.
     """
-    if thresholds_for is None or ref_watts_for is None:
-        thresholds_for, ref_watts_for = make_thresholds_resolver(all_workouts)
+    if thresholds_for is None or ref_watts_for is None or reference_pbs_for is None:
+        thresholds_for, ref_watts_for, reference_pbs_for = make_thresholds_resolver(
+            all_workouts
+        )
+
+    h = input_hash(all_workouts)
 
     for r in workouts:
         bm = workout_bin_meters(r, thresholds_for(r))
@@ -75,7 +89,52 @@ def attach_spread_and_quality(
             r["_hr_bar_uri"] = None
             r["_hr_spread_score"] = None
 
-        quality = compute_workout_quality(r, ref_watts_for(r), thresholds_for(r))
+        quality = get_or_compute_quality(
+            r,
+            ref_watts_for(r),
+            thresholds_for(r),
+            h,
+            reference_pbs=reference_pbs_for(r),
+        )
+        if quality is not None:
+            r["_quality"] = quality["category"]
+            r["_quality_score"] = quality["score"]
+            r["_quality_energy"] = quality["per_category_energy"]
+        else:
+            r["_quality"] = None
+            r["_quality_score"] = None
+            r["_quality_energy"] = None
+
+
+def attach_quality_only(
+    workouts: list,
+    all_workouts: list,
+    *,
+    thresholds_for: Optional[Callable] = None,
+    ref_watts_for: Optional[Callable] = None,
+    reference_pbs_for: Optional[Callable] = None,
+) -> None:
+    """Attach only ``_quality``/``_quality_score``/``_quality_energy``.
+
+    Skips the bin-meters, power-spread, and HR-spread fields that
+    ``attach_spread_and_quality`` computes.  Used by the Volume page's
+    quality mode where the only field consumed downstream is ``_quality``.
+    """
+    if thresholds_for is None or ref_watts_for is None or reference_pbs_for is None:
+        thresholds_for, ref_watts_for, reference_pbs_for = make_thresholds_resolver(
+            all_workouts
+        )
+
+    h = input_hash(all_workouts)
+
+    for r in workouts:
+        quality = get_or_compute_quality(
+            r,
+            ref_watts_for(r),
+            thresholds_for(r),
+            h,
+            reference_pbs=reference_pbs_for(r),
+        )
         if quality is not None:
             r["_quality"] = quality["category"]
             r["_quality_score"] = quality["score"]

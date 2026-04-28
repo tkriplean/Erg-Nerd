@@ -47,8 +47,8 @@ from services.rowing_utils import (
     PACE_MIN,
     compute_pace,
     compute_watts,
-    get_season,
     parse_date,
+    season_from_date,
     watts_to_pace,
 )
 
@@ -525,7 +525,7 @@ def aggregate_workouts(
 
         wk = _week_key(dt)
         mo = _month_key(dt)
-        sea = get_season(date_str)
+        sea = season_from_date(dt)
 
         for bin_idx, meters in enumerate(_effective_bin_fn(w)):
             if meters > 0:

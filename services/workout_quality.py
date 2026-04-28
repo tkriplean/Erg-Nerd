@@ -225,6 +225,7 @@ def compute_workout_quality(
     workout: dict,
     ref_watts: Optional[dict],
     thresholds: Optional[dict],
+    reference_pbs: Optional[dict] = None,
 ) -> Optional[dict]:
     """Return the quality result for a single workout, or None if insufficient data.
 
@@ -238,6 +239,11 @@ def compute_workout_quality(
     thresholds
         Watts-based power-bin thresholds at the workout's date, from
         :func:`services.volume_bins.compute_bin_thresholds`.
+    reference_pbs
+        Optional precomputed per-category ``{cat: (watts, dist_m)}`` dict.
+        If omitted, built from ``ref_watts`` here.  Hot-path callers (e.g.
+        ``attach_spread_and_quality``) supply the cached value from
+        ``make_thresholds_resolver``'s ``reference_pbs_for``.
 
     Returns
     -------
@@ -247,10 +253,13 @@ def compute_workout_quality(
         thresholds are missing the required anchors, or if the workout has
         no scorable splits.
     """
-    if not ref_watts or not thresholds:
+    if not thresholds:
         return None
 
-    reference_pbs = _build_reference_pbs(ref_watts)
+    if reference_pbs is None:
+        if not ref_watts:
+            return None
+        reference_pbs = _build_reference_pbs(ref_watts)
     if reference_pbs is None:
         return None
 

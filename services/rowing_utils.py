@@ -126,15 +126,26 @@ def parse_date(s: str) -> date:
         return date.min
 
 
+def season_from_date(dt: date) -> str:
+    """Return season string e.g. '2024-25' for an already-parsed date.
+
+    Season runs May 1 → Apr 30.  Hot-loop callers (e.g. aggregate_workouts)
+    should use this directly to avoid re-parsing the ISO string.
+    """
+    if dt is None or dt == date.min:
+        return "Unknown"
+    if dt.month >= 5:
+        return f"{dt.year}-{str(dt.year + 1)[2:]}"
+    return f"{dt.year - 1}-{str(dt.year)[2:]}"
+
+
 def get_season(date_str: str) -> str:
     """Return season string e.g. '2024-25'.  Season runs May 1 → Apr 30."""
     try:
-        dt = datetime.strptime(date_str[:10], "%Y-%m-%d")
-        if dt.month >= 5:
-            return f"{dt.year}-{str(dt.year + 1)[2:]}"
-        return f"{dt.year - 1}-{str(dt.year)[2:]}"
+        dt = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
     except Exception:
         return "Unknown"
+    return season_from_date(dt)
 
 
 def age_from_dob(dob: str) -> int:

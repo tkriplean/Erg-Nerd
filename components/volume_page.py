@@ -41,7 +41,7 @@ from components.app_context import AppContext, your
 from services.formatters import fmt_meters
 from services.rowing_utils import get_season, profile_complete
 from services.threshold_cache import make_thresholds_resolver
-from services.workout_enrichment import attach_spread_and_quality
+from services.workout_enrichment import attach_quality_only
 
 from services.volume_bins import (
     QUALITY_BIN_NAMES,
@@ -502,7 +502,9 @@ def _volume_section(
             if not reference_watts_loader(all_workouts):
                 return
             # Attach _quality to each workout so we can read it from the bin_fn.
-            attach_spread_and_quality(all_workouts, all_workouts, max_hr)
+            # Quality mode only consumes _quality, so skip the spread/HR fields
+            # that attach_spread_and_quality would otherwise compute.
+            attach_quality_only(all_workouts, all_workouts)
             unrated_count = sum(1 for w in all_workouts if w.get("_quality") is None)
             if unrated_count:
                 # An unrated workout is generally a bug — flag it once per
@@ -534,7 +536,7 @@ def _volume_section(
             if not reference_watts_loader(all_workouts):
                 return
 
-            _thresholds_for, _ = make_thresholds_resolver(all_workouts)
+            _thresholds_for, _, _ = make_thresholds_resolver(all_workouts)
 
             aggregated = aggregate_workouts(
                 all_workouts,

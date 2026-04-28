@@ -198,8 +198,38 @@ def _reference_watts_from_index(
     watts = _interpolate(when, index)
     if index.get("markers") and when >= index["markers"][-1]["date"]:
         last_date = index["markers"][-1]["date"]
-        watts = _merge_recent_tail(watts, last_date, when, all_workouts)
+        recent = _get_recent_tail(index, last_date, all_workouts)
+        watts = _merge_recent_tail(watts, when, recent)
     return watts
+
+
+def _get_recent_tail(index: dict, last_marker_date: date, all_workouts: list) -> list:
+    """Return cached list of ``(dt, cat_key, watts)`` tuples for rankable
+    workouts after ``last_marker_date``.
+
+    Stored on the index so it survives across renders for the same input_hash.
+    Lazy — built on first access, including for indexes seeded from
+    localStorage (which arrive without ``_recent_tail``).
+    """
+    cached = index.get("_recent_tail")
+    if cached is not None:
+        return cached
+    tail: list = []
+    for w in all_workouts:
+        if not is_rankable_noninterval(w):
+            continue
+        dt = parse_date(w.get("date", ""))
+        if dt <= last_marker_date:
+            continue
+        pace = compute_pace(w)
+        if pace is None or pace < PACE_MIN or pace > PACE_MAX:
+            continue
+        ck = workout_cat_key(w)
+        if ck is None:
+            continue
+        tail.append((dt, ck, compute_watts(pace)))
+    index["_recent_tail"] = tail
+    return tail
 
 
 def build_reference_watts_index(
@@ -561,28 +591,20 @@ def _interpolate(when: date, index: dict) -> dict:
     return out
 
 
-def _merge_recent_tail(
-    watts_dict: dict, last_marker_date: date, when: date, all_workouts: list
-) -> dict:
-    """Apply "better-of" PB merge for workouts between last marker and ``when``.
+def _merge_recent_tail(watts_dict: dict, when: date, recent_tail: list) -> dict:
+    """Apply "better-of" PB merge using the precomputed recent-tail list.
 
     A fresh PB after the last marker is hard evidence the prior prediction is
     stale — upgrade, don't average.
+
+    ``recent_tail`` is a list of ``(dt, cat_key, watts)`` tuples already
+    filtered to rankable non-interval workouts after the last marker — see
+    ``_get_recent_tail``.
     """
     out = dict(watts_dict)
-    for w in all_workouts:
-        if not is_rankable_noninterval(w):
+    for dt, ck, watts in recent_tail:
+        if dt > when:
             continue
-        dt = parse_date(w.get("date", ""))
-        if dt <= last_marker_date or dt > when:
-            continue
-        pace = compute_pace(w)
-        if pace is None or pace < PACE_MIN or pace > PACE_MAX:
-            continue
-        ck = workout_cat_key(w)
-        if ck is None:
-            continue
-        watts = compute_watts(pace)
         cur = out.get(ck)
         if cur is None or watts > cur:
             out[ck] = watts
