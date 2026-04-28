@@ -461,7 +461,8 @@ def _cp_datasets(
         )
 
     # Crossover — only shown when show_components is enabled.
-    # Rendered as a dashed vertical line + bottom-anchored text annotation.
+    # Rendered as a dashed vertical line, a marker at the component intersection,
+    # and a bottom-anchored explanatory text annotation.
     xo = crossover_point(critical_power_params, show_watts=show_watts)
     if show_components and xo is not None:
         # xo["x"] is distance; xo["t_seconds"] is duration.
@@ -473,8 +474,27 @@ def _cp_datasets(
                 "rgba(20, 210, 190, 0.55)" if is_dark else "rgba(0, 160, 145, 0.55)"
             )
             xo_text_color = (
-                "rgba(20, 210, 190, 0.90)" if is_dark else "rgba(0, 140, 128, 0.90)"
+                "rgba(20, 210, 190, 0.95)" if is_dark else "rgba(0, 130, 118, 0.95)"
             )
+            xo_dot_color = (
+                "rgba(20, 210, 190, 1.0)" if is_dark else "rgba(0, 140, 128, 1.0)"
+            )
+            xo_ring_color = "#1a1a1a" if is_dark else "#ffffff"
+
+            # Component watts at the crossover — by definition the fast and slow
+            # components have equal watts at t_star, so this is the y where the
+            # two component curves visually intersect.
+            xo_t = xo["t_seconds"]
+            xo_component_watts = (
+                critical_power_params["Pow1"]
+                / (1.0 + xo_t / critical_power_params["tau1"])
+            )
+            xo_dot_y = (
+                round(xo_component_watts, 2)
+                if show_watts
+                else round(watts_to_pace(xo_component_watts), 4)
+            )
+
             # Dashed vertical line spanning the full y range
             out.append(
                 {
@@ -493,14 +513,29 @@ def _cp_datasets(
                     "order": 4,
                 }
             )
-            # Text annotation at chart bottom (JS positions using _anchor: "bottom")
+            # Marker dot at the intersection of the fast and slow component curves.
+            out.append(
+                {
+                    "type": "scatter",
+                    "label": "_cp_crossover_dot",
+                    "data": [{"x": xo_x, "y": xo_dot_y}],
+                    "backgroundColor": xo_dot_color,
+                    "borderColor": xo_ring_color,
+                    "borderWidth": 2,
+                    "pointRadius": 6,
+                    "pointHoverRadius": 8,
+                    "order": 3,
+                }
+            )
+            # Bottom-anchored explanatory text — three lines for clarity.
             crossover_labels.append(
                 {
                     "x": xo_x,
                     "_anchor": "bottom",
                     "lines": [
-                        f"Crossover: {xo['t_label']}",
-                        "<- sprint | aerobic ->",
+                        f"Crossover at {xo['t_label']}",
+                        "fast-twitch = aerobic contribution",
+                        "← shorter: sprint dominates  ·  longer: aerobic dominates →",
                     ],
                     "color": xo_text_color,
                 }
