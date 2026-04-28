@@ -243,7 +243,7 @@ class _ScrollToTop(hd.Plugin):
 # ---------------------------------------------------------------------------
 
 
-@hd.cached
+# @hd.cached
 def _app_footer() -> None:
     import datetime
 
@@ -258,7 +258,11 @@ def _app_footer() -> None:
                     width=15, theme="light" if hd.theme().is_dark else "dark"
                 )
 
-                with hd.link(href="https://www.buymeacoffee.com/ergnerd") as bmc:
+                with hd.link(
+                    href="https://www.buymeacoffee.com/ergnerd",
+                    background_color="primary-500",
+                    border_radius="large",
+                ) as bmc:
                     hd.image(
                         src="https://img.buymeacoffee.com/button-api/?text=Support Erg Nerd&emoji=☕&slug=ergnerd&button_color=5F7FFF&font_color=ffffff&font_family=Lato&outline_color=000000&coffee_color=FFDD00"
                     )
