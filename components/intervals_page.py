@@ -976,7 +976,6 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
 def intervals_page() -> None:
     """Top-level HyperDiv component for the Interval Workouts tab."""
 
-    print("syncing from intervals page")
     result = get_all_workouts()
     if result is None:
         hd.box(padding=2, min_height="80vh")
@@ -1106,38 +1105,34 @@ def intervals_page() -> None:
         COL_LINK,
     ]
 
+    # Pre-compute non-cell filters so the grid counts stay in sync with
+    # the active pace-zone, HR-zone, and structure filters.
+    pre_filtered = _filter_disjunctive(
+        all_intervals,
+        set(spread_quality_state.active_bins),
+        power_bin_passes,
+        "_bin_meters",
+    )
+    pre_filtered = _filter_disjunctive(
+        pre_filtered,
+        set(spread_quality_state.active_hr_bins),
+        hr_bin_passes,
+        "_hr_bin_meters",
+    )
+    if spread_quality_state.active_quality:
+        sel_quality = set(spread_quality_state.active_quality)
+        pre_filtered = [r for r in pre_filtered if r.get("_quality") in sel_quality]
+    if state.structure_filter:
+        pre_filtered = [
+            r for r in pre_filtered if r["_structure_key"] == state.structure_filter
+        ]
+
     with hd.box(align="center", gap=1, padding=2, min_height="80vh"):
         with hd.box(gap=0.2, align="center"):
             hd.h1(f"Review {your()} Fondest Interval Sessions")
             global_filter_ui()
 
         with hd.box(width="100%", gap=2):
-            # Pre-compute non-cell filters so the grid counts stay in sync with
-            # the active pace-zone, HR-zone, and structure filters.
-            pre_filtered = _filter_disjunctive(
-                all_intervals,
-                set(spread_quality_state.active_bins),
-                power_bin_passes,
-                "_bin_meters",
-            )
-            pre_filtered = _filter_disjunctive(
-                pre_filtered,
-                set(spread_quality_state.active_hr_bins),
-                hr_bin_passes,
-                "_hr_bin_meters",
-            )
-            if spread_quality_state.active_quality:
-                sel_quality = set(spread_quality_state.active_quality)
-                pre_filtered = [
-                    r for r in pre_filtered if r.get("_quality") in sel_quality
-                ]
-            if state.structure_filter:
-                pre_filtered = [
-                    r
-                    for r in pre_filtered
-                    if r["_structure_key"] == state.structure_filter
-                ]
-
             # 2D grid browser — counts reflect pace/HR/structure filters
             _grid_browser(pre_filtered, state)
 
