@@ -853,6 +853,14 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                             text_align="center",
                         )
 
+            # Data cells — each cell is coloured by its own stimulus's
+            # expected pace-intensity score.  "Other" cells fall back
+            # to a neutral grey.  Selection state is a thick white
+            # border rather than a colour change, so the cell colour
+            # stays legible.
+            white_token = always_white(is_dark)
+            black_token = always_white(not is_dark)
+
             # ── Data rows ─────────────────────────────────────────────────
             for ri, (row_label, ratio_range, _, _) in enumerate(_RATIO_ROWS):
                 with hd.scope(f"row_{ri}"):
@@ -877,14 +885,6 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                             font_size="small",
                             font_color="neutral-400",
                         )
-
-                    # Data cells — each cell is coloured by its own stimulus's
-                    # expected pace-intensity score.  "Other" cells fall back
-                    # to a neutral grey.  Selection state is a thick white
-                    # border rather than a colour change, so the cell colour
-                    # stays legible.
-                    white_token = always_white(is_dark)
-                    black_token = always_white(not is_dark)
 
                     for ci in range(_N_COLS):
                         with hd.scope(f"c{ci}"):
@@ -942,6 +942,7 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
                                         else:
                                             sel.add(k)
                                         state.active_cells = tuple(sorted(sel))
+
                                 else:
                                     with hd.box(
                                         width="100%",
@@ -1029,8 +1030,8 @@ def intervals_page() -> None:
         if btn.clicked:
             state.structure_filter = None if is_active else w["_structure_key"]
 
-    def _render_stimulus_cell(w):
-        s = w.get("_stimulus", "")
+    @hd.cached
+    def _render_stimulus_cell(s):
         if s and s != "—":
             hd.text(
                 s, font_size="x-small", font_color="neutral-500", font_style="italic"
@@ -1062,7 +1063,7 @@ def intervals_page() -> None:
             "stimulus",
             "Stimulus",
             "10rem",
-            render_cell=_render_stimulus_cell,
+            render_cell=lambda w: _render_stimulus_cell(w.get("_stimulus", "")),
             sortable=False,
         ),
         COL_POWER_SPREAD,

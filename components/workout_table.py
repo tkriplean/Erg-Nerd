@@ -55,7 +55,7 @@ from services.rowing_utils import (
     compute_pace,
     compute_watts as _compute_watts,
 )
-from services.volume_bins import BIN_NAMES, BIN_COLORS
+from services.volume_bins import BIN_NAMES, BIN_COLORS, swatch_svg
 from services.heartrate_utils import HR_ZONE_NAMES, HR_ZONE_COLORS
 from services.workout_quality import QUALITY_STYLE
 
@@ -308,6 +308,7 @@ def always_white(is_dark: bool) -> str:
     return "neutral-1000" if is_dark else "neutral-0"
 
 
+@hd.cached
 def render_spread_cell(
     score: float | None,
     bar_uri: str | None,
@@ -318,7 +319,6 @@ def render_spread_cell(
     *,
     skip_indices: tuple[int, ...] = (0,),
 ) -> None:
-    print(bin_meters)
     """
     Cell renderer for Power Spread / HR Spread columns.
 
@@ -332,7 +332,6 @@ def render_spread_cell(
     denominator so the zone percentages sum to 100%.
     """
     # Lazy import — avoid hard dependency on swatch_svg at module load.
-    from services.volume_bins import swatch_svg
 
     if score is None or bin_meters is None:
         hd.text("—", font_size="medium", font_color="neutral-400")
@@ -353,17 +352,8 @@ def render_spread_cell(
                     if pct < 0.005:
                         continue
                     color_str = zone_colors[idx][0 if is_dark else 1]
-                    with hd.hbox(gap=0.4, align="center"):
-                        hd.image(
-                            src=swatch_svg(color_str, size=10, radius=2),
-                            width=0.6,
-                            height=0.6,
-                        )
-                        hd.text(
-                            f"{pct:.0%}",
-                            font_size="x-small",
-                            font_weight="bold",
-                        )
+                    tooltip_swatch(color_str, pct)
+
         with hd.box(align="start", gap=0.2):
             hd.text(f"{score:.0f}", font_size="medium", font_weight="bold")
             if bar_uri:
@@ -374,17 +364,33 @@ def render_spread_cell(
                 )
 
 
-def render_quality_cell(workout: dict, is_dark: bool) -> None:
+@hd.cached
+def tooltip_swatch(color_str, pct):
+    with hd.hbox(gap=0.4, align="center"):
+        hd.image(
+            src=swatch_svg(color_str, size=10, radius=2),
+            width=0.6,
+            height=0.6,
+        )
+        hd.text(
+            f"{pct:.0%}",
+            font_size="x-small",
+            font_weight="bold",
+        )
+
+
+@hd.cached
+def render_quality_cell(
+    q: str | None, score: float, energy: tuple, is_dark: bool
+) -> None:
     """Colored quality pill with score + top-3 contributing categories tooltip."""
-    q = workout.get("_quality")
     if q is None:
         hd.text("—", font_size="small", font_color="neutral-400")
         return
-    score = workout.get("_quality_score") or 0.0
-    energy = workout.get("_quality_energy") or {}
+
     style = QUALITY_STYLE[q]
     top_cats = sorted(
-        ((cat, e) for cat, e in energy.items() if e > 0),
+        energy,
         key=lambda p: p[1],
         reverse=True,
     )[:3]
@@ -484,7 +490,12 @@ COL_QUALITY = ColumnDef(
     key="quality",
     header="Quality",
     width="6rem",
-    render_cell=lambda w: render_quality_cell(w, hd.theme().is_dark),
+    render_cell=lambda w: render_quality_cell(
+        w.get("_quality"),
+        w.get("_quality_score", 0.0),
+        ((cat, e) for cat, e in w.get("_quality_energy", {}).items() if e > 0),
+        hd.theme().is_dark,
+    ),
     sort_value=lambda w: w.get("_quality_score")
     if w.get("_quality_score") is not None
     else -1.0,

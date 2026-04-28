@@ -185,7 +185,16 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
                 if has_quality:
                     _spread_stat(
                         "Quality",
-                        lambda: render_quality_cell(workout, is_dark),
+                        lambda: render_quality_cell(
+                            workout.get("_quality"),
+                            workout.get("_quality_score", 0.0),
+                            (
+                                (cat, e)
+                                for cat, e in workout.get("_quality_energy", {}).items()
+                                if e > 0
+                            ),
+                            is_dark,
+                        ),
                     )
 
         with hd.hbox(wrap="wrap", gap=0):
@@ -1064,17 +1073,7 @@ def _find_similar(workout: dict, all_workouts: list) -> list:
             # Distance per interval
             d_p_i = vol / interv_count
             dist_term = max(0.0, 1.0 - abs(d_p_i - ref_d_p_i) / (d_p_i + ref_d_p_i))
-            print(
-                {
-                    dist_term,
-                    vol,
-                    ref_vol,
-                    d_p_i,
-                    ref_d_p_i,
-                    interv_count,
-                    ref_interv_count,
-                }
-            )
+
             # Work-fraction term: captures work:rest character (e.g. 1:1 vs 1:4).
             # Both values are in [0, 1], so the absolute difference is bounded.
             work_fraction_term = max(0.0, 1.0 - abs(wf - ref_wf))
