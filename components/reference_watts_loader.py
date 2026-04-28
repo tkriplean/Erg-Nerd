@@ -36,6 +36,17 @@ from services.reference_watts import (
 LS_KEY = "reference_watts_v1"
 
 
+@hd.global_state
+class ReferenceWattsState(hd.BaseState):
+    ls_loaded = hd.Prop(hd.Bool, False)
+    seeded_hash = hd.Prop(hd.String, "")
+    persisted_hash = hd.Prop(hd.String, "")
+    build_started = hd.Prop(hd.Bool, False)
+    progress_i = hd.Prop(hd.Int, 0)
+    progress_n = hd.Prop(hd.Int, 0)
+    progress_label = hd.Prop(hd.String, "")
+
+
 def reference_watts_loader(all_workouts: list) -> bool:
     """Ensure the reference-watts index is built and persisted.
 
@@ -43,15 +54,7 @@ def reference_watts_loader(all_workouts: list) -> bool:
     matches the current workouts.  Returns False while loading / building,
     rendering a progress UI inline.
     """
-    loader_state = hd.state(
-        ls_loaded=False,
-        seeded_hash="",
-        persisted_hash="",
-        build_started=False,
-        progress_i=0,
-        progress_n=0,
-        progress_label="",
-    )
+    loader_state = ReferenceWattsState()
 
     target_hash = input_hash(all_workouts)
 
