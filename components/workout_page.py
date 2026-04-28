@@ -294,7 +294,7 @@ def _parse_time_input(text: str):
 
 
 _DEFAULT_SPLIT_COUNT = 5
-_SPLIT_COUNT_OPTIONS = (2, 3, 4, 5, 6, 8, 10)
+_SPLIT_COUNT_OPTIONS = (2, 3, 4, 5, 6, 8, 10, 12, 15, 16, 20, 21, 42)
 
 
 def _even_splits(total: int, n: int) -> list:
