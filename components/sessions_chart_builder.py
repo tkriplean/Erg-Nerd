@@ -465,12 +465,13 @@ def sessions_chart(workouts: list) -> None:
         color_mode="gander",  # "gander" | "quality"
     )
 
-    workouts = _apply_outlier_filter(workouts)
-
     # ── Attach Power Spread, HR Spread, and Quality fields ────────────────────
     # Block on the reference-watts loader so quality colouring + filters work.
     if not reference_watts_loader(workouts):
         return
+
+    workouts = _apply_outlier_filter(workouts)
+
     profile = get_profile() or {}
     max_hr, _ = resolve_max_hr(profile, workouts)
     attach_spread_and_quality(workouts, workouts, max_hr)

@@ -97,7 +97,6 @@ def reference_watts_loader(all_workouts: list) -> bool:
 
     if task.running:
         _progress_ui(loader_state, "Computing fitness baseline…")
-        print("REFERENCE WATTS NOT LOADED YET")
         return False
 
     if task.error:
@@ -109,8 +108,6 @@ def reference_watts_loader(all_workouts: list) -> bool:
         return False
 
     if task.done:
-        print("REFERENCE WATTS LOADED")
-
         index = task.result
         # ``build_reference_watts_index`` already seeds the service cache;
         # just mark our loader state and persist.
