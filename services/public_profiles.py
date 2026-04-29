@@ -254,6 +254,23 @@ def publish_workouts(user_id: str, workouts_dict: dict) -> None:
     _atomic_write_text(_workouts_path(user_id), encoded)
 
 
+def delete_workouts(user_id: str) -> None:
+    """Remove the published workouts file for ``user_id``, if present.
+
+    Used by the sync pipeline when a data-integrity version bump
+    invalidates the cache: the old file may be normalized under a stale
+    ruleset, so we delete it before the fresh republish.  No-op when the
+    file does not exist.  Requires owner authentication.
+    """
+    if not owner_is_authenticated(user_id):
+        raise PermissionError(f"No token on file for user_id={user_id!r}")
+    path = _workouts_path(user_id)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def publish_all(
     user_id: str,
     profile: dict,

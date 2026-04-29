@@ -322,7 +322,7 @@ def always_white(is_dark: bool) -> str:
 def render_spread_cell(
     score: float | None,
     bar_uri: str | None,
-    bin_meters: tuple | None,
+    _bin_meters: tuple | None,
     zone_names: tuple[str],
     zone_colors: tuple[tuple[str, str]],
     is_dark: bool,
@@ -342,17 +342,17 @@ def render_spread_cell(
     Rest, or Rest + No HR).  They are also excluded from the percentage
     denominator so the zone percentages sum to 100%.
     """
-    if score is None or bin_meters is None:
+    if score is None or _bin_meters is None:
         hd.text("—", font_size="medium", font_color="neutral-400")
         return
 
     skip_set = set(skip_indices)
-    total = sum(m for idx, m in enumerate(bin_meters) if idx not in skip_set)
+    total = sum(m for idx, m in enumerate(_bin_meters) if idx not in skip_set)
     items = []
     for idx in range(len(zone_names)):
         if idx in skip_set:
             continue
-        meters = bin_meters[idx] if idx < len(bin_meters) else 0
+        meters = _bin_meters[idx] if idx < len(_bin_meters) else 0
         if meters <= 0:
             continue
         pct = (meters / total) if total > 0 else 0.0
@@ -443,7 +443,7 @@ def _spread_cell_factory(
         render_spread_cell(
             score=w.get(score_field),
             bar_uri=w.get(bar_field),
-            bin_meters=w.get(bin_field),
+            _bin_meters=w.get(bin_field),
             zone_names=zone_names,
             zone_colors=zone_colors,
             is_dark=hd.theme().is_dark,

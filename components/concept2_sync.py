@@ -48,12 +48,13 @@ import hyperdiv as hd
 
 from config import SYNTHETIC_MODE
 from services.local_storage_compression import (
-    compress_workouts,
-    decompress_workouts,
     compress_strokes_cache,
+    compress_workouts_envelope,
     decompress_strokes_cache,
+    decompress_workouts_envelope,
 )
-from services.data_integrity import normalize_workouts_dict
+from services.data_integrity import INTEGRITY_VERSION, normalize_new_workouts
+from services.quarantine import write_quarantine
 from services.workout_enrichment import enrich_all
 from services.concept2_records import (
     age_category as wr_age_category,
@@ -127,6 +128,11 @@ def concept2_sync(client) -> None:
     sync_state = hd.state(
         written=False,
         initial_workouts=None,
+        # Whether the cache we read carried the current INTEGRITY_VERSION.
+        # When False the seed is treated as empty for normalization purposes
+        # AND we delete the public-profile mirror before republishing so a
+        # partial failure can't leave stale-rule data published.
+        cache_version_ok=False,
         initial_loaded=False,
         synth_cache=None,
         # Public-profile push-on-sync state. Set once per sync-completion; the
@@ -142,9 +148,24 @@ def concept2_sync(client) -> None:
             with hd.box(align="center", padding=4):
                 hd.spinner()
             return
-        sync_state.initial_workouts = (
-            decompress_workouts(ls_wkts.result) if ls_wkts.result else {}
+        cached_dict, cached_version = decompress_workouts_envelope(
+            ls_wkts.result or ""
         )
+        if cached_version == INTEGRITY_VERSION:
+            sync_state.initial_workouts = cached_dict
+            sync_state.cache_version_ok = True
+        else:
+            # Missing envelope, legacy un-versioned blob, or stale rules:
+            # discard so the API does a full pull and every workout passes
+            # through the current normalizer.
+            if cached_dict and cached_version != INTEGRITY_VERSION:
+                print(
+                    f"[concept2_sync] integrity_version "
+                    f"{cached_version!r} → {INTEGRITY_VERSION}: "
+                    f"discarding {len(cached_dict)} cached workouts"
+                )
+            sync_state.initial_workouts = {}
+            sync_state.cache_version_ok = False
         sync_state.initial_loaded = True
 
     # ── Step 2: background API sync ──────────────────────────────────────────
@@ -170,12 +191,29 @@ def concept2_sync(client) -> None:
     if task.done and not task.error:
         print("WORKOUTS FETCHED")
         workouts_dict, sorted_workouts = task.result
-        # Data-integrity pass: drop bogus HR readings and repair corrupt splits
-        # before anything is persisted or returned to consumers.  Idempotent so
-        # legacy entries already in localStorage get fixed on next sync too.
+        # Data-integrity pass: only normalize new/changed entries (those not
+        # in the trusted seed) and partition out unmeasured workouts (Rule 5).
+        # Workouts in the trusted seed already passed through this exact
+        # version of normalize_workout — no need to re-run.
         profile = ctx.profile or {}
         max_hr = profile.get("max_heart_rate")
-        workouts_dict = normalize_workouts_dict(workouts_dict, max_hr=max_hr)
+        trusted = (
+            sync_state.initial_workouts
+            if sync_state.cache_version_ok
+            else {}
+        )
+        workouts_dict, quarantined = normalize_new_workouts(
+            workouts_dict, trusted, max_hr=max_hr
+        )
+
+        # Persist quarantine sidecar — server-side JSON so the user can
+        # inspect held-back workouts directly.
+        c2_user_id = getattr(client, "_user_id", "") or ""
+        if c2_user_id:
+            try:
+                write_quarantine(c2_user_id, quarantined)
+            except Exception as exc:
+                print(f"[concept2_sync] quarantine write failed: {exc}")
 
         # Persist + public mirror BEFORE enrichment so the canonical
         # normalized shape is what reaches localStorage and the public
@@ -183,11 +221,16 @@ def concept2_sync(client) -> None:
         # on every load.
         if not sync_state.written:
             if workouts_dict != sync_state.initial_workouts:
-                hd.local_storage.set_item("workouts", compress_workouts(workouts_dict))
+                hd.local_storage.set_item(
+                    "workouts",
+                    compress_workouts_envelope(workouts_dict, INTEGRITY_VERSION),
+                )
             sync_state.written = True
 
         if not sync_state.published and not SYNTHETIC_MODE and ctx.profile:
-            _maybe_push_on_sync(client, sync_state, workouts_dict)
+            _maybe_push_on_sync(
+                client, sync_state, workouts_dict, sync_state.cache_version_ok
+            )
 
         # Stage-2 enrichment: attach pace/watts/season/etc. once before
         # workouts reach AppContext.  Mutates in-place.
@@ -256,10 +299,17 @@ def concept2_sync(client) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _maybe_push_on_sync(client, sync_state, workouts_dict: dict) -> None:
+def _maybe_push_on_sync(
+    client, sync_state, workouts_dict: dict, cache_version_ok: bool
+) -> None:
     """
     If the owner has opted in (``profile.public == True``), mirror the freshly
     synced profile + workouts to the server-side public-profile directory.
+
+    When ``cache_version_ok`` is False the localStorage cache was discarded
+    due to a data-integrity version bump; the on-disk public mirror may
+    still hold stale-rule data, so we delete it first so a partial republish
+    failure can't leave wrongly-normalized data published.
 
     Runs as an ``hd.task`` so the dashboard is not blocked on disk I/O. Flips
     ``sync_state.published`` eagerly so a single sync completion triggers one
@@ -282,13 +332,22 @@ def _maybe_push_on_sync(client, sync_state, workouts_dict: dict) -> None:
 
     push_task = hd.task()
 
-    def _do_push(uid, prof, wkts):
+    def _do_push(uid, prof, wkts, force):
+        if force:
+            try:
+                public_profiles.delete_workouts(uid)
+            except Exception as exc:
+                print(
+                    f"[public_profiles] pre-republish delete failed: {exc}"
+                )
         # display_name now lives on the profile dict (populated at OAuth /
         # stale refresh), so no extra /users/me call is needed here.
         public_profiles.publish_all(uid, prof, wkts)
 
     if not push_task.running and not push_task.done:
-        push_task.run(_do_push, user_id, profile, workouts_dict)
+        push_task.run(
+            _do_push, user_id, profile, workouts_dict, not cache_version_ok
+        )
 
     if push_task.done:
         sync_state.published = True

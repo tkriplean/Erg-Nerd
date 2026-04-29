@@ -314,6 +314,7 @@ def _app_header(current_page, is_public):
     # kept — strokes gracefully degrade when uncached. Profile is the only
     # route that 404s in public mode.
     _hidden_nav_pages = {"Profile"}
+    ctx = AppContext()
 
     # Public-mode navigation links prepend "/u/{uid}" so SPA nav stays within
     # the public dashboard.
@@ -396,6 +397,7 @@ def _app_header(current_page, is_public):
                     if _user_btn.clicked or _user_menu.selected_item:
                         _user_dd.opened = not _user_dd.opened
                     if _profile_mi.clicked:
+                        loc = hd.location()
                         loc.go(path="/profile")
                     if _disconnect_mi.clicked:
                         # Also tear down any published public data — single
@@ -407,6 +409,7 @@ def _app_header(current_page, is_public):
                         clear_token(ctx.user_id)
                         clear_session_ls()
                         hd.local_storage.remove_item("workouts")
+                        loc = hd.location()
                         loc.go(path="/")
 
 

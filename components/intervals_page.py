@@ -104,11 +104,6 @@ import hyperdiv as hd
 from components.concept2_sync import get_all_workouts
 from components.reference_watts_loader import reference_watts_loader
 from components.app_context import your
-from services.interval_utils import (
-    avg_workpace_tenths,
-    avg_work_spm,
-    interval_structure_key,
-)
 from services.threshold_cache import make_thresholds_resolver
 from services.workout_enrichment import attach_spread_and_quality
 from services.volume_bins import (
@@ -582,18 +577,16 @@ def _compute_grid_placement(r: dict) -> tuple[int, int]:
 # ---------------------------------------------------------------------------
 # Data enrichment
 # ---------------------------------------------------------------------------
-
-# Per-workout cache for the heavy enrichment fields (especially the bin-meters
-# pass).  Each render rebuilds the filtered workout list from scratch, so we
-# can't memoize at the list level — but the per-workout enrichment is a pure
-# function of (workout content, max_hr), so cache by stable workout id.
 #
-# Toggling a UI chip or grid cell triggers a full page re-render: with this
-# cache, every workout is a hit and enrichment drops from ~370ms to ~1ms.
-# Bound the cache so a long session with many imports can't grow without
-# limit; on overflow we drop everything (simple, no LRU bookkeeping).
-_workout_enrich_cache: dict[tuple, dict] = {}
-_WORKOUT_ENRICH_CACHE_MAX = 5000
+# All per-workout fields used by the grid + table are either Stage-2
+# fetch-time enrichment (``reps``, ``structure_key``, ``work_pace``,
+# ``work_spm`` — see ``services.workout_enrichment.enrich_for_storage``)
+# or Stage-3 render-time metrics that route through
+# ``services.workout_metrics_cache`` (``_bin_meters``, ``_bar_uri``,
+# ``_power_spread_score``, ``_hr_*``, ``_quality*``).  This loop only adds
+# the page-specific grid placement (``_z3``, ``_grid_col``, ``_grid_row``,
+# ``_stimulus``) — derived from already-cached primitives, so no local
+# memoization layer is needed.
 
 
 def _enrich_workouts(
@@ -605,77 +598,41 @@ def _enrich_workouts(
 ) -> list[dict]:
     """
     Filter to interval workout types (excluding single-rep sessions) and
-    attach computed fields used by the grid, info panel, and table.
+    attach the page-specific grid-placement fields.  Spread + quality
+    fields come via the central metrics cache.
 
-    ``thresholds_for(workout) -> dict | None`` resolves a workout to its
-    own-date power thresholds — time-aware, so a 2010 row is classified
-    against 2010 fitness (see services/reference_watts.py).
-    ``ref_watts_for(workout) -> dict | None`` resolves the same date's
-    reference-watts dict, used by the Quality metric.
+    Fields attached on top of Stage-2 enrichment:
 
-    Fields attached:
-
-      _bin_meters         list[float]    Per-power-bin meter counts (index 0 = Rest)
-      _bar_uri            str            Data-URI SVG stacked power-zone bar
-      _z3                 float          Fraction of work meters in Z3 (grid colour)
-      _power_spread_score float | None   0–100 weighted power spread
-      _hr_bin_meters      list[float] | None  Per-HR-bin meter counts, or None
-                                              when max_hr is unknown
-      _hr_bar_uri         str | None     Data-URI SVG stacked HR-zone bar, or None
-      _hr_spread_score    float | None   0–100 weighted HR spread
-      _structure_key    str            Rep-stripped structure label
-      _reps             int            Number of work intervals
-      _work_pace        float | None   Avg work pace (tenths/500m)
-      _work_spm         float | None   Work-weighted avg stroke rate
-      _grid_col         int            Column index in the 2D grid
-      _grid_row         int            Row index in the 2D grid
-      _stimulus         str            Short stimulus name for the cell
-                                         ("Other" when cell is n/a)
+      _bin_meters, _bar_uri, _power_spread_score   (central cache)
+      _hr_bin_meters, _hr_bar_uri, _hr_spread_score (central cache)
+      _quality, _quality_score, _quality_energy    (central cache)
+      _z3       float          Fraction of work meters in Z3 (grid colour)
+      _grid_col int            Column index in the 2D grid
+      _grid_row int            Row index in the 2D grid
+      _stimulus str            Short stimulus name for the cell
+                                 ("Other" when cell is n/a)
     """
     result = []
-    for r in workouts:
-        if not r["is_interval"]:
-            continue
-        # Skip single-rep sessions (e.g. 1×500m / 3'r).  Keep workouts with
-        # multiple intervals that share no rest — they form legitimate multi-block
-        # sessions even though every rest_time == 0.
-        reps = r["reps"]
-        if reps == 1:
-            continue
-
-        wid = r["id"]
-        cache_key = (wid, max_hr) if wid is not None else None
-        if cache_key is not None and cache_key in _workout_enrich_cache:
-            result.append(_workout_enrich_cache[cache_key])
-            continue
-
-        r = dict(r)  # shallow copy
-
+    interval_workouts = [r for r in workouts if r["is_interval"] and r["reps"] != 1]
+    if interval_workouts:
         attach_spread_and_quality(
-            [r],
+            interval_workouts,
             workouts,
             max_hr,
             thresholds_for=thresholds_for,
             ref_watts_for=ref_watts_for,
             reference_pbs_for=reference_pbs_for,
         )
+
+    for r in interval_workouts:
+        r = dict(r)  # shallow copy so per-page fields don't leak back to AppContext
         bm = r["_bin_meters"]
         work_total = sum(bm[1:])
         r["_z3"] = sum(bm[i] for i in Z3_BINS) / work_total if work_total else 0.0
-
-        r["_structure_key"] = interval_structure_key(r, compact=True)
-        r["_reps"] = reps
-        r["_work_pace"] = avg_workpace_tenths(r)
-        r["_work_spm"] = avg_work_spm(r)
         col, row = _compute_grid_placement(r)
         r["_grid_col"] = col
         r["_grid_row"] = row
         r["_stimulus"] = _cell_name(row, col)
-
-        if cache_key is not None:
-            if len(_workout_enrich_cache) >= _WORKOUT_ENRICH_CACHE_MAX:
-                _workout_enrich_cache.clear()
-            _workout_enrich_cache[cache_key] = r
         result.append(r)
     result.sort(key=lambda x: x["date"], reverse=True)
     return result
@@ -697,7 +654,7 @@ def _filter_disjunctive(
     for ANY of the selected bins — i.e. disjunctive (OR) combination.
     Empty selection → pass through unchanged.
 
-    passes_fn(bin_meters, bin_idx) → bool is the services-layer threshold
+    passes_fn(_bin_meters, bin_idx) → bool is the services-layer threshold
     test (power_bin_passes / hr_bin_passes).  Workouts with meters_key == None
     (no HR data) never match any HR bin and are dropped from a non-empty HR
     selection.
@@ -1046,14 +1003,14 @@ def intervals_page() -> None:
             "reps",
             "Reps",
             "4rem",
-            render_value=lambda w: str(w["_reps"]) if w.get("_reps") else "—",
-            sort_value=lambda w: w.get("_reps") or 0,
+            render_value=lambda w: str(w["reps"]) if w.get("reps") else "—",
+            sort_value=lambda w: w.get("reps") or 0,
         ),
         ColumnDef(
             "structure",
             "Structure",
             "minmax(8rem,1fr)",
-            render_cell=lambda w: _render_structure_cell(w.get("_structure_key")),
+            render_cell=lambda w: _render_structure_cell(w.get("structure_key")),
             sortable=False,
         ),
         ColumnDef(
@@ -1077,10 +1034,10 @@ def intervals_page() -> None:
             "split",
             "Avg Split",
             "7rem",
-            render_value=lambda w: fmt_split(w["_work_pace"])
-            if w.get("_work_pace")
+            render_value=lambda w: fmt_split(w["work_pace"])
+            if w.get("work_pace")
             else "—",
-            sort_value=lambda w: w.get("_work_pace") or float("inf"),
+            sort_value=lambda w: w.get("work_pace") or float("inf"),
             default_asc=True,
         ),
         ColumnDef(
@@ -1095,10 +1052,8 @@ def intervals_page() -> None:
             "spm",
             "SPM",
             "4rem",
-            render_value=lambda w: f"{w['_work_spm']:.0f}"
-            if w.get("_work_spm")
-            else "—",
-            sort_value=lambda w: w.get("_work_spm") or 0,
+            render_value=lambda w: f"{w['work_spm']:.0f}" if w.get("work_spm") else "—",
+            sort_value=lambda w: w.get("work_spm") or 0,
         ),
         COL_LINK,
     ]
@@ -1122,7 +1077,7 @@ def intervals_page() -> None:
         pre_filtered = [r for r in pre_filtered if r.get("_quality") in sel_quality]
     if state.structure_filter:
         pre_filtered = [
-            r for r in pre_filtered if r["_structure_key"] == state.structure_filter
+            r for r in pre_filtered if r["structure_key"] == state.structure_filter
         ]
 
     with hd.box(align="center", gap=1, padding=2, min_height="80vh"):

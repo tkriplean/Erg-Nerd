@@ -12,8 +12,11 @@ trust whatever sits in localStorage, so every workout passes through this
 normalizer before being persisted.
 
 Public API
+    INTEGRITY_VERSION                              -> int
     normalize_workout(workout, max_hr=None)        -> dict
     normalize_workouts_dict(workouts_dict, max_hr=None) -> dict
+    normalize_new_workouts(merged, trusted, max_hr=None)
+                                                   -> (clean_dict, quarantine_dict)
 
 Rules
     1. Drop HR data when coverage is partial — any split (or any work
@@ -31,14 +34,25 @@ Rules
        units whose implied distance is >25 % off the time-proportional
        expected distance, whose pace is faster than 1:00/500m, or whose
        SPM is zero amid valid peers.
+    5. Quarantine (do not include in the main dict) workouts whose pace
+       cannot be derived — time <= 0 or distance <= 0.  These are
+       rendered out via a server-side sidecar file so they can be
+       inspected; they never reach AppContext.
 
-The pass is idempotent — running it twice produces the same result, so it is
-safe to apply over the entire workouts dict on every sync.
+The per-workout pass is idempotent.  Bumping ``INTEGRITY_VERSION`` whenever a
+rule changes invalidates the localStorage cache (consumers force-refetch
+from Concept2 and re-run normalization).
 """
 
 from __future__ import annotations
 
 from services.heartrate_utils import _extract_hr
+
+
+# Bump whenever any rule above changes.  ``components.concept2_sync`` reads
+# this and discards the localStorage cache when the persisted version
+# differs, forcing a full re-fetch + re-normalize.
+INTEGRITY_VERSION = 1
 
 
 # ---------------------------------------------------------------------------
@@ -305,3 +319,49 @@ def normalize_workout(workout: dict, max_hr: int | None = None) -> dict:
 def normalize_workouts_dict(workouts_dict: dict, max_hr: int | None = None) -> dict:
     """Return a new ``{str(id): workout}`` dict with every value normalized."""
     return {k: normalize_workout(v, max_hr=max_hr) for k, v in workouts_dict.items()}
+
+
+def _has_pace(workout: dict) -> bool:
+    """True when the workout has both a time and distance — i.e. a derivable pace."""
+    return bool(workout.get("time")) and bool(workout.get("distance"))
+
+
+def normalize_new_workouts(
+    merged: dict, trusted: dict, max_hr: int | None = None
+) -> tuple[dict, dict]:
+    """Normalize only the workouts that are new or changed since ``trusted``,
+    and partition out unmeasured workouts (Rule 5).
+
+    Args:
+        merged: full ``{str(id): workout}`` from the API sync (initial seed
+            already merged with newly-fetched pages).
+        trusted: previously-persisted workouts known to satisfy the current
+            ``INTEGRITY_VERSION``.  Pass ``{}`` when the cache is being
+            invalidated (version mismatch or first sync).
+        max_hr: profile max heart rate for HR-anomaly normalization.
+
+    Returns:
+        ``(clean_dict, quarantine_dict)`` — both are ``{str(id): workout}``.
+        ``clean_dict`` is what should reach localStorage and AppContext.
+        ``quarantine_dict`` is the Rule-5 sidecar (workouts with no
+        derivable pace), each carrying a ``_quarantine_reason`` string.
+    """
+    clean: dict = {}
+    quarantined: dict = {}
+    for wid, w in merged.items():
+        prev = trusted.get(wid)
+        if prev is not None and prev == w:
+            normalized = w
+        else:
+            normalized = normalize_workout(w, max_hr=max_hr)
+
+        if _has_pace(normalized):
+            clean[wid] = normalized
+        else:
+            entry = dict(normalized)
+            entry["_quarantine_reason"] = (
+                f"no_pace: time={entry.get('time')}, "
+                f"distance={entry.get('distance')}"
+            )
+            quarantined[wid] = entry
+    return clean, quarantined

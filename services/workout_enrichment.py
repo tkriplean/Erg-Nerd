@@ -40,9 +40,11 @@ mutate each workout dict in-place to attach the heavier metrics:
   _quality_score      float | None   Continuous quality score
   _quality_energy     dict | None    Per-category energy breakdown
 
-The quality fields are routed through ``services.quality_cache`` so that
-repeated renders (and other pages requesting the same workout) reuse the
-result instead of recomputing from scratch.
+Every Stage-3 metric is routed through ``services.workout_metrics_cache``
+so repeated renders (and other pages requesting the same workout) reuse
+the result instead of recomputing.  HR-dependent metrics include
+``max_hr`` in the cache key so a profile change naturally invalidates
+only the affected entries.
 
 ``attach_quality_only`` is a lightweight variant that attaches only the
 ``_quality*`` fields — used by the Volume page's quality mode where the
@@ -61,7 +63,6 @@ from services.interval_utils import (
     get_rep_count,
     interval_structure_key,
 )
-from services.quality_cache import get_or_compute_quality
 from services.reference_watts import input_hash
 from services.rowing_utils import (
     INTERVAL_WORKOUT_TYPES,
@@ -77,6 +78,8 @@ from services.volume_bins import (
     power_spread_score,
     workout_bin_meters,
 )
+from services.workout_metrics_cache import get_or_compute
+from services.workout_quality import compute_workout_quality
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +157,59 @@ def enrich_all(workouts_dict: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _resolvers(
+    all_workouts: list,
+    thresholds_for: Optional[Callable],
+    ref_watts_for: Optional[Callable],
+    reference_pbs_for: Optional[Callable],
+) -> tuple[Callable, Callable, Callable]:
+    if thresholds_for is None or ref_watts_for is None or reference_pbs_for is None:
+        return make_thresholds_resolver(all_workouts)
+    return thresholds_for, ref_watts_for, reference_pbs_for
+
+
+def _cached_quality(
+    r: dict,
+    h: str,
+    ref_watts_for: Callable,
+    thresholds_for: Callable,
+    reference_pbs_for: Callable,
+) -> Optional[dict]:
+    """Quality dict for ``r`` from the central metrics cache."""
+    return get_or_compute(
+        "quality",
+        r["id"],
+        h,
+        lambda: compute_workout_quality(
+            r,
+            ref_watts_for(r),
+            thresholds_for(r),
+            reference_pbs_for(r),
+        ),
+    )
+
+
+def _assign_quality(r: dict, quality: Optional[dict]) -> None:
+    if quality is not None:
+        r["_quality"] = quality["category"]
+        r["_quality_score"] = quality["score"]
+        r["_quality_energy"] = quality["per_category_energy"]
+    else:
+        r["_quality"] = None
+        r["_quality_score"] = None
+        r["_quality_energy"] = None
+
+
+def _hr_bar(hrm: list) -> str:
+    """Render the HR bar using classified meters only (bins 0–5); drop
+    bin 6 so 'no HR' doesn't dilute the colour signal.  ``bin_bar_svg``
+    takes a 7-element list and skips index 0 internally, so we pad with a
+    zero in the 'No HR' slot."""
+    hr_for_bar = list(hrm)
+    hr_for_bar[6] = 0
+    return bin_bar_svg(hr_for_bar)
+
+
 def attach_spread_and_quality(
     workouts: list,
     all_workouts: list,
@@ -172,51 +228,60 @@ def attach_spread_and_quality(
     supplied by callers that already built a per-date resolver (e.g. the
     Intervals page builds one for its own enrichment loop and reuses it
     here).  When omitted, this builds a fresh resolver internally.
+
+    Every metric is memoised in ``services.workout_metrics_cache`` keyed by
+    ``(metric, workout_id, input_hash[, max_hr])`` so subsequent renders
+    are O(1) per workout.
     """
-    if thresholds_for is None or ref_watts_for is None or reference_pbs_for is None:
-        thresholds_for, ref_watts_for, reference_pbs_for = make_thresholds_resolver(
-            all_workouts
-        )
+    thresholds_for, ref_watts_for, reference_pbs_for = _resolvers(
+        all_workouts, thresholds_for, ref_watts_for, reference_pbs_for
+    )
 
     h = input_hash(all_workouts)
 
     for r in workouts:
-        bm = workout_bin_meters(r, thresholds_for(r))
+        wid = r["id"]
+
+        bm = get_or_compute(
+            "_bin_meters", wid, h, lambda r=r: workout_bin_meters(r, thresholds_for(r))
+        )
         r["_bin_meters"] = bm
-        r["_bar_uri"] = bin_bar_svg(bm)
-        r["_power_spread_score"] = power_spread_score(bm)
+        r["_bar_uri"] = get_or_compute("bar_uri", wid, h, lambda bm=bm: bin_bar_svg(bm))
+        r["_power_spread_score"] = get_or_compute(
+            "power_spread_score", wid, h, lambda bm=bm: power_spread_score(bm)
+        )
 
         if max_hr:
-            hrm = workout_hr_meters(r, max_hr)
+            hrm = get_or_compute(
+                "_hr_bin_meters",
+                wid,
+                h,
+                lambda r=r: workout_hr_meters(r, max_hr),
+                max_hr=max_hr,
+            )
             r["_hr_bin_meters"] = hrm
-            # Render the HR bar using only classified meters (bins 0–5); drop
-            # bin 6 so "no HR" doesn't dilute the colour signal.  bin_bar_svg
-            # takes a 7-element list and skips index 0 internally, so pad
-            # bins 1–5 with a 0 for the "No HR" slot.
-            hr_for_bar = list(hrm)
-            hr_for_bar[6] = 0
-            r["_hr_bar_uri"] = bin_bar_svg(hr_for_bar)
-            r["_hr_spread_score"] = hr_spread_score(hrm)
+            r["_hr_bar_uri"] = get_or_compute(
+                "hr_bar_uri",
+                wid,
+                h,
+                lambda hrm=hrm: _hr_bar(hrm),
+                max_hr=max_hr,
+            )
+            r["_hr_spread_score"] = get_or_compute(
+                "hr_spread_score",
+                wid,
+                h,
+                lambda hrm=hrm: hr_spread_score(hrm),
+                max_hr=max_hr,
+            )
         else:
             r["_hr_bin_meters"] = None
             r["_hr_bar_uri"] = None
             r["_hr_spread_score"] = None
 
-        quality = get_or_compute_quality(
-            r,
-            ref_watts_for(r),
-            thresholds_for(r),
-            h,
-            reference_pbs=reference_pbs_for(r),
+        _assign_quality(
+            r, _cached_quality(r, h, ref_watts_for, thresholds_for, reference_pbs_for)
         )
-        if quality is not None:
-            r["_quality"] = quality["category"]
-            r["_quality_score"] = quality["score"]
-            r["_quality_energy"] = quality["per_category_energy"]
-        else:
-            r["_quality"] = None
-            r["_quality_score"] = None
-            r["_quality_energy"] = None
 
 
 def attach_quality_only(
@@ -233,26 +298,13 @@ def attach_quality_only(
     ``attach_spread_and_quality`` computes.  Used by the Volume page's
     quality mode where the only field consumed downstream is ``_quality``.
     """
-    if thresholds_for is None or ref_watts_for is None or reference_pbs_for is None:
-        thresholds_for, ref_watts_for, reference_pbs_for = make_thresholds_resolver(
-            all_workouts
-        )
+    thresholds_for, ref_watts_for, reference_pbs_for = _resolvers(
+        all_workouts, thresholds_for, ref_watts_for, reference_pbs_for
+    )
 
     h = input_hash(all_workouts)
 
     for r in workouts:
-        quality = get_or_compute_quality(
-            r,
-            ref_watts_for(r),
-            thresholds_for(r),
-            h,
-            reference_pbs=reference_pbs_for(r),
+        _assign_quality(
+            r, _cached_quality(r, h, ref_watts_for, thresholds_for, reference_pbs_for)
         )
-        if quality is not None:
-            r["_quality"] = quality["category"]
-            r["_quality_score"] = quality["score"]
-            r["_quality_energy"] = quality["per_category_energy"]
-        else:
-            r["_quality"] = None
-            r["_quality_score"] = None
-            r["_quality_energy"] = None

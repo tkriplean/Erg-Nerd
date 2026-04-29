@@ -268,7 +268,7 @@ def workout_bin_meters(workout: dict, thresholds: Optional[dict]) -> tuple:
     return tuple(bins)
 
 
-def power_spread_score(bin_meters: list) -> Optional[float]:
+def power_spread_score(_bin_meters: list) -> Optional[float]:
     """
     Return a 0–100 weighted-average spread score for a workout's power bins.
 
@@ -276,7 +276,7 @@ def power_spread_score(bin_meters: list) -> Optional[float]:
     Returns None when a workout has no classifiable work meters — callers
     render that as "—" and sort it last.
     """
-    work = bin_meters[1:]
+    work = _bin_meters[1:]
     total = sum(work)
     if total <= 0:
         return None
@@ -394,7 +394,7 @@ def workout_quality_bin_meters(
 
 
 def bin_bar_svg(
-    bin_meters: list,
+    _bin_meters: list,
     width: int = 160,
     height: int = 8,
     is_dark: bool = False,
@@ -406,7 +406,7 @@ def bin_bar_svg(
     colors are taken from ``BIN_COLORS`` (dark or light variant).
     Segments smaller than 2 % of work total are omitted to avoid hairlines.
     """
-    work = bin_meters[1:]  # bins 1-6 only (skip Rest)
+    work = _bin_meters[1:]  # bins 1-6 only (skip Rest)
     total = sum(work)
 
     x = 0

@@ -23,6 +23,23 @@ _WORKOUT_PERM_DROP = frozenset(
         # time_formatted is NOT permanently dropped — for interval workouts it
         # carries work-only time (total minus rest) which differs from format_time(time).
         # It is dropped conditionally in _compress_one_workout() when redundant.
+        # Stage-2 fetch-time enrichment fields (services.workout_enrichment) —
+        # derived from other workout fields and re-applied on every load, so
+        # they are stripped here.  Includes ``date_dt`` which is a Python
+        # ``date`` object that JSON cannot serialise.
+        "pace",
+        "watts",
+        "date_dt",
+        "date_ms",
+        "day",
+        "season",
+        "cat_key",
+        "machine",
+        "is_interval",
+        "reps",
+        "structure_key",
+        "work_pace",
+        "work_spm",
     }
 )
 
@@ -49,6 +66,12 @@ def _compress_one_workout(w: dict) -> dict:
     out = {}
     for k, v in w.items():
         if k in _WORKOUT_PERM_DROP:
+            continue
+        # Stage-3 render-time fields (``_bin_meters``, ``_bar_uri``,
+        # ``_quality``, …) are attached by services.workout_enrichment when
+        # a page renders.  They are derived from cached metrics and must
+        # never be persisted.
+        if isinstance(k, str) and k.startswith("_"):
             continue
         if k in _WORKOUT_DEFAULTS and v == _WORKOUT_DEFAULTS[k]:
             continue
@@ -120,6 +143,66 @@ def decompress_workouts(stored: str) -> dict:
         return {k: _decompress_one_workout(v) for k, v in raw.items()}
     except Exception:
         return {}
+
+
+# ---------------------------------------------------------------------------
+# Versioned envelope around the workouts payload
+# ---------------------------------------------------------------------------
+#
+# The workouts that sit in localStorage have already passed through
+# ``services.data_integrity.normalize_workout``.  When the rules in that
+# module change we need to invalidate the cache and force a full re-fetch
+# from Concept2.  We do that with a thin envelope that records the integrity
+# version alongside the compressed payload:
+#
+#   {"v": <int>, "w": "<base64-compressed-workouts>"}
+#
+# Pre-versioning caches stored the raw compressed string at the same key.
+# ``decompress_workouts_envelope`` detects that legacy shape, returns the
+# inner dict, and reports ``None`` for the version so the caller knows to
+# discard.
+
+
+def compress_workouts_envelope(workouts_dict: dict, integrity_version: int) -> str:
+    """Wrap the compressed workouts payload in a versioned envelope.
+
+    The envelope is itself a JSON string suitable for direct
+    ``localStorage.setItem``.  Use ``decompress_workouts_envelope`` to read
+    it back.
+    """
+    return json.dumps(
+        {"v": int(integrity_version), "w": compress_workouts(workouts_dict)}
+    )
+
+
+def decompress_workouts_envelope(stored: str) -> tuple[dict, int | None]:
+    """Reverse of ``compress_workouts_envelope``.
+
+    Returns ``(workouts_dict, integrity_version)``:
+
+    - ``({}, None)`` — empty / invalid blob.  Caller should treat the
+      cache as missing.
+    - ``(<dict>, None)`` — pre-versioning legacy blob: the inner payload
+      decoded but the envelope was absent.  Caller should treat as
+      version-mismatched and re-fetch.
+    - ``(<dict>, <int>)`` — versioned envelope; caller compares the int
+      to ``INTEGRITY_VERSION``.
+    """
+    if not stored:
+        return {}, None
+    try:
+        outer = json.loads(stored)
+    except (TypeError, ValueError):
+        outer = None
+    if isinstance(outer, dict) and "v" in outer and "w" in outer:
+        try:
+            return decompress_workouts(outer["w"]), int(outer["v"])
+        except Exception:
+            return {}, None
+    # Legacy: the value at the key was the raw compressed string from
+    # before the envelope existed.  Decode it but flag as un-versioned.
+    legacy = decompress_workouts(stored)
+    return legacy, None
 
 
 # ---------------------------------------------------------------------------

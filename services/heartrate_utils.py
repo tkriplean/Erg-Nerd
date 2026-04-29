@@ -23,8 +23,8 @@ Exported:
     resolve_max_hr(profile, workouts) → (int | None, bool)  # (max_hr, is_estimated)
     hr_zone_idx(avg_hr, max_hr)     → int 1–5
     workout_hr_meters(workout, max_hr) → list[float]  (7 bins, same shape as workout_bin_meters)
-    hr_spread_score(hr_bin_meters) → float | None  (0–100 weighted average)
-    hr_bin_passes(hr_bin_meters, idx) → bool  (filter-threshold test)
+    hr_spread_score(_hr_bin_meters) → float | None  (0–100 weighted average)
+    hr_bin_passes(_hr_bin_meters, idx) → bool  (filter-threshold test)
     hr_coverage(workouts)           → (int, int)  # (with_hr, total)
 
 Bin layout (matches pace zone index convention):
@@ -346,7 +346,7 @@ def workout_hr_meters(workout: dict, max_hr: int) -> tuple[float]:
 # ---------------------------------------------------------------------------
 
 
-def hr_spread_score(hr_bin_meters: Optional[list]) -> Optional[float]:
+def hr_spread_score(_hr_bin_meters: Optional[list]) -> Optional[float]:
     """
     Return a 0–100 weighted-average HR-spread score for a workout.
 
@@ -355,9 +355,9 @@ def hr_spread_score(hr_bin_meters: Optional[list]) -> Optional[float]:
     meters it could classify.  Returns None when no HR-classified meters
     exist — callers render that as "—" and sort it last.
     """
-    if hr_bin_meters is None:
+    if _hr_bin_meters is None:
         return None
-    classified = hr_bin_meters[1:6]  # bins 1–5 only
+    classified = _hr_bin_meters[1:6]  # bins 1–5 only
     total = sum(classified)
     if total <= 0:
         return None
@@ -365,7 +365,7 @@ def hr_spread_score(hr_bin_meters: Optional[list]) -> Optional[float]:
     return sum((m / total) * w for m, w in zip(classified, weights))
 
 
-def hr_bin_passes(hr_bin_meters: Optional[list], bin_idx: int) -> bool:
+def hr_bin_passes(_hr_bin_meters: Optional[list], bin_idx: int) -> bool:
     """
     Return True if a workout has enough HR-classified meters in ``bin_idx``
     for the Intervals-page HR filter to consider that zone "present".
@@ -373,21 +373,21 @@ def hr_bin_passes(hr_bin_meters: Optional[list], bin_idx: int) -> bool:
     Thresholds mirror the hardness ordering of the pace thresholds.
     Bin 6 (No HR) is not filterable.
     """
-    if hr_bin_meters is None:
+    if _hr_bin_meters is None:
         return False
-    classified = sum(hr_bin_meters[1:6])
+    classified = sum(_hr_bin_meters[1:6])
     if classified <= 0:
         return False
     if bin_idx == 1:
-        return hr_bin_meters[1] / classified >= 0.05
+        return _hr_bin_meters[1] / classified >= 0.05
     if bin_idx == 2:
-        return hr_bin_meters[2] / classified >= 0.10
+        return _hr_bin_meters[2] / classified >= 0.10
     if bin_idx == 3:
-        return hr_bin_meters[3] / classified >= 0.20
+        return _hr_bin_meters[3] / classified >= 0.20
     if bin_idx == 4:
-        return hr_bin_meters[4] / classified >= 0.40
+        return _hr_bin_meters[4] / classified >= 0.40
     if bin_idx == 5:
-        return hr_bin_meters[5] / classified >= 0.40
+        return _hr_bin_meters[5] / classified >= 0.40
     return False
 
 
