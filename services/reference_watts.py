@@ -71,15 +71,12 @@ from services.rowing_utils import (
     RANKED_DISTANCES,
     RANKED_TIMES,
     apply_quality_filters,
-    compute_pace,
     compute_pauls_constant,
     compute_watts,
     is_rankable_noninterval,
-    parse_date,
     pauls_law_pace,
     PACE_MAX,
     PACE_MIN,
-    workout_cat_key,
 )
 
 try:
@@ -136,8 +133,8 @@ def input_hash(all_workouts: list) -> str:
         return _HASH_MEMO["hash"]
     ids = sorted(
         (
-            (w.get("date") or "")[:10],
-            w.get("type") or "",
+            w["day"],
+            w["machine"],
             w.get("distance") or 0,
             w.get("time") or 0,
         )
@@ -191,9 +188,7 @@ def resolve_index(all_workouts: list) -> dict:
     return index
 
 
-def _reference_watts_from_index(
-    when: date, index: dict, all_workouts: list
-) -> dict:
+def _reference_watts_from_index(when: date, index: dict, all_workouts: list) -> dict:
     """Index-aware core of ``get_reference_watts`` — no hashing, no cache lookup."""
     watts = _interpolate(when, index)
     if index.get("markers") and when >= index["markers"][-1]["date"]:
@@ -218,16 +213,16 @@ def _get_recent_tail(index: dict, last_marker_date: date, all_workouts: list) ->
     for w in all_workouts:
         if not is_rankable_noninterval(w):
             continue
-        dt = parse_date(w.get("date", ""))
+        dt = w["date_dt"]
         if dt <= last_marker_date:
             continue
-        pace = compute_pace(w)
+        pace = w["pace"]
         if pace is None or pace < PACE_MIN or pace > PACE_MAX:
             continue
-        ck = workout_cat_key(w)
+        ck = w["cat_key"]
         if ck is None:
             continue
-        tail.append((dt, ck, compute_watts(pace)))
+        tail.append((dt, ck, w["watts"]))
     index["_recent_tail"] = tail
     return tail
 
@@ -267,7 +262,7 @@ def build_reference_watts_index(
             on_progress(0, 0, "done")
         return index
 
-    first_effort = min(parse_date(w.get("date", "")) for w in quality)
+    first_effort = min(w["date_dt"] for w in quality)
     markers = _quarter_markers(first_effort, date.today())
 
     cp_fit_cache: dict = {}
@@ -330,26 +325,26 @@ def _window_pbs(quality: list, start: date, end: date) -> dict:
     """
     best: dict = {}
     for w in quality:
-        dt = parse_date(w.get("date", ""))
+        dt = w["date_dt"]
         if dt < start or dt > end:
             continue
-        pace = compute_pace(w)
+        pace = w["pace"]
         if pace is None or pace < PACE_MIN or pace > PACE_MAX:
             continue
-        ck = workout_cat_key(w)
+        ck = w["cat_key"]
         if ck is None:
             continue
         time_s = (w.get("time") or 0) / 10.0
         if time_s <= 0:
             continue
-        watts = compute_watts(pace)
+        watts = w["watts"]
         cur = best.get(ck)
         if cur is None or pace < cur["pace"]:
             best[ck] = {
                 "pace": pace,
                 "duration_s": time_s,
                 "watts": watts,
-                "id": w.get("id"),
+                "id": w["id"],
                 "distance": w.get("distance"),
                 "cat_key": ck,
             }
@@ -407,15 +402,15 @@ def _compute_marker_refs(marker: date, quality: list, cp_cache: dict) -> Optiona
                 500.0 * anchor["duration_s"] / anchor_pace
             )
 
-        pauls_source = "pauls" if len(pbs) >= 4 and k != PAULS_DEFAULT_K else (
-            "pauls" if len(pbs) >= 4 else "pauls_default"
+        pauls_source = (
+            "pauls"
+            if len(pbs) >= 4 and k != PAULS_DEFAULT_K
+            else ("pauls" if len(pbs) >= 4 else "pauls_default")
         )
         for ck, dist_m, dur_s in _ALL_EVENTS:
             if ck in predicted:
                 continue
-            w = _pauls_watts_at_event(
-                anchor_pace, anchor_dist, dist_m, dur_s, k
-            )
+            w = _pauls_watts_at_event(anchor_pace, anchor_dist, dist_m, dur_s, k)
             if w is not None:
                 predicted[ck] = w
                 source_tag[ck] = pauls_source
@@ -429,7 +424,9 @@ def _compute_marker_refs(marker: date, quality: list, cp_cache: dict) -> Optiona
         pred_w = predicted.get(ck)
         if pb is not None and pred_w is not None:
             final_watts[ck] = (pb["watts"] + pred_w) / 2.0
-            final_source[ck] = "pb" if pb["watts"] >= pred_w else source_tag.get(ck, "pb")
+            final_source[ck] = (
+                "pb" if pb["watts"] >= pred_w else source_tag.get(ck, "pb")
+            )
         elif pb is not None:
             final_watts[ck] = pb["watts"]
             final_source[ck] = "pb"
@@ -451,7 +448,7 @@ def _compute_marker_refs(marker: date, quality: list, cp_cache: dict) -> Optiona
 
 def _cached_cp_fit(pb_list: list, cp_cache: dict) -> Optional[dict]:
     """CP fit with a caller-provided cache keyed by sorted PB ids."""
-    key = frozenset((p.get("id") or (p["cat_key"], p["duration_s"])) for p in pb_list)
+    key = frozenset((p["id"] or (p["cat_key"], p["duration_s"])) for p in pb_list)
     if key in cp_cache:
         return cp_cache[key]
     params = fit_critical_power(pb_list)
@@ -650,7 +647,9 @@ def deserialize_index(json_dict: dict) -> dict:
         "markers": [
             {
                 "date": date.fromisoformat(m["date"]),
-                "watts": {_ck_from_str(k): float(v) for k, v in m.get("watts", {}).items()},
+                "watts": {
+                    _ck_from_str(k): float(v) for k, v in m.get("watts", {}).items()
+                },
                 "source": {_ck_from_str(k): s for k, s in m.get("source", {}).items()},
                 "n_pbs": m.get("n_pbs", 0),
             }

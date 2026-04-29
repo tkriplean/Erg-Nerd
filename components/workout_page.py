@@ -77,15 +77,7 @@ from components.workout_chart_builder import (
     _stitch_interval_times,
 )
 from components.workout_chart_plugin import StrokeChart
-from services.interval_utils import (
-    avg_workpace_tenths,
-    get_rep_count,
-    interval_structure_key,
-)
-from services.rowing_utils import (
-    INTERVAL_WORKOUT_TYPES,
-    compute_watts,
-)
+from services.rowing_utils import compute_watts
 
 from components.hyperdiv_extensions import radio_group
 from components.concept2_sync import sync_workouts, strokes_for
@@ -122,8 +114,7 @@ def _spread_stat(label: str, render_inner) -> None:
 
 def _summary_section(workout: dict, strokes: Optional[list]) -> None:
     """Compact multi-column stat grid."""
-    wtype = workout.get("workout_type", "")
-    is_interval = wtype in INTERVAL_WORKOUT_TYPES
+    is_interval = workout["is_interval"]
     pace = pace_tenths(workout)
     pace_sec = (pace / 10.0) if pace else None
     avg_watts = round(compute_watts(pace_sec)) if pace_sec else None
@@ -333,7 +324,7 @@ def _custom_splits_ui(workout: dict, strokes: list, on_splits_change) -> None:
     chips are integer seconds displayed as M:SS; the text input accepts
     either bare seconds or M:SS.
     """
-    workout_id = workout.get("id")
+    workout_id = workout["id"]
     wtype = workout.get("workout_type", "")
     is_time_based = wtype in _TIME_BASED_WORKOUT_TYPES
     total_dist_m = workout.get("distance") or 0
@@ -713,8 +704,7 @@ def _splits_table(
     header_color = "neutral-500"
     ts = "small"
     wo = workout.get("workout") or {}
-    wtype = workout.get("workout_type", "")
-    is_interval = wtype in INTERVAL_WORKOUT_TYPES
+    is_interval = workout["is_interval"]
 
     if is_interval:
         _intervals_table(
@@ -973,7 +963,7 @@ def _compare_cell(w: dict, state) -> None:
     if not w.get("stroke_data"):
         hd.text("—", font_color="neutral-300", font_size="small")
         return
-    wid = w.get("id")
+    wid = w["id"]
     if wid is None:
         hd.text("—", font_color="neutral-300", font_size="small")
         return
@@ -994,7 +984,7 @@ def _interval_dimension(w: dict) -> str:
     'unknown' if no work intervals."""
     ivs = (w.get("workout") or {}).get("intervals") or []
     for iv in ivs:
-        t = (iv.get("type") or "").lower()
+        t = (iv["machine"]).lower()
         if t in ("time", "distance"):
             return t
     return "unknown"
@@ -1011,7 +1001,7 @@ def _interval_volume_and_work_fraction(w: dict) -> tuple:
     0.2 means 1:4, 1.0 means continuous (no rest).
     """
     ivs = (w.get("workout") or {}).get("intervals") or []
-    work_ivs = [iv for iv in ivs if (iv.get("type") or "").lower() != "rest"]
+    work_ivs = [iv for iv in ivs if (iv["machine"]).lower() != "rest"]
     if not work_ivs:
         return 0, 1.0
     dim = _interval_dimension(w)
@@ -1030,20 +1020,20 @@ def _find_similar(workout: dict, all_workouts: list) -> list:
     """Return shallow-copied workouts similar to ``workout``, with ``_similarity``
     (0–100, higher = more similar) attached, sorted descending."""
     wtype = workout.get("workout_type", "")
-    wid = workout.get("id")
-    is_interval = wtype in INTERVAL_WORKOUT_TYPES
+    wid = workout["id"]
+    is_interval = workout["is_interval"]
 
     pool: list = []
     if is_interval:
         ref_dim = _interval_dimension(workout)
         ref_vol, ref_wf = _interval_volume_and_work_fraction(workout)
-        ref_pace_t = avg_workpace_tenths(workout)
+        ref_pace_t = workout["work_pace"]
         ref_interv_count = len(workout.get("workout", {}).get("intervals"))
         ref_d_p_i = ref_vol / ref_interv_count
         for w in all_workouts:
-            if w.get("id") == wid:
+            if w["id"] == wid:
                 continue
-            if (w.get("workout_type") or "") not in INTERVAL_WORKOUT_TYPES:
+            if not w["is_interval"]:
                 continue
             if _interval_dimension(w) != ref_dim:
                 continue
@@ -1080,7 +1070,7 @@ def _find_similar(workout: dict, all_workouts: list) -> list:
             # Pace term: 1.0 at exact match, 0.0 at ≥30s/500m off.
             pace_term = 0
             if ref_pace_t is not None:
-                p = avg_workpace_tenths(w)
+                p = w["work_pace"]
                 if p is not None:
                     pace_delta_s = abs(p - ref_pace_t) / 10.0
                     pace_term = max(0.0, 1.0 - pace_delta_s / 30.0)
@@ -1099,7 +1089,7 @@ def _find_similar(workout: dict, all_workouts: list) -> list:
         ref_dist = workout.get("distance", 0)
         ref_pace = pace_tenths(workout)
         for w in all_workouts:
-            if w.get("id") == wid or w.get("workout_type") != wtype:
+            if w["id"] == wid or w.get("workout_type") != wtype:
                 continue
             d = w.get("distance", 0)
             if ref_dist and d and abs(d - ref_dist) / ref_dist > 0.20:
@@ -1241,7 +1231,7 @@ def workout_page(session_id: int) -> None:
 
     has_strokes = bool(workout.get("stroke_data"))
     wtype = workout.get("workout_type", "")
-    is_interval = wtype in INTERVAL_WORKOUT_TYPES
+    is_interval = workout["is_interval"]
 
     stroke_result = strokes_for(workout)
     stroke_status = stroke_result["status"]
@@ -1263,8 +1253,8 @@ def workout_page(session_id: int) -> None:
     # ── Title ────────────────────────────────────────────────────────────────
 
     if is_interval:
-        reps = get_rep_count(workout)
-        title = interval_structure_key(workout, compact=True)
+        reps = workout["reps"]
+        title = workout["structure_key"]
         if reps:
             title = f"{reps} x {title}"
     else:
@@ -1295,7 +1285,7 @@ def workout_page(session_id: int) -> None:
             # ── Header ───────────────────────────────────────────────────────
 
             with hd.box(padding_top=1, gap=0, align="start"):
-                hd.text(fmt_date(workout.get("date", "")), font_color="neutral-500")
+                hd.text(fmt_date(workout["date"]), font_color="neutral-500")
                 hd.text(title, font_weight="bold", font_size="2x-large")
 
                 if workout.get("comments"):
@@ -1483,9 +1473,7 @@ def workout_page(session_id: int) -> None:
                     font_size="x-large",
                     font_color="neutral-800",
                 )
-                is_interval_workout = (
-                    workout.get("workout_type", "") in INTERVAL_WORKOUT_TYPES
-                )
+                is_interval_workout = workout["is_interval"]
                 compare_col = ColumnDef(
                     key="compare",
                     header="Compare",
@@ -1501,25 +1489,16 @@ def workout_page(session_id: int) -> None:
                         "Reps",
                         "4rem",
                         render_value=lambda w: (
-                            str(get_rep_count(w))
-                            if w.get("workout_type", "") in INTERVAL_WORKOUT_TYPES
-                            and get_rep_count(w)
-                            else "—"
+                            str(w["reps"]) if w["is_interval"] else "—"
                         ),
-                        sort_value=lambda w: (
-                            get_rep_count(w)
-                            if w.get("workout_type", "") in INTERVAL_WORKOUT_TYPES
-                            else 0
-                        ),
+                        sort_value=lambda w: (w["reps"] if w["is_interval"] else 0),
                     )
                     workout_col = ColumnDef(
                         "workout_structure",
                         "Workout",
                         "minmax(8rem,1fr)",
                         render_value=lambda w: (
-                            interval_structure_key(w, compact=True)
-                            if w.get("workout_type", "") in INTERVAL_WORKOUT_TYPES
-                            else ""
+                            w["structure_key"] if w["is_interval"] else ""
                         ),
                     )
                     cols = [

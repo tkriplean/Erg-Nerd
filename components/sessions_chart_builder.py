@@ -9,19 +9,14 @@ from __future__ import annotations
 
 import hashlib
 import math
-from datetime import datetime
 
 import hyperdiv as hd
 
 from scipy.optimize import brentq
 
 from services.rowing_utils import (
-    INTERVAL_WORKOUT_TYPES,
     RANKED_DIST_SET,
     RANKED_TIME_SET,
-    compute_pace,
-    compute_watts,
-    get_season,
 )
 
 from services.formatters import fmt_date
@@ -61,7 +56,6 @@ from services.heartrate_utils import (
     resolve_max_hr,
 )
 from services.reference_watts import get_reference_watts
-from services.rowing_utils import parse_date
 from services.volume_bins import (
     compute_bin_thresholds,
     power_bin_passes,
@@ -119,14 +113,6 @@ def _dot_r(meters: float) -> float:
     return 0.25 * math.sqrt(max(0.0, meters))
 
 
-def _date_to_ms(date_str: str) -> int:
-    try:
-        dt = datetime.strptime(date_str[:10], "%Y-%m-%d")
-        return int(dt.timestamp() * 1_000)
-    except Exception:
-        return 0
-
-
 # ---------------------------------------------------------------------------
 # Outlier filter — Critical Power model
 # ---------------------------------------------------------------------------
@@ -151,7 +137,7 @@ def _build_pb_list(workouts: list) -> list:
     """
     bests: dict = {}  # event_key → workout dict
     for r in workouts:
-        if r.get("workout_type") in INTERVAL_WORKOUT_TYPES:
+        if r["is_interval"]: 
             continue
         dist = r.get("distance") or 0
         time_tenths = r.get("time") or 0
@@ -171,16 +157,12 @@ def _build_pb_list(workouts: list) -> list:
 
     pb_list = []
     for r in bests.values():
-        pace = compute_pace(r)
+        pace = r["pace"]
         if pace is None or pace <= 0:
             continue
-        time_tenths = r.get("time") or 0
-        dist = r.get("distance") or 0
-        # duration: for distance events use elapsed time; for timed events use
-        # the event definition (both happen to be time_tenths / 10.0 here).
-        duration_s = time_tenths / 10.0
-        watts = compute_watts(pace)
-        if duration_s > 0 and watts > 0:
+        duration_s = (r.get("time") or 0) / 10.0
+        watts = r["watts"]
+        if duration_s > 0 and watts and watts > 0:
             pb_list.append({"duration_s": duration_s, "watts": watts})
 
     return pb_list
@@ -243,7 +225,7 @@ def _apply_outlier_filter(workouts: list) -> list:
         return candidates
 
     cutoff = pace_2k * _OUTLIER_FACTOR
-    return [r for r in candidates if (compute_pace(r) or 0.0) <= cutoff]
+    return [r for r in candidates if (r["pace"] or 0.0) <= cutoff]
 
 
 # ---------------------------------------------------------------------------
@@ -261,26 +243,12 @@ def compute_sb_ids(workouts: list) -> set:
     """
     bests: dict = {}  # (season, event_key) → (best_pace, rid)
     for r in workouts:
-        # Intervals cannot be season-bests.
-        if r.get("workout_type") in INTERVAL_WORKOUT_TYPES:
+        if r["is_interval"] or r["cat_key"] is None or r["pace"] is None:
             continue
-        dist = r.get("distance") or 0
-        time = r.get("time") or 0
-        # Must be a ranked event.
-        if dist in RANKED_DIST_SET:
-            event_key = ("dist", dist)
-        elif time in RANKED_TIME_SET:
-            event_key = ("time", time)
-        else:
-            continue
-        pace = compute_pace(r)
-        if pace is None:
-            continue
-        season = get_season(r.get("date", ""))
-        key = (season, event_key)
-        rid = r.get("id")
-        if key not in bests or pace < bests[key][0]:
-            bests[key] = (pace, rid)
+        key = (r["season"], r["cat_key"])
+        rid = r["id"]
+        if key not in bests or r["pace"] < bests[key][0]:
+            bests[key] = (r["pace"], rid)
     return {rid for _, rid in bests.values() if rid is not None}
 
 
@@ -355,17 +323,17 @@ def prepare_points(
     """
     pts = []
     for r in workouts:
-        x = _date_to_ms(r.get("date", ""))
+        x = r["date_ms"]
         if not x:
             continue
-        pace = compute_pace(r)
+        pace = r["pace"]
         if pace is None or not (70.0 <= pace <= 420.0):
             continue
-        y_val = round(compute_watts(pace), 1) if show_watts else round(pace, 2)
+        y_val = round(r["watts"], 1) if show_watts else round(pace, 2)
 
         dist = r.get("distance") or 0
-        is_ivl = r.get("workout_type") in INTERVAL_WORKOUT_TYPES
-        rid = r.get("id")
+        is_ivl = r["is_interval"]
+        rid = r["id"]
 
         # Outer radius: ½√(total meters including rest)
         # For interval workouts r["distance"] = work meters only;
@@ -420,7 +388,7 @@ def prepare_points(
                 "rest_m": round(rest_m),
                 "ivl_desc": ivl_desc,  # list[str] — one line per block
                 "rest_desc": rest_desc,  # totals summary string
-                "date_str": fmt_date(r.get("date", "")),
+                "date_str": fmt_date(r["date"]),
                 "dist_str": dist_str,
             }
         )
@@ -458,7 +426,7 @@ def window_bounds_ms(
     end_ms = min(end_ms, max_ms)
 
     if window_start_ms:
-        # Custom start from a brush resize — honour it directly.
+        # Custom start from a brush resize — honor it directly.
         start_ms = max(window_start_ms, min_ms)
         end_ms = max(end_ms, start_ms + _MS_PER_DAY)
     else:
@@ -520,11 +488,11 @@ def sessions_chart(workouts: list) -> None:
 
     if state.filter_ivl == "Intervals":
         filtered = [
-            r for r in filtered if r.get("workout_type") in INTERVAL_WORKOUT_TYPES
+            r for r in filtered if r["is_interval"]
         ]
     elif state.filter_ivl == "Continuous":
         filtered = [
-            r for r in filtered if r.get("workout_type") not in INTERVAL_WORKOUT_TYPES
+            r for r in filtered if not r["is_interval"]
         ]
 
 
@@ -670,9 +638,9 @@ def sessions_chart(workouts: list) -> None:
         in_window = [
             r
             for r in filtered
-            if target_start <= _date_to_ms(r.get("date", "")) <= target_end
+            if target_start <= r["date_ms"] <= target_end
         ]
-        in_window.sort(key=lambda r: r.get("date", ""), reverse=True)
+        in_window.sort(key=lambda r: r["date"], reverse=True)
         if in_window:
             with hd.box(padding=(2, 0, 0, 0), align="center"):
                 hd.h2(f"Workouts in View  ({len(in_window)})")

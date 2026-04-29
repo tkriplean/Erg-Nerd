@@ -58,16 +58,16 @@ Both distance events and time events are included.
 
 **Distance events** (e.g., 2000 m):
 ```python
-pace       = compute_pace(workout)          # seconds per 500 m
+pace       = workout["pace"]         # seconds per 500 m
 duration_s = pace * distance_m / 500        # total seconds
-watts      = compute_watts(pace)            # 2.80 × (500/pace)³
+watts      = workout["watts"]            # 2.80 × (500/pace)³
 ```
 
 **Time events** (e.g., 30-min piece):
 ```python
 duration_s = time_tenths / 10              # directly from the event definition
 pace       = duration_s * 500 / distance_m  # derived from distance covered
-watts      = compute_watts(pace)
+watts      = workout["watts"]
 ```
 
 A helper `compute_duration_s(workout)` will be added to `services/rowing_utils.py`

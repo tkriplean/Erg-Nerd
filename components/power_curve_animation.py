@@ -90,14 +90,11 @@ from services.rowing_utils import (
     apply_season_best_only,
     compute_duration_s,
     compute_lifetime_bests,
-    compute_pace,
     compute_pauls_constant,
     compute_watts,
-    get_season,
     loglog_fit,
-    parse_date,
     season_color,
-    workout_cat_key,
+    parse_date,
 )
 from services.formatters import fmt_split
 from services.critical_power_model import fit_critical_power
@@ -188,9 +185,9 @@ def compute_timeline_snapshot(
     cp_pb_list = []
     for w in apply_best_only(sim_wkts):
         dur = compute_duration_s(w)
-        pac = compute_pace(w)
-        if dur and pac:
-            cp_pb_list.append({"duration_s": dur, "watts": compute_watts(pac)})
+        if dur:
+            cp_pb_list.append({"duration_s": dur, "watts": w["watts"]})
+
     fit_key = str(
         sorted((round(p["duration_s"], 1), round(p["watts"], 1)) for p in cp_pb_list)
     )
@@ -258,17 +255,17 @@ def build_sb_annotations(
 
     annotations = []
     for w in featured_workouts:
-        dt = parse_date(w.get("date", ""))
+        dt = w["date_dt"]
         if dt == date.min:
             continue
         day = (dt - sim_start).days
         if day < 0:
             continue
-        pace = compute_pace(w)
-        cat = workout_cat_key(w)
+        pace = w["pace"]
+        cat = w["cat_key"]
         if pace is None or cat is None:
             continue
-        season = get_season(w.get("date", ""))
+        season = w["season"]
         etype, evalue = cat
         if etype == "dist":
             time_tenths = round(pace * 10 * evalue / 500)
@@ -343,7 +340,7 @@ def _bisect_date_desc(workouts: list, date_str: str) -> int:
     lo, hi = 0, len(workouts)
     while lo < hi:
         mid = (lo + hi) // 2
-        if (workouts[mid].get("date") or "")[:10] > date_str:
+        if (workouts[mid]["day"]) > date_str:
             lo = mid + 1
         else:
             hi = mid
@@ -441,7 +438,7 @@ def build_keyframes(
             t = w.get("time")
             if t:
                 return t / 10.0
-            p = compute_pace(w)
+            p = w["pace"]
             d = w.get("distance")
             if p and d:
                 return round(d * p / 500.0, 2)
@@ -452,19 +449,19 @@ def build_keyframes(
     manifest = []
 
     def _add_to_manifest(w, excluded: bool):
-        p = compute_pace(w)
+        p = w["pace"]
         d = w.get("distance")
         xv = _x_val(w)
-        ck = workout_cat_key(w)
+        ck = w["cat_key"]
         if p is None or d is None or xv is None or ck is None:
             return
-        dt = parse_date(w.get("date", ""))
+        dt = w["date_dt"]
         if dt < sim_start:
             return
         day = (dt - sim_start).days
         if day < 0 or day > total_days:
             return
-        season = get_season(w.get("date", ""))
+        season = w["season"]
         s_idx = season_idx_map.get(season, 0)
         etype, evalue = ck
         manifest.append(
@@ -474,7 +471,7 @@ def build_keyframes(
                 "cat_key_str": f"{etype}:{evalue}",
                 "x": xv,
                 "y_pace": round(p, 4),
-                "y_watts": round(compute_watts(p), 1),
+                "y_watts": round(w["watts"], 1),
                 "dist_m": d,
                 "event_line": ol_event_line(etype, evalue, p, d),
                 "date_label": dt.strftime("%b %d, %Y"),
@@ -486,7 +483,7 @@ def build_keyframes(
     for w in efforts_filtered_by_event:
         _add_to_manifest(w, excluded=False)
     for w in quality_efforts:
-        if workout_cat_key(w) in excluded_cats:
+        if w["cat_key"] in excluded_cats:
             _add_to_manifest(w, excluded=True)
 
     manifest.sort(key=lambda e: e["day"])
@@ -503,17 +500,17 @@ def build_keyframes(
     # respect to the PBs-at-that-point because future workouts leaked in).
     sorted_efforts_by_event = sorted(
         efforts_filtered_by_event,
-        key=lambda w: w.get("date", ""),
+        key=lambda w: w["date"],
         reverse=True,
     )
     sorted_featured = sorted(
         featured_efforts,
-        key=lambda w: w.get("date", ""),
+        key=lambda w: w["date"],
         reverse=True,
     )
     sorted_quality_efforts = sorted(
         quality_efforts,
-        key=lambda w: w.get("date", ""),
+        key=lambda w: w["date"],
         reverse=True,
     )
 
@@ -579,9 +576,7 @@ def build_keyframes(
         # + bundle_data assembly below.
         seen_dates = []
     else:
-        seen_dates = sorted(
-            {w.get("date", "")[:10] for w in sorted_featured if w.get("date")}
-        )
+        seen_dates = sorted({w["day"] for w in sorted_featured})
 
     for date_str in seen_dates:
         dt = parse_date(date_str)

@@ -49,10 +49,7 @@ from services.rowing_utils import (
     RANKED_TIMES,
     RANKED_DIST_SET,
     RANKED_TIME_SET,
-    get_season,
     apply_best_only,
-    compute_pace,
-    compute_watts,
     age_from_dob,
     is_30r20,
 )
@@ -264,7 +261,7 @@ def _race_stroke_graph(
     with_strokes: list = []
     without_strokes: list = []
     for w in sorted_racing_workouts:
-        raw = raw_by_id.get(str(w.get("id")), [])
+        raw = raw_by_id.get(str(w["id"]), [])
         if len(raw) > 20:
             with_strokes.append(w)
         else:
@@ -283,7 +280,7 @@ def _race_stroke_graph(
     # the real-stroke set.
     primary_wkt: dict | None = None
     if pb_id is not None:
-        primary_wkt = next((w for w in with_strokes if w.get("id") == pb_id), None)
+        primary_wkt = next((w for w in with_strokes if w["id"] == pb_id), None)
     if primary_wkt is None:
         first = sorted_racing_workouts[0]
         is_time_event = first.get("distance") not in RANKED_DIST_SET
@@ -296,25 +293,23 @@ def _race_stroke_graph(
                 default=with_strokes[0],
             )
 
-    primary_id = primary_wkt.get("id")
+    primary_id = primary_wkt["id"]
     primary_strokes = raw_by_id.get(str(primary_id), [])
-    compared_ids = tuple(w.get("id") for w in with_strokes if w.get("id") != primary_id)
+    compared_ids = tuple(w["id"] for w in with_strokes if w["id"] != primary_id)
     compare_results = {cid: raw_by_id.get(str(cid), []) for cid in compared_ids}
 
     # Season-colored per-id map — lines match their race lane color.
     color_of = {
-        w.get("id"): season_color(get_season(w.get("date", "")), fmt="hex")
-        for w in sorted_racing_workouts
+        w["id"]: season_color(w["season"], fmt="hex") for w in sorted_racing_workouts
     }
     label_of = {
-        w.get("id"): build_boat_label(w, sorted_racing_workouts)
+        w["id"]: build_boat_label(w, sorted_racing_workouts)
         for w in sorted_racing_workouts
     }
 
     # ── Controls row ─────────────────────────────────────────────────────
     has_hr_any = any(
-        any(s.get("hr") for s in raw_by_id.get(str(w.get("id")), []))
-        for w in with_strokes
+        any(s.get("hr") for s in raw_by_id.get(str(w["id"]), [])) for w in with_strokes
     )
 
     # ── Build config ─────────────────────────────────────────────────────
@@ -408,7 +403,7 @@ def _results_table(workouts: list, etype: str, pb_id: int | None) -> None:
         workouts,
         cols,
         paginate=False,
-        highlight=lambda w: w.get("id") == pb_id,
+        highlight=lambda w: w["id"] == pb_id,
     )
 
 
@@ -533,7 +528,7 @@ def race_page() -> None:
                 key=lambda w: w["distance"],
                 default=None,
             )
-        pb_id = pb.get("id") if pb else None
+        pb_id = pb["id"] if pb else None
 
     # ── Stroke fetch via unified concept2_sync.strokes_batch ─────────────────
     # Owner mode: one API fetch per render; public mode: synchronous disk
@@ -553,7 +548,7 @@ def race_page() -> None:
     # ── Sort race workouts for lane assignment ─────────────────────────────────
     # Stable "newest first" default; the JS plugin re-sorts on user toggle.
     sorted_racing_workouts = sorted(
-        racing_workouts, key=lambda w: w.get("date") or "", reverse=True
+        racing_workouts, key=lambda w: w["date"], reverse=True
     )
 
     # ── Build races payload ────────────────────────────────────────────────────

@@ -89,14 +89,11 @@ def _detect_and_repair_units(
     dist_tol = max(_DIST_TOL_ABS_M, int(total_dist * _DIST_TOL_FRAC))
     time_tol = max(_TIME_TOL_ABS_TENTHS, int(total_time * _TIME_TOL_FRAC))
     sum_discrepancy = (
-        abs(sum_dist - total_dist) > dist_tol
-        or abs(sum_time - total_time) > time_tol
+        abs(sum_dist - total_dist) > dist_tol or abs(sum_time - total_time) > time_tol
     )
 
     peer_spm_present = any(_spm_of(u) > 0 for u in new_units)
-    spm_anomaly_present = peer_spm_present and any(
-        not _spm_of(u) for u in new_units
-    )
+    spm_anomaly_present = peer_spm_present and any(not _spm_of(u) for u in new_units)
 
     if not sum_discrepancy and not spm_anomaly_present:
         return new_units, False
@@ -189,8 +186,7 @@ def _repair_intervals(workout: dict) -> dict:
         cleaned.append(iv)
 
     work_indices = [
-        i for i, iv in enumerate(cleaned)
-        if (iv.get("type") or "").lower() != "rest"
+        i for i, iv in enumerate(cleaned) if (iv.get("type") or "").lower() != "rest"
     ]
     work_ivs = [cleaned[i] for i in work_indices]
 

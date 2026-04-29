@@ -35,7 +35,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from services.rowing_utils import INTERVAL_WORKOUT_TYPES, compute_watts
+from services.rowing_utils import compute_watts
 from services.volume_bins import BIN_NAMES, classify_watts
 
 
@@ -263,7 +263,7 @@ def compute_workout_quality(
     if reference_pbs is None:
         return None
 
-    is_interval = workout.get("workout_type") in INTERVAL_WORKOUT_TYPES
+    is_interval = workout["is_interval"]
     per_category_energy: dict[str, float] = {cat: 0.0 for cat in reference_pbs}
     any_scorable = False
 

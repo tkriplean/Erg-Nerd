@@ -101,7 +101,7 @@ if not reference_watts_loader(all_workouts):
 # Per-workout, time-aware thresholds.  Cached by date within this render.
 th_cache = {}
 def _thresholds_for(w):
-    d = parse_date(w.get("date", ""))
+    d = w["date_dt"]
     if d not in th_cache:
         ref = get_reference_watts(d, all_workouts)
         th_cache[d] = compute_bin_thresholds(ref)

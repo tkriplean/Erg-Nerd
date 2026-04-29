@@ -42,13 +42,9 @@ from datetime import date
 from typing import Optional
 
 from services.rowing_utils import (
-    INTERVAL_WORKOUT_TYPES,
     PACE_MAX,
     PACE_MIN,
-    compute_pace,
     compute_watts,
-    parse_date,
-    season_from_date,
     watts_to_pace,
 )
 
@@ -245,7 +241,7 @@ def workout_bin_meters(workout: dict, thresholds: Optional[dict]) -> tuple:
     """
     bins = _empty_bins()
 
-    if workout.get("workout_type") in INTERVAL_WORKOUT_TYPES:
+    if workout["is_interval"]:
         # Rest distance → bin 0
         rest_dist = workout.get("rest_distance") or 0
         if rest_dist > 0:
@@ -265,7 +261,7 @@ def workout_bin_meters(workout: dict, thresholds: Optional[dict]) -> tuple:
     else:
         dist = workout.get("distance") or 0
         if dist > 0:
-            pace = compute_pace(workout)
+            pace = workout["pace"]
             if pace is not None and PACE_MIN <= pace <= PACE_MAX:
                 bins[classify_watts(compute_watts(pace), thresholds)] += dist
 
@@ -324,7 +320,7 @@ def workout_power_spread(workout: dict, all_workouts: list) -> Optional[float]:
     # doesn't import this module today but might in the future.
     from services.reference_watts import get_reference_watts
 
-    d = parse_date(workout.get("date", ""))
+    d = workout.get("date_dt")
     if d == date.min:
         return None
     ref = get_reference_watts(d, all_workouts)
@@ -369,7 +365,7 @@ def workout_quality_bin_meters(
     """
     bins = [0.0] * N_QUALITY_BINS
 
-    is_interval = workout.get("workout_type") in INTERVAL_WORKOUT_TYPES
+    is_interval = workout["is_interval"]
 
     if is_interval:
         rest_dist = workout.get("rest_distance") or 0
@@ -516,16 +512,13 @@ def aggregate_workouts(
         bucket[key]["total"] += meters
 
     for w in all_workouts:
-        date_str = w.get("date", "")
-        if not date_str:
-            continue
-        dt = parse_date(date_str)
+        dt = w["date_dt"]
         if dt == date.min:
             continue
 
         wk = _week_key(dt)
         mo = _month_key(dt)
-        sea = season_from_date(dt)
+        sea = w["season"]
 
         for bin_idx, meters in enumerate(_effective_bin_fn(w)):
             if meters > 0:

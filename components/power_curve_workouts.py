@@ -35,14 +35,9 @@ from services.rowing_utils import (
     apply_quality_filters,
     apply_season_best_only,
     compute_featured_workouts,
-    compute_pace,
-    compute_watts,
-    get_season,
     is_rankable_noninterval,
-    parse_date,
     season_color,
     seasons_from,
-    workout_cat_key,
 )
 
 
@@ -109,7 +104,7 @@ def build_workout_view(raw_workouts: list, filters: FilterSpec) -> WorkoutView:
         for w in raw_workouts
         if (filters.machine == "All" or w.get("type") == filters.machine)
         and is_rankable_noninterval(w)
-        and get_season(w.get("date", "")) not in excl
+        and w["season"] not in excl
     ]
     quality = apply_quality_filters(quality)
     all_seasons = tuple(seasons_from(quality))
@@ -179,12 +174,12 @@ def build_workouts_prop(
     season_idx_map = {s: i for i, s in enumerate(sorted_seasons)}
     out: list = []
     for w in workouts_list:
-        p = compute_pace(w)
+        p = w["pace"]
         d = w.get("distance")
-        ck = workout_cat_key(w)
+        ck = w["cat_key"]
         if p is None or d is None or ck is None:
             continue
-        dt = parse_date(w.get("date", ""))
+        dt = w["date_dt"]
         if dt.toordinal() < sim_start.toordinal():
             continue
         day = (dt - sim_start).days
@@ -196,12 +191,12 @@ def build_workouts_prop(
         out.append(
             {
                 "day": day,
-                "season_idx": season_idx_map.get(get_season(w.get("date", "")), 0),
+                "season_idx": season_idx_map.get(w["season"], 0),
                 "cat_key": f"{etype}:{evalue}",
                 "dist_m": d,
                 "time_s": time_s,
                 "y_pace": round(p, 4),
-                "y_watts": round(compute_watts(p), 1),
+                "y_watts": round(w["watts"], 1),
                 "date_label": dt.strftime("%b %d, %Y"),
                 "wtype": w.get("workout_type", ""),
             }

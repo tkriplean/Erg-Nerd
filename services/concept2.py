@@ -633,10 +633,9 @@ def extract_c2_profile(user_data: dict) -> dict:
     else:
         weight_class = ""
 
-    display_name = (
-        (user_data.get("first_name") or "").strip()
-        or (user_data.get("username") or "").strip()
-    )
+    display_name = (user_data.get("first_name") or "").strip() or (
+        user_data.get("username") or ""
+    ).strip()
 
     return {
         "gender": gender,

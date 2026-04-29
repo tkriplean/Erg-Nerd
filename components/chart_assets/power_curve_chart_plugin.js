@@ -2099,7 +2099,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
         if (!cachedBundle || cachedBundle.bundle_key !== propValue.bundle_key) {
           // Preserve the current animation position so that:
           //  a) settings changes (predictor, theme, etc.) resume from where we left off
-          //  b) a user seek before the first Play press is honoured on bundle arrival
+          //  b) a user seek before the first Play press is honored on bundle arrival
           // Only fall back to start_day when currentDay is still at the
           // default initial value (0) and no prior bundle has been loaded.
           const resumeDay = (cachedBundle || currentDay > 0) ? currentDay : null;
@@ -2111,7 +2111,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
           }
         }
         // Always apply the current sim_command after receiving a bundle so that
-        // "play" is honoured even if the command prop didn't change this cycle.
+        // "play" is honored even if the command prop didn't change this cycle.
         handleSimCommand(props.sim_command);
       } else {
         // Bundle cleared (identity_key change in Python — e.g. user toggled

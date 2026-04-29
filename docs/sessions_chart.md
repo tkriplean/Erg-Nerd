@@ -160,9 +160,6 @@ Only **non-interval** sessions at a **ranked event** (distance or duration) are
 eligible.  Ranked events are defined in `services/rowing_utils.py` as
 `RANKED_DIST_SET` and `RANKED_TIME_SET`.
 
-A "season" is determined by `get_season(date_str)` from the same module; seasons
-run roughly May–April (the Concept2 logbook season).
-
 For each `(season, event)` pair the fastest pace wins. The function returns a
 `set` of workout IDs; the JS plugin receives this information as a boolean `sb`
 field on each point dict.
@@ -581,5 +578,5 @@ the totals footer.
 | `components/sessions_chart_plugin.py` | HyperDiv `Plugin` subclass — prop definitions, JS asset registration |
 | `components/rowing_chart_assets/sessions_chart.js` | Chart.js plugin, brush logic, hatch pattern generator, tooltip callbacks |
 | `components/sessions_page.py` | Tab entry point; loads workouts, calls `sessions_chart()` |
-| `services/rowing_utils.py` | `INTERVAL_WORKOUT_TYPES`, `RANKED_DIST_SET`, `RANKED_TIME_SET`, `compute_pace`, `get_season` |
+| `services/rowing_utils.py` | `INTERVAL_WORKOUT_TYPES`, `RANKED_DIST_SET`, `RANKED_TIME_SET`, `compute_pace` |
 | `services/critical_power_model.py` | `fit_critical_power()`, `critical_power_model()` |

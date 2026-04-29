@@ -39,7 +39,7 @@ from components.concept2_sync import get_all_workouts
 from components.reference_watts_loader import reference_watts_loader
 from components.app_context import AppContext, your
 from services.formatters import fmt_meters
-from services.rowing_utils import get_season, profile_complete
+from services.rowing_utils import profile_complete
 from services.threshold_cache import make_thresholds_resolver
 from services.workout_enrichment import attach_quality_only
 

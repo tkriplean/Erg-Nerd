@@ -34,8 +34,6 @@ from services.rowing_utils import (
     PACE_MIN,
     PACE_MAX,
     apply_best_only,
-    compute_pace,
-    compute_watts,
     watts_to_pace,
     pauls_law_pace,
     loglog_fit,
@@ -485,9 +483,8 @@ def _cp_datasets(
             # components have equal watts at t_star, so this is the y where the
             # two component curves visually intersect.
             xo_t = xo["t_seconds"]
-            xo_component_watts = (
-                critical_power_params["Pow1"]
-                / (1.0 + xo_t / critical_power_params["tau1"])
+            xo_component_watts = critical_power_params["Pow1"] / (
+                1.0 + xo_t / critical_power_params["tau1"]
             )
             xo_dot_y = (
                 round(xo_component_watts, 2)

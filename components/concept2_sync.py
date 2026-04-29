@@ -54,12 +54,13 @@ from services.local_storage_compression import (
     decompress_strokes_cache,
 )
 from services.data_integrity import normalize_workouts_dict
+from services.workout_enrichment import enrich_all
 from services.concept2_records import (
     age_category as wr_age_category,
     weight_class_str as wr_weight_class_str,
     fetch_wr_data,
 )
-from services.rowing_utils import age_from_dob, derive_filter_metadata, get_season
+from services.rowing_utils import age_from_dob, derive_filter_metadata
 
 from services.global_state import GlobalFilters
 from components.app_context import AppContext
@@ -86,9 +87,7 @@ def get_all_workouts():
 
     if excluded_seasons:
         all_workouts = [
-            w
-            for w in all_workouts
-            if get_season(w.get("date", "")) not in set(excluded_seasons)
+            w for w in all_workouts if w["season"] not in set(excluded_seasons)
         ]
     if machine != "All":
         all_workouts = [w for w in all_workouts if w.get("type") == machine]
@@ -177,27 +176,41 @@ def concept2_sync(client) -> None:
         profile = ctx.profile or {}
         max_hr = profile.get("max_heart_rate")
         workouts_dict = normalize_workouts_dict(workouts_dict, max_hr=max_hr)
-        sorted_workouts = sorted(
-            workouts_dict.values(), key=lambda r: r.get("date", ""), reverse=True
-        )
+
+        # Persist + public mirror BEFORE enrichment so the canonical
+        # normalized shape is what reaches localStorage and the public
+        # profile directory.  Enrichment fields are derived and re-applied
+        # on every load.
         if not sync_state.written:
             if workouts_dict != sync_state.initial_workouts:
-                # Write real data only — synthetic workouts must never reach localStorage.
                 hd.local_storage.set_item("workouts", compress_workouts(workouts_dict))
             sync_state.written = True
 
-        # Push-on-sync: if the user has opted in (profile.public=True), mirror
-        # the fresh profile + workouts to the server-side public-profile
-        # directory. Runs once per component lifetime; failures log but never
-        # break the dashboard. Skipped in synthetic mode (no real workouts).
         if not sync_state.published and not SYNTHETIC_MODE and ctx.profile:
             _maybe_push_on_sync(client, sync_state, workouts_dict)
+
+        # Stage-2 enrichment: attach pace/watts/season/etc. once before
+        # workouts reach AppContext.  Mutates in-place.
+        enrich_all(workouts_dict)
+        sorted_workouts = sorted(
+            workouts_dict.values(), key=lambda r: r.get("date", ""), reverse=True
+        )
 
         if SYNTHETIC_MODE:
             if sync_state.synth_cache is None:
                 from services.synthetic_data import augment_with_synthetic
 
-                sync_state.synth_cache = augment_with_synthetic(workouts_dict)
+                synth_dict, _ = augment_with_synthetic(workouts_dict)
+                # augment_with_synthetic returns real workouts (already
+                # enriched) plus newly-built synthetic workouts (not).
+                # enrich_for_storage is idempotent, so a second pass is safe.
+                enrich_all(synth_dict)
+                synth_sorted = sorted(
+                    synth_dict.values(),
+                    key=lambda r: r.get("date", ""),
+                    reverse=True,
+                )
+                sync_state.synth_cache = (synth_dict, synth_sorted)
             ctx.workouts_dict, ctx.sorted_workouts = sync_state.synth_cache
             ctx.all_seasons, ctx.all_machines = derive_filter_metadata(
                 ctx.workouts_dict
@@ -470,7 +483,7 @@ def strokes_for(workout: dict) -> dict:
     - ``loaded``    : ``strokes`` is a list (may be empty if API returned none).
     - ``error``     : the API fetch failed; ``error`` carries the message.
     """
-    wid = workout.get("id")
+    wid = workout["id"]
     if wid is None or not workout.get("stroke_data"):
         return {"strokes": None, "status": "no_strokes", "error": None}
 
@@ -553,9 +566,7 @@ def strokes_batch(workouts: list) -> dict:
     batch_state = hd.state(batch_key="", queue=(), total=0, done=0, by_id_snapshot={})
 
     ctx = AppContext()
-    ids = tuple(
-        w.get("id") for w in workouts if w.get("id") and w.get("stroke_data", False)
-    )
+    ids = tuple(w["id"] for w in workouts if w["id"] and w.get("stroke_data", False))
     batch_key = str(ids)
 
     if ctx.mode == "public":

@@ -101,14 +101,12 @@ import statistics
 
 import hyperdiv as hd
 
-from services.rowing_utils import INTERVAL_WORKOUT_TYPES, get_season
 from components.concept2_sync import get_all_workouts
 from components.reference_watts_loader import reference_watts_loader
 from components.app_context import your
 from services.interval_utils import (
     avg_workpace_tenths,
     avg_work_spm,
-    get_rep_count,
     interval_structure_key,
 )
 from services.threshold_cache import make_thresholds_resolver
@@ -636,16 +634,16 @@ def _enrich_workouts(
     """
     result = []
     for r in workouts:
-        if r.get("workout_type") not in INTERVAL_WORKOUT_TYPES:
+        if not r["is_interval"]:
             continue
         # Skip single-rep sessions (e.g. 1×500m / 3'r).  Keep workouts with
         # multiple intervals that share no rest — they form legitimate multi-block
         # sessions even though every rest_time == 0.
-        reps = get_rep_count(r)
+        reps = r["reps"]
         if reps == 1:
             continue
 
-        wid = r.get("id")
+        wid = r["id"]
         cache_key = (wid, max_hr) if wid is not None else None
         if cache_key is not None and cache_key in _workout_enrich_cache:
             result.append(_workout_enrich_cache[cache_key])
@@ -679,7 +677,7 @@ def _enrich_workouts(
                 _workout_enrich_cache.clear()
             _workout_enrich_cache[cache_key] = r
         result.append(r)
-    result.sort(key=lambda x: x.get("date", ""), reverse=True)
+    result.sort(key=lambda x: x["date"], reverse=True)
     return result
 
 
@@ -1041,8 +1039,8 @@ def intervals_page() -> None:
             "date",
             "Date",
             "10rem",
-            render_value=lambda w: fmt_date(w.get("date", "")),
-            sort_value=lambda w: w.get("date", ""),
+            render_value=lambda w: fmt_date(w["date"]),
+            sort_value=lambda w: w["date"],
         ),
         ColumnDef(
             "reps",

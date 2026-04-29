@@ -196,7 +196,13 @@ def profile_complete(profile: dict) -> bool:
 
 
 def compute_pace(r: dict) -> Optional[float]:
-    """Return pace in seconds per 500m, or None if either field is missing."""
+    """Return pace in seconds per 500m, or None if either field is missing.
+
+    Workouts that have passed Stage-2 enrichment carry a ``pace`` field
+    already; honor it so callers in hot loops are essentially free.
+    """
+    if "pace" in r:
+        return r["pace"]
     t, d = r.get("time", None), r.get("distance", None)
     if not t or not d:
         return None
@@ -214,8 +220,14 @@ def watts_to_pace(watts: float) -> float:
 
 
 def workout_cat_key(r: dict) -> Optional[tuple]:
-    """Category key: ('dist', meters) or ('time', tenths), or None."""
-    dist, time = r.get("distance"), r.get("time")
+    """Category key: ('dist', meters) or ('time', tenths), or None.
+
+    Workouts that have passed Stage-2 enrichment carry a ``cat_key`` field
+    already; honor it so hot loops avoid re-classifying.
+    """
+    if "cat_key" in r:
+        return r["cat_key"]
+    dist, time = r["distance"], r["time"]
     if dist in RANKED_DIST_SET:
         return ("dist", dist)
     if time in RANKED_TIME_SET:
@@ -245,27 +257,27 @@ def apply_best_only(results: list, by_season: bool = False) -> list:
     """
     best: dict = {}
     for r in results:
-        season = get_season(r.get("date", "")) if by_season else None
-        dist, time = r.get("distance"), r.get("time")
+        season = r.get("season") if by_season else None
+        dist, time = r["distance"], r["time"]
         if dist in RANKED_DIST_SET:
-            key = (season, "dist", dist) if by_season else ("dist", dist)
+            key = (season, "dist", dist) if by_season else r["cat_key"]
             prev = best.get(key)
             if prev is None or (
                 r.get("time", float("inf")) < prev.get("time", float("inf"))
             ):
                 best[key] = r
         elif time in RANKED_TIME_SET:
-            key = (season, "time", time) if by_season else ("time", time)
+            key = (season, "time", time) if by_season else r["cat_key"]
             prev = best.get(key)
-            if prev is None or (r.get("distance") or 0) > (prev.get("distance") or 0):
+            if prev is None or (r["distance"] or 0) > (prev.get("distance") or 0):
                 best[key] = r
 
     dist_order = {d: i for i, (d, _) in enumerate(RANKED_DISTANCES)}
     time_order = {t: i for i, (t, _) in enumerate(RANKED_TIMES)}
 
     def _sort_key(r):
-        dist, time = r.get("distance"), r.get("time")
-        season = get_season(r.get("date", "")) if by_season else None
+        dist, time = r["distance"], r["time"]
+        season = r.get("season") if by_season else None
         if dist in RANKED_DIST_SET:
             return (0, dist_order.get(dist, 99)) + ((season,) if by_season else ())
         return (1, time_order.get(time, 99)) + ((season,) if by_season else ())
@@ -298,11 +310,10 @@ def compute_featured_workouts(workouts: list, best_filter: str) -> list:
     featured: list = []
 
     for w in reversed(workouts):  # scan oldest → newest
-        pace = compute_pace(w)
-        cat = workout_cat_key(w)
+        pace, cat = w["pace"], w["cat_key"]
         if pace is None or cat is None:
             continue
-        key = (get_season(w.get("date", "")), cat) if effective == "SBs" else cat
+        key = (w["season"], cat) if effective == "SBs" else cat
         if key not in running_best or pace < running_best[key]:
             running_best[key] = pace
             featured.append(w)
@@ -324,13 +335,13 @@ def compute_lifetime_bests(workouts: list) -> tuple[dict, dict]:
     lifetime_best: dict = {}
     lifetime_best_anchor: dict = {}
     for w in workouts:
-        pace = compute_pace(w)
+        pace = w["pace"]
         if pace is None or pace < PACE_MIN or pace > PACE_MAX:
             continue
         dist = w.get("distance")
         if not dist:
             continue
-        cat = workout_cat_key(w)
+        cat = w["cat_key"]
         if cat is None:
             continue
         if cat not in lifetime_best or pace < lifetime_best[cat]:
@@ -452,19 +463,16 @@ def loglog_predict_pace(slope: float, intercept: float, dist_m: float) -> float:
 
 def is_rankable_noninterval(r: dict) -> bool:
     """True if the workout matches a ranked distance or time and is not an interval."""
-    if r.get("workout_type") in INTERVAL_WORKOUT_TYPES:
+    if r["is_interval"]:
         return False
-    dist = r.get("distance")
-    time = r.get("time")
+    dist = r["distance"]
+    time = r["time"]
     return dist in RANKED_DIST_SET or time in RANKED_TIME_SET
 
 
 def seasons_from(results: list) -> list:
     """Sorted list of seasons (newest first) present in the given results."""
-    return sorted(
-        {get_season(r["date"]) for r in results if r.get("date")},
-        reverse=True,
-    )
+    return sorted({r["season"] for r in results}, reverse=True)
 
 
 def derive_filter_metadata(workouts_dict: dict) -> tuple[list[str], list[str]]:
@@ -474,7 +482,7 @@ def derive_filter_metadata(workouts_dict: dict) -> tuple[list[str], list[str]]:
     season_set: set[str] = set()
     machine_set: set[str] = set()
     for w in workouts_dict.values():
-        s = get_season(w.get("date", ""))
+        s = w["season"]
         if s != "Unknown":
             season_set.add(s)
         mt = w.get("type", "rower")
@@ -525,60 +533,63 @@ def apply_quality_filters(workouts: list) -> list:
          workout if any longer-event performance within the window is more than
          ADJACENT_FILTER_PCT% faster (by pace).
 
+    Workouts are expected to be Stage-2 enriched (``pace``, ``cat_key``,
+    ``date_dt`` populated).  Unmeasured workouts are filtered upstream by the
+    integrity-quarantine pass; this function defensively skips any with a
+    None pace, missing cat_key, or invalid date.
+
     Returns the filtered list.
     """
     # 1) Lifetime-PB quality filter
-    _cat_pb: dict = {}
-    for _w in workouts:
-        _p = compute_pace(_w)
-        _c = workout_cat_key(_w)
-        if _p is not None and _c is not None:
-            if _c not in _cat_pb or _p < _cat_pb[_c]:
-                _cat_pb[_c] = _p
-    _pb_thresh = 1.0 + PB_QUALITY_PCT / 100.0
+    cat_pb: dict = {}
+    for w in workouts:
+        p, c = w["pace"], w["cat_key"]
+        if p is not None and c is not None:
+            if c not in cat_pb or p < cat_pb[c]:
+                cat_pb[c] = p
+    pb_thresh = 1.0 + PB_QUALITY_PCT / 100.0
     workouts = [
         w
         for w in workouts
-        if (c := workout_cat_key(w)) is not None
-        and (p := compute_pace(w)) is not None
-        and p <= _cat_pb.get(c, float("inf")) * _pb_thresh
+        if w["cat_key"] is not None
+        and w["pace"] is not None
+        and w["pace"] <= cat_pb.get(w["cat_key"], float("inf")) * pb_thresh
     ]
 
     # 2) Rolling-window season-best filter
-    _sb_thresh = 1.0 + SB_QUALITY_PCT / 100.0
-    _event_timeline: list = []  # (date, cat_key, pace)
-    for _w in workouts:
-        _p = compute_pace(_w)
-        _c = workout_cat_key(_w)
-        _dt = parse_date(_w.get("date", ""))
-        if _p is not None and _c is not None and _dt != date.min:
-            _event_timeline.append((_dt, _c, _p))
-
+    sb_thresh = 1.0 + SB_QUALITY_PCT / 100.0
+    event_timeline = [
+        (w["date_dt"], w["cat_key"], w["pace"])
+        for w in workouts
+        if w["pace"] is not None
+        and w["cat_key"] is not None
+        and w["date_dt"] != date.min
+    ]
     workouts = [
         w
         for w in workouts
-        if (c := workout_cat_key(w)) is not None
-        and (p := compute_pace(w)) is not None
-        and (dt := parse_date(w.get("date", ""))) != date.min
-        and p <= _window_best(_event_timeline, dt, c) * _sb_thresh
+        if w["cat_key"] is not None
+        and w["pace"] is not None
+        and w["date_dt"] != date.min
+        and w["pace"]
+        <= _window_best(event_timeline, w["date_dt"], w["cat_key"]) * sb_thresh
     ]
 
     # 3) Rolling-window cross-event domination filter
-    _dist_timeline: list = []  # (date, effective_dist, pace)
-    for _w in workouts:
-        _p = compute_pace(_w)
-        _d = _w.get("distance")
-        _dt = parse_date(_w.get("date", ""))
-        if _p is not None and _d and _dt != date.min:
-            _dist_timeline.append((_dt, _d, _p))
-
+    dist_timeline = [
+        (w["date_dt"], w["distance"], w["pace"])
+        for w in workouts
+        if w["pace"] is not None and w.get("distance") and w["date_dt"] != date.min
+    ]
     workouts = [
         w
         for w in workouts
-        if (p := compute_pace(w)) is not None
-        and (d := w.get("distance"))
-        and (dt := parse_date(w.get("date", ""))) != date.min
-        and not _dominated_by_longer(_dist_timeline, dt, d, p)
+        if w["pace"] is not None
+        and w.get("distance")
+        and w["date_dt"] != date.min
+        and not _dominated_by_longer(
+            dist_timeline, w["date_dt"], w["distance"], w["pace"]
+        )
     ]
 
     return workouts
@@ -614,7 +625,7 @@ def workouts_before_date(
     date_str = timeline_date.isoformat()
 
     # 1. Date gate
-    in_time = [w for w in rankable_efforts if (w.get("date") or "")[:10] <= date_str]
+    in_time = [w for w in rankable_efforts if w["day"] <= date_str]
 
     # 2. Event filter
     in_time = [
@@ -624,9 +635,7 @@ def workouts_before_date(
     ]
 
     # 3. Season filter
-    in_time = [
-        w for w in in_time if get_season(w.get("date", "")) not in excluded_seasons
-    ]
+    in_time = [w for w in in_time if w["season"] not in excluded_seasons]
 
     # 4. best_filter
     if best_filter == "PBs":

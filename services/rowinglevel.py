@@ -37,8 +37,6 @@ from bs4 import BeautifulSoup
 
 from services.rowing_utils import (
     profile_complete,
-    compute_pace,
-    workout_cat_key,
     age_from_dob,
 )
 
@@ -301,8 +299,8 @@ def fetch_rowinglevel(state, profile: dict, chart_workouts: list) -> dict:
     lbest_anchor: dict = {}
     lbest_dates: dict = {}
     for w in chart_workouts:
-        p = compute_pace(w)
-        c = workout_cat_key(w)
+        p = w["pace"]
+        c = w["cat_key"]
         d = w.get("distance")
         if p is None or c is None or not d:
             continue

@@ -16,15 +16,9 @@ Y-axis is pace (sec/500m, inverted) or watts.
 
 from __future__ import annotations
 
-import datetime as _dt
 from typing import Optional
 
-from services.rowing_utils import (
-    compute_pace,
-    compute_watts,
-    get_season,
-    season_color,
-)
+from services.rowing_utils import season_color
 
 
 # ── JS callback strings ──────────────────────────────────────────────────────
@@ -44,7 +38,7 @@ _DATE_TICK_JS = (
     "var d=new Date(v);"
     "var months=['Jan','Feb','Mar','Apr','May','Jun',"
     "'Jul','Aug','Sep','Oct','Nov','Dec'];"
-    "return months[d.getUTCMonth()]+\" '\"+String(d.getUTCFullYear()).slice(-2);"
+    'return months[d.getUTCMonth()]+" \'"+String(d.getUTCFullYear()).slice(-2);'
     "}"
 )
 
@@ -68,22 +62,6 @@ _WATTS_TOOLTIP_JS = (
     "return date+': '+Math.round(raw.y)+' W';"
     "}"
 )
-
-
-def _parse_date_ms(date_str: str) -> Optional[int]:
-    """Parse a Concept2 ISO date string to epoch milliseconds (UTC)."""
-    if not date_str:
-        return None
-    try:
-        dt = _dt.datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-    except ValueError:
-        try:
-            dt = _dt.datetime.fromisoformat(date_str[:10])
-        except ValueError:
-            return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=_dt.timezone.utc)
-    return int(dt.timestamp() * 1000)
 
 
 def build_race_scatter_config(
@@ -112,16 +90,11 @@ def build_race_scatter_config(
     border_widths: list[float] = []
 
     for w in racing_workouts:
-        pace = compute_pace(w)
-        if pace is None:
+        if w["pace"] is None or not w["date_ms"]:
             continue
-        x_ms = _parse_date_ms(w.get("date") or "")
-        if x_ms is None:
-            continue
-        y = compute_watts(pace) if show_watts else pace
-        points.append({"x": x_ms, "y": y})
-        colors.append(season_color(get_season(w.get("date", "")), fmt="hex"))
-        is_pb = pb_id is not None and w.get("id") == pb_id
+        points.append({"x": w["date_ms"], "y": w["watts"] if show_watts else w["pace"]})
+        colors.append(season_color(w["season"], fmt="hex"))
+        is_pb = pb_id is not None and w["id"] == pb_id
         radii.append(6 if is_pb else 4)
         borders.append("#ffffff" if is_pb else "rgba(0,0,0,0)")
         border_widths.append(2 if is_pb else 0)

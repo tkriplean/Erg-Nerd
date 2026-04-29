@@ -90,7 +90,6 @@ SEASONS
 
   Format: "YYYY-YY"  e.g. "2024-25", spanning May 1 -> Apr 30.
   all_seasons: sorted newest-first (seasons_from uses sorted(..., reverse=True)).
-  Use services/rowing_utils.py:get_season() to compute from an ISO date string.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CHART / PREDICTION
@@ -123,7 +122,6 @@ import hyperdiv as hd
 from services.rowinglevel import fetch_all_pb_predictions
 from services.rowing_utils import (
     apply_best_only,
-    compute_pace,
     RANKED_DISTANCES,
     RANKED_TIMES,
     compute_watts,
@@ -658,12 +656,12 @@ def compute_axis_bounds(
     bests = apply_best_only(quality_efforts)
     if not bests:
         return None, None
-    bp = [p for w in bests if (p := compute_pace(w)) and 60 < p < 400]
+    bp = [p for w in bests if (p := w["pace"]) and 60 < p < 400]
     if use_duration:
         bx = [
             w.get("distance") * p / 500
             for w in bests
-            if w.get("distance") and (p := compute_pace(w)) and 60 < p < 400
+            if w.get("distance") and (p := w["pace"]) and 60 < p < 400
         ]
     else:
         bx = [w.get("distance") for w in bests if w.get("distance")]

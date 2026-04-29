@@ -25,7 +25,6 @@ from services.volume_bins import (
     Z2_BINS,
     Z3_BINS,
 )
-from services.rowing_utils import get_season
 import hyperdiv as hd
 
 # ---------------------------------------------------------------------------

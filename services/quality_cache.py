@@ -41,7 +41,7 @@ def get_or_compute_quality(
     Returns the same shape as :func:`compute_workout_quality`: a dict with
     ``score``/``category``/``per_category_energy``, or ``None``.
     """
-    wid = workout.get("id")
+    wid = workout["id"]
     cache_key = (wid, input_hash) if wid is not None else None
 
     if cache_key is not None:

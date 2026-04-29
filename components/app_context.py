@@ -332,6 +332,7 @@ def populate_public(user_id: str) -> bool:
         load_public_workouts,
     )
     from services.rowing_utils import derive_filter_metadata
+    from services.workout_enrichment import enrich_all
 
     if not pp_exists(user_id):
         return False
@@ -343,8 +344,11 @@ def populate_public(user_id: str) -> bool:
     workouts_dict = load_public_workouts(user_id)
     if profile is None or workouts_dict is None:
         return False
+    # Stage-2 enrichment matches the owner-mode pipeline so consumers can
+    # rely on pace/watts/season/etc. being present regardless of mode.
+    enrich_all(workouts_dict)
     sorted_workouts = sorted(
-        workouts_dict.values(), key=lambda w: w.get("date", ""), reverse=True
+        workouts_dict.values(), key=lambda w: w["date"], reverse=True
     )
     ctx.mode = "public"
     ctx.user_id = uid

@@ -51,17 +51,13 @@ from services.rowing_utils import (
     age_on_date,
     apply_best_only,
     apply_season_best_only,
-    compute_pace,
     compute_watts,
-    get_season,
-    parse_date,
     profile_complete,
     seasons_from,
     is_rankable_noninterval,
     apply_quality_filters,
     SEASON_PALETTE,
     season_color,
-    workout_cat_key,
 )
 from services.formatters import fmt_split, format_time, fmt_distance
 from services.concept2_records import (
@@ -266,7 +262,7 @@ def _qualifying_performances(raw_workouts: list, *, best_filter: str) -> list:
     quality = [w for w in raw_workouts if is_rankable_noninterval(w)]
     quality = apply_quality_filters(quality)
     # Keep only rows whose (etype, evalue) is in the ranked set.
-    ranked = [w for w in quality if workout_cat_key(w) is not None]
+    ranked = [w for w in quality if w["cat_key"] is not None]
     if best_filter == "PBs":
         return apply_best_only(ranked)
     return apply_season_best_only(ranked)
@@ -299,14 +295,13 @@ def _build_rows(
         load_k = 0
     needs_entries = state.ranking_focus in ("c2_age_matched", "c2_age_group")
 
-    print("BUILDING ROWS")
     rows: list[dict] = []
     for w in qualifying:
-        ck = workout_cat_key(w)
+        ck = w["cat_key"]
         if ck is None:
             continue
         etype, evalue = ck
-        d = parse_date(w.get("date", ""))
+        d = w["date_dt"]
         age = age_on_date(dob, d) if dob else age_from_dob(dob)
         if age <= 0:
             continue
@@ -345,8 +340,8 @@ def _build_rows(
                 entries = []
             indices_cache[cache_key] = entries
 
-        pace = compute_pace(w)
-        watts = compute_watts(pace) if pace else None
+        pace = w["pace"]
+        watts = w["watts"]
 
         row = {
             "id": row_id,
@@ -356,7 +351,7 @@ def _build_rows(
             "event_label": _event_label(etype, evalue),
             "event_key": ev_key,
             "date_label": d.strftime("%b %d, %Y") if d.toordinal() > 1 else "",
-            "date_iso": w.get("date", ""),
+            "date_iso": w["date"],
             "age": age,
             "age_band_canonical": age_category(age),
             "age_band_rankings": rankings_age_band(age),
@@ -365,7 +360,7 @@ def _build_rows(
             "value_tenths": value_tenths,
             "pace_tenths": int(round(pace * 10)) if pace else None,
             "watts": watts,
-            "season": get_season(w.get("date", "")),
+            "season": w["season"],
             "entries": entries,
         }
 

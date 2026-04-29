@@ -19,7 +19,6 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from services.reference_watts import _reference_watts_from_index, resolve_index
-from services.rowing_utils import parse_date
 from services.volume_bins import compute_bin_thresholds
 from services.workout_quality import _build_reference_pbs
 
@@ -44,7 +43,7 @@ def make_thresholds_resolver(
     index = resolve_index(all_workouts)
 
     def _resolve(workout: dict):
-        d = parse_date(workout.get("date", ""))
+        d = workout["date_dt"]
         if d not in cache:
             ref = _reference_watts_from_index(d, index, all_workouts)
             thresholds = compute_bin_thresholds(ref)

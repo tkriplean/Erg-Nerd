@@ -19,7 +19,7 @@ Exported:
 
 from datetime import datetime
 
-from services.rowing_utils import compute_pace, compute_watts
+from services.rowing_utils import compute_watts
 
 # ---------------------------------------------------------------------------
 # Machine type labels
@@ -188,7 +188,7 @@ def machine_label(type_str: str) -> str:
 
 
 def fmt_watts(r: dict) -> str:
-    pace = compute_pace(r)
-    if pace is None:
+    watts = r["watts"]
+    if watts is None:
         return "—"
-    return str(round(compute_watts(pace)))
+    return str(round(watts))

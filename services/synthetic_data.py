@@ -37,7 +37,6 @@ from services.rowing_utils import (
     INTERVAL_WORKOUT_TYPES,
     RANKED_DIST_SET,
     get_season,
-    compute_pace,
 )
 
 # ---------------------------------------------------------------------------
@@ -153,7 +152,7 @@ def _extract_base_pace(real_workouts_dict: dict) -> float:
         d = w.get("distance", 0)
         if d not in RANKED_DIST_SET:
             continue
-        p = compute_pace(w)
+        p = w["pace"]
         if p is None:
             continue
         if d not in best or p < best[d]:
@@ -441,9 +440,9 @@ def augment_with_synthetic(real_workouts_dict: dict) -> tuple[dict, list]:
     base_pace = _extract_base_pace(real_workouts_dict)
     cur_season = _current_season()
 
-    real_seasons: set[str] = {
-        get_season(w.get("date", "")) for w in real_workouts_dict.values()
-    } - {"Unknown"}
+    real_seasons: set[str] = {w["season"] for w in real_workouts_dict.values()} - {
+        "Unknown"
+    }
 
     target_seasons = _compute_target_seasons(25)
     synthetic: dict = {}

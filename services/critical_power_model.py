@@ -35,7 +35,6 @@ from services.rowing_utils import (
     PACE_MAX,
     RANKED_DISTANCES,
     RANKED_TIMES,
-    compute_watts,
     watts_to_pace,
 )
 

@@ -42,7 +42,7 @@ import math
 from datetime import datetime
 from typing import Optional
 
-from services.rowing_utils import compute_pace, season_color, get_season
+from services.rowing_utils import season_color
 
 
 # ---------------------------------------------------------------------------
@@ -78,11 +78,7 @@ def build_boat_label(workout: dict, all_event_workouts: list[dict]) -> str:
 
     Format: "Jan. 26th, 2019"
     """
-    date_str = workout.get("date", "")
-    try:
-        dt = datetime.fromisoformat(date_str[:10])
-    except Exception:
-        return str(workout.get("id"))
+    dt = workout["date_dt"]
 
     mon = _MONTH_ABBR_LONG[dt.month - 1]
     day = _ordinal(dt.day)
@@ -217,7 +213,7 @@ def fetch_one_stroke(client, user_id: int, workout: dict) -> tuple[str, list]:
     Returns (str_id, strokes_list) where strokes_list is normalised [{t,d}].
     Falls back to synthesized strokes when the API returns nothing.
     """
-    wid = workout.get("id")
+    wid = workout["id"]
     if wid is None:
         return ("", [])
 
@@ -264,7 +260,7 @@ def fetch_strokes_batch(
     result = dict(existing_cache)
 
     for w in workouts:
-        wid = w.get("id")
+        wid = w["id"]
         if wid is None:
             continue
         key = str(wid)
@@ -455,11 +451,11 @@ def build_races_data(
             key=lambda w: w.get("time"),
             default=None,
         )
-    pb_workout_id = pb_wkt.get("id") if pb_wkt else None
+    pb_workout_id = pb_wkt["id"] if pb_wkt else None
 
     boats = []
     for w in workouts:
-        wid = w.get("id")
+        wid = w["id"]
         key = str(wid) if wid is not None else None
         strokes = list(strokes_by_id.get(key, []) if key else [])
 
@@ -480,7 +476,7 @@ def build_races_data(
             finish_dist_m = float(raw_d)
             strokes = _ensure_finish_point(strokes, finish_time_s, finish_dist_m)
 
-        season = get_season(w.get("date", ""))
+        season = w["season"]
         color = season_color(season, fmt="hex")
         label = build_boat_label(w, workouts)
 
@@ -501,7 +497,7 @@ def build_races_data(
             {
                 "id": wid,
                 "label": label,
-                "date_iso": (w.get("date") or "")[:10],  # "YYYY-MM-DD" for JS sort
+                "date_iso": w["day"],  # "YYYY-MM-DD" for JS sort
                 "color": color,
                 "strokes": strokes,
                 "is_pb": wid == pb_workout_id,

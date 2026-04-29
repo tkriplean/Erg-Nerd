@@ -51,13 +51,6 @@ from services.formatters import (
     fmt_watts,
     format_time,
 )
-from services.rowing_utils import (
-    get_season,
-    compute_pace,
-    compute_watts as _compute_watts,
-    INTERVAL_WORKOUT_TYPES,
-)
-from services.interval_utils import get_rep_count, interval_structure_key
 from services.volume_bins import BIN_NAMES, BIN_COLORS, swatch_svg
 from services.heartrate_utils import HR_ZONE_NAMES, HR_ZONE_COLORS
 from services.workout_quality import QUALITY_STYLE
@@ -140,8 +133,7 @@ def _pace_sort(w: dict):
 
 
 def _watts_sort(w: dict):
-    pace = compute_pace(w)
-    return _compute_watts(pace) if pace else 0.0
+    return w["watts"]
 
 
 def _hr_sort(w: dict):
@@ -184,16 +176,16 @@ COL_DATE = ColumnDef(
     key="date",
     header="Date",
     width="10rem",
-    render_value=lambda w: render_date(w.get("date", "")),
-    sort_value=lambda w: w.get("date", ""),
+    render_value=lambda w: render_date(w["date"]),
+    sort_value=lambda w: w["date"],
 )
 
 
 def _render_structure(w: dict) -> str:
-    if w.get("workout_type") not in INTERVAL_WORKOUT_TYPES:
+    if not w["is_interval"]:
         return ""
-    reps = get_rep_count(w)
-    label = interval_structure_key(w, compact=True)
+    reps = w["reps"]
+    label = w["structure_key"]
     if not reps or not label:
         return ""
     return f"{reps} x {label}"
@@ -290,17 +282,12 @@ COL_HR = ColumnDef(
 )
 
 
-@hd.cached
-def render_season(d):
-    return get_season(d)
-
-
 COL_SEASON = ColumnDef(
     key="season",
     header="Season",
     width="6rem",
-    render_value=lambda w: render_season(w.get("date", "")),
-    sort_value=lambda w: w.get("date", ""),
+    render_value=lambda w: w["season"],
+    sort_value=lambda w: w["date"],
 )
 
 COL_LINK = ColumnDef(
@@ -308,7 +295,7 @@ COL_LINK = ColumnDef(
     header="",
     width="2.5rem",
     render_value=lambda w: "",
-    render_cell=lambda w: _link_cell(w.get("id")),
+    render_cell=lambda w: _link_cell(w["id"]),
     sortable=False,
     align="center",
 )

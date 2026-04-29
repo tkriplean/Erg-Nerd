@@ -27,7 +27,6 @@ from typing import Optional
 
 from services.rowing_utils import compute_watts, INTERVAL_WORKOUT_TYPES
 from services.stroke_utils import ensure_raw_stroke_origin
-from services.interval_utils import interval_structure_key
 from services.formatters import fmt_distance
 
 
@@ -300,7 +299,7 @@ def _slow_end_cap(
             pace_s = t * 500 / d
             avgs.append(compute_watts(pace_s) if show_watts else pace_s)
 
-    for cs in (compare_series or []):
+    for cs in compare_series or []:
         pts = cs.get("pace_points") or []
         if pts:
             avgs.append(sum(p["y"] for p in pts) / len(pts))
@@ -607,11 +606,8 @@ def build_compare_series(
         if not raw:
             continue
         cw = workouts_dict.get(str(cid)) or {}
-        wtype = cw.get("workout_type", "")
         intervals = (
-            (cw.get("workout") or {}).get("intervals")
-            if wtype in INTERVAL_WORKOUT_TYPES
-            else None
+            (cw.get("workout") or {}).get("intervals") if cw["is_interval"] else None
         )
         stitched = _stitch_interval_times(raw, intervals=intervals)
         pace_pts, spm_pts, hr_pts, has_hr = _points_from_strokes(
@@ -620,10 +616,10 @@ def build_compare_series(
         if labels is not None and cid in labels:
             label = labels[cid]
         else:
-            date_str = (cw.get("date") or "")[:10]
+            date_str = cw["day"]
             dist = cw.get("distance") or 0
-            if wtype in INTERVAL_WORKOUT_TYPES:
-                suffix = interval_structure_key(cw, compact=True)
+            if cw["is_interval"]:
+                suffix = cw["structure_key"]
             else:
                 suffix = fmt_distance(dist) if dist else ""
             label = f"{date_str} · {suffix}".strip(" ·") or f"Workout {cid}"
@@ -631,8 +627,7 @@ def build_compare_series(
             # Wall-clock end including rest between intervals (workout["time"]
             # is work-only for interval workouts).
             total_tenths = sum(
-                (iv.get("time") or 0) + (iv.get("rest_time") or 0)
-                for iv in intervals
+                (iv.get("time") or 0) + (iv.get("rest_time") or 0) for iv in intervals
             )
             total_t_s = total_tenths / 10.0
         else:
@@ -695,7 +690,7 @@ def build_stroke_chart_config(
     # Stitch t values so all strokes share a continuous timeline.
     wo = workout.get("workout") or {}
     wtype = workout.get("workout_type", "")
-    intervals = wo.get("intervals") if wtype in INTERVAL_WORKOUT_TYPES else None
+    intervals = wo.get("intervals") if workout["is_interval"] else None
     strokes = _stitch_interval_times(strokes, intervals=intervals)
 
     show_watts = metric == "watts"
@@ -723,7 +718,7 @@ def build_stroke_chart_config(
         if has_compares:
             # Use a meaningful legend label for the primary series when compares
             # are overlaid.  Falls back to a generic label if no date is present.
-            date_str = (workout.get("date") or "")[:10]
+            date_str = workout["day"]
             primary_series_label = date_str or ("Watts" if show_watts else "Pace")
     primary_label = primary_series_label
 
