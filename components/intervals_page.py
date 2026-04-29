@@ -1041,6 +1041,8 @@ def intervals_page() -> None:
                     font_color="neutral-500",
                 )
 
+            visible_ids = [r["id"] for r in filtered]
+
             # When any filter changes, push a new reset_token so the JS
             # plugin resets page + sort to defaults.
             reset_token = (
@@ -1051,10 +1053,11 @@ def intervals_page() -> None:
                 f"_{sorted(list(state.active_cells))}"
             )
             WorkoutTable(
-                filtered,
+                all_intervals,
                 interval_columns,
                 rows_per_page=_ROWS_PER_PAGE,
                 default_sort_col="date",
+                visible_ids=visible_ids,
                 on_event={"structure_click": _on_structure_click},
                 reset_token=reset_token,
             )

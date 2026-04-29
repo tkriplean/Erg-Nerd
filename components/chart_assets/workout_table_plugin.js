@@ -46,6 +46,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       border: 1px solid var(--sl-color-neutral-200);
       border-radius: var(--sl-border-radius-medium, 0.25rem);
       overflow-x: auto;
+
     }
     .cell {
       padding: 0.4rem 0.75rem;
@@ -58,6 +59,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     .cell.align-start  { justify-content: flex-start; text-align: left; }
     .cell.align-end    { justify-content: flex-end; text-align: right; }
     .cell.align-center { justify-content: center; text-align: center; }
+    .cell.end { padding-right: 24px; }
     .hdr {
       background: var(--sl-color-neutral-50);
       border-bottom: 1px solid var(--sl-color-neutral-200);
@@ -600,14 +602,18 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     pageRows.forEach((row, i) => {
       const isAlt = i % 2 === 1;
       const isHl = state.highlightIds.has(row.id);
+      idx = 0;
+      col_count = state.cols.length
       for (const col of state.cols) {
         const align = "align-" + (col.align || "center");
-        const cls = `cell row-cell ${align}` + (isHl ? " hl" : (isAlt ? " alt" : ""));
+        isEnd = idx == col_count - 1;
+        const cls = `cell row-cell ${align}` + (isHl ? " hl" : (isAlt ? " alt" : "")) + (isEnd ? " end" : "");
         const cell = el("div", { class: cls });
         const renderer = RENDERERS[col.renderer] || RENDERERS.text;
         const node = renderer(row, col);
         if (node != null) cell.appendChild(node);
         grid.appendChild(cell);
+        idx += 1;
       }
     });
 
