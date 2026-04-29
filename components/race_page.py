@@ -80,18 +80,7 @@ from components.workout_chart_builder import (
 from components.workout_chart_plugin import StrokeChart
 from components.race_scatter import build_race_scatter_config
 from components.race_scatter_plugin import RaceScatterChart
-from components.workout_table import (
-    WorkoutTable,
-    COL_DATE,
-    COL_DISTANCE,
-    COL_TIME,
-    COL_PACE,
-    COL_WATTS,
-    COL_DRAG,
-    COL_SPM,
-    COL_HR,
-    COL_LINK,
-)
+from components.workout_table import WorkoutTable
 from components.shared_ui import global_filter_ui, header_dropdown
 
 _DEFAULT_EVENT_TYPE = "dist"
@@ -386,18 +375,18 @@ def _results_table(workouts: list, etype: str, pb_id: int | None) -> None:
         return
 
     types = {r.get("type") for r in workouts}
-    cols = [COL_DATE]
+    cols = ["date"]
     if len(types) > 1:
-        cols.append(COL_TYPE)
+        cols.append("type")
     cols += [
-        COL_DISTANCE,
-        COL_TIME,
-        COL_PACE,
-        COL_WATTS,
-        COL_DRAG,
-        COL_SPM,
-        COL_HR,
-        COL_LINK,
+        "distance",
+        "time",
+        "pace",
+        "watts",
+        "drag",
+        "spm",
+        "hr",
+        "link",
     ]
     WorkoutTable(
         workouts,

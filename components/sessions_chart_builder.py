@@ -31,22 +31,7 @@ from services.critical_power_model import (
     fit_critical_power,
 )
 from components.sessions_chart_plugin import SessionsChart
-from components.workout_table import (
-    WorkoutTable,
-    COL_DATE,
-    COL_STRUCTURE,
-    COL_DISTANCE,
-    COL_TIME,
-    COL_PACE,
-    COL_WATTS,
-    COL_DRAG,
-    COL_SPM,
-    COL_HR,
-    COL_LINK,
-    COL_POWER_SPREAD,
-    COL_HR_SPREAD,
-    COL_QUALITY,
-)
+from components.workout_table import WorkoutTable
 from components.app_context import get_profile
 from components.reference_watts_loader import reference_watts_loader
 from components.shared_ui import global_filter_ui, header_dropdown
@@ -648,18 +633,18 @@ def sessions_chart(workouts: list) -> None:
                 WorkoutTable(
                     in_window,
                     [
-                        COL_DATE,
-                        COL_STRUCTURE,
-                        COL_DISTANCE,
-                        COL_TIME,
-                        COL_PACE,
-                        COL_WATTS,
-                        COL_DRAG,
-                        COL_SPM,
-                        COL_HR,
-                        COL_POWER_SPREAD,
-                        COL_HR_SPREAD,
-                        COL_QUALITY,
-                        COL_LINK,
+                        "date",
+                        "structure",
+                        "distance",
+                        "time",
+                        "pace",
+                        "watts",
+                        "drag",
+                        "spm",
+                        "hr",
+                        "power_spread",
+                        "hr_spread",
+                        "quality",
+                        "link",
                     ],
                 )

@@ -59,7 +59,6 @@ from services.rowing_utils import (
     SEASON_PALETTE,
     season_color,
 )
-from services.formatters import fmt_split, format_time, fmt_distance
 from services.concept2_records import (
     age_category,
     weight_class_str,
@@ -82,10 +81,9 @@ from components.concept2_sync import get_all_workouts
 from components.app_context import get_profile
 from components.app_context import your
 from components.rank_chart_plugin import RankChart
-from components.rank_distribution import distribution_svg
 from components.rank_ranking_modal import render_rankings_modal
 from components.shared_ui import global_filter_ui, header_dropdown
-from components.workout_table import WorkoutTable, ColumnDef
+from components.workout_table import WorkoutTable
 
 from services.volume_bins import swatch_svg
 
@@ -625,6 +623,7 @@ def rank_page() -> None:
         modifier_must_have_events=(),
         modifier_exclude_unverified=False,
         modifier_min_performances=1,
+        modal_row=None,
     )
 
     qualifying = _qualifying_performances(
@@ -756,53 +755,95 @@ def _annotate_display_metadata(rows: list[dict]) -> None:
         r["_dom_max"] = dom_max
 
 
-def _render_result_cell(r: dict) -> None:
-    vt = r.get("value_tenths") or 0
-    txt = format_time(vt) if r["event_kind"] == "dist" else fmt_distance(vt)
-    hd.text(txt, font_size="small")
+def _columns_for(focus: str) -> list:
+    """Return the ordered list of column entries for the given focus mode.
+
+    Each entry is a dict consumed by `WorkoutTable`'s registry-resolution.
+    The `rank_event` column carries the page's `_EVENT_ORDER_IDX` as opt
+    so it can sort events into chart order.
+    """
+    event_col = {"key": "rank_event", "event_order": _EVENT_ORDER_IDX}
+
+    if focus == "world_record":
+        return [
+            event_col,
+            "rank_date",
+            "rank_age",
+            "rank_result",
+            "rank_pace",
+            "rank_watts",
+            "rank_wr_pct_pace",
+            "rank_wr_pct_watts",
+            "rank_wr_pace",
+        ]
+
+    if focus == "c2_age_group":
+        return [
+            event_col,
+            "rank_date",
+            "rank_age",
+            "rank_age_group",
+            "rank_result",
+            "rank_pace",
+            "rank_watts",
+            "rank",
+            "rank_percentile",
+            "rank_distribution",
+        ]
+
+    return [
+        event_col,
+        "rank_date",
+        "rank_age",
+        "rank_result",
+        "rank_pace",
+        "rank_watts",
+        "rank",
+        "rank_percentile",
+        "rank_distribution",
+    ]
 
 
-def _render_rank_cell(r: dict) -> None:
-    if not r.get("rank_total"):
-        hd.text("—", font_size="small", font_color="neutral-400")
-        return
-    rank_w = f"{7 * max(1, r.get('_rank_chars', 1))}px"
-    total_w = f"{7 * max(1, r.get('_total_chars', 1))}px"
-    rank_s = f"{r['rank']:,}"
-    total_s = f"{r['rank_total']:,}"
-    with hd.button(
-        size="small",
-        variant="text",
-        padding=(0, 0.3),
-    ) as btn:
-        with hd.hbox(gap=0.3, align="center", justify="center"):
-            hd.text(
-                rank_s,
-                width=rank_w,
-                text_align="end",
-                font_size="small",
-                font_family="mono",
-            )
-            hd.text("of", font_size="x-small", padding_left=0.3)
-            hd.text(
-                total_s,
-                width=total_w,
-                text_align="end",
-                font_size="small",
-                font_family="mono",
-            )
+def _rank_dialog_title(r: dict) -> str:
     title_parts = [r["event_label"], f"Age {r['age']}"]
     if r["date_label"]:
         title_parts.append(r["date_label"])
     wc = r["weight_class"]
     title_parts.append(f"{r['gender']} {wc}" if wc else r["gender"])
+    return " · ".join(title_parts)
+
+
+def _render_table(rows: list[dict], state) -> None:
+    if not rows:
+        return
+    columns = _columns_for(state.ranking_focus)
+
+    def _on_rank_click(payload):
+        state.modal_row = payload["row"]
+
+    WorkoutTable(
+        rows,
+        columns,
+        default_sort_col="rank_event",
+        default_sort_asc=True,
+        on_event={"rank_click": _on_rank_click},
+    )
+
+    # Page-level rankings modal — opens when a row's Rank cell is clicked.
+    r = state.modal_row
     dlg = hd.dialog(
-        " · ".join(title_parts),
+        _rank_dialog_title(r) if r is not None else "",
         panel_style=hd.style(width="1000px", max_width="95vw"),
     )
-    if btn.clicked:
+    # Detect a user-initiated close BEFORE deciding to (re)open: setting
+    # dlg.opened = True in the same frame would clear was_closed and trap
+    # the modal open.
+    if dlg.was_closed:
+        state.modal_row = None
+        r = None
+    if r is not None and not dlg.opened:
         dlg.opened = True
-    if dlg.opened:
+    if r is not None and dlg.opened:
         render_rankings_modal(
             dlg,
             pool=r["pool"],
@@ -815,207 +856,6 @@ def _render_rank_cell(r: dict) -> None:
             user_date_label=r["date_label"],
             user_season=r["season"],
         )
-
-
-def _render_percentile_cell(r: dict) -> None:
-    if not r.get("rank_total"):
-        hd.text("—", font_size="small", font_color="neutral-400")
-        return
-    pct = r["percentile"]
-    whole = int(pct)
-    tenth = int(round((pct - whole) * 10))
-    if tenth >= 10:
-        whole += 1
-        tenth = 0
-    with hd.hbox(gap=0, align="start", justify="center"):
-        hd.text(
-            f"{whole}",
-            font_size="large",
-            font_weight="semibold",
-        )
-        hd.text(
-            f".{tenth}",
-            font_size="x-small",
-            font_color="neutral-500",
-            padding_top=0.1,
-        )
-
-
-def _render_distribution_cell(r: dict) -> None:
-    if r.get("hist_counts") and r.get("watts"):
-        dom_min = r.get("_dom_min") or r["hist_min"]
-        dom_max = r.get("_dom_max") or r["hist_max"]
-        uri = distribution_svg(
-            r["hist_counts"],
-            float(r["watts"]),
-            r["hist_min"],
-            r["hist_max"],
-            x_min=dom_min,
-            x_max=dom_max,
-            is_dark=hd.theme().is_dark,
-        )
-        with hd.box(width="100%"):
-            hd.image(src=uri, width="100%", height="32px")
-    else:
-        hd.text("—", font_size="small", font_color="neutral-400")
-
-
-def _columns_for(focus: str) -> list[ColumnDef]:
-    col_event = ColumnDef(
-        key="event",
-        header="Event",
-        width="7rem",
-        render_value=lambda r: r["event_label"],
-        sort_value=lambda r: _EVENT_ORDER_IDX.get(r["event_key"], 99),
-        default_asc=True,
-    )
-    col_date = ColumnDef(
-        key="date",
-        header="Date",
-        width="9rem",
-        render_value=lambda r: r["date_label"],
-        sort_value=lambda r: r["date_iso"],
-    )
-    col_age = ColumnDef(
-        key="age",
-        header="Age",
-        width="4rem",
-        render_value=lambda r: str(r["age"]),
-        sort_value=lambda r: r["age"],
-    )
-    col_age_group = ColumnDef(
-        key="age_group",
-        header="Age Group",
-        width="6rem",
-        render_value=lambda r: r["age_band_rankings"],
-        sort_value=lambda r: r["age_band_rankings"],
-    )
-    col_result = ColumnDef(
-        key="result",
-        header="Result",
-        width="7rem",
-        render_cell=_render_result_cell,
-        sort_value=lambda r: r["value_tenths"] or 0,
-        align="end",
-    )
-    col_pace = ColumnDef(
-        key="pace",
-        header="Pace",
-        width="6rem",
-        render_value=lambda r: (
-            fmt_split(r["pace_tenths"]) if r.get("pace_tenths") else "—"
-        ),
-        sort_value=lambda r: r.get("pace_tenths") or float("inf"),
-        default_asc=True,
-    )
-    col_watts = ColumnDef(
-        key="watts",
-        header="Watts",
-        width="5rem",
-        render_value=lambda r: f"{r['watts']:.0f}" if r.get("watts") else "—",
-        sort_value=lambda r: r.get("watts") or 0,
-    )
-
-    if focus == "world_record":
-        col_pct_pace = ColumnDef(
-            key="wr_pct_pace",
-            header="% WR Pace",
-            width="6rem",
-            render_value=lambda r: (
-                f"{r['wr_pct_pace']:.1f}%" if "wr_pct_pace" in r else "—"
-            ),
-            sort_value=lambda r: r.get("wr_pct_pace") or 0,
-        )
-        col_pct_watts = ColumnDef(
-            key="wr_pct_watts",
-            header="% WR Watts",
-            width="6rem",
-            render_value=lambda r: (
-                f"{r['wr_pct_watts']:.1f}%" if "wr_pct_watts" in r else "—"
-            ),
-            sort_value=lambda r: r.get("wr_pct_watts") or 0,
-        )
-        col_wr_pace = ColumnDef(
-            key="wr_pace",
-            header="WR Pace",
-            width="6rem",
-            render_value=lambda r: (
-                fmt_split(int(round(r["wr_pace"] * 10))) if r.get("wr_pace") else "—"
-            ),
-            sort_value=lambda r: r.get("wr_pace") or float("inf"),
-            default_asc=True,
-        )
-        return [
-            col_event,
-            col_date,
-            col_age,
-            col_result,
-            col_pace,
-            col_watts,
-            col_pct_pace,
-            col_pct_watts,
-            col_wr_pace,
-        ]
-
-    col_rank = ColumnDef(
-        key="rank",
-        header="Rank",
-        width="9rem",
-        render_cell=_render_rank_cell,
-        sort_value=lambda r: r.get("rank") or 10**9,
-        default_asc=True,
-    )
-    col_pct = ColumnDef(
-        key="percentile",
-        header="%ile",
-        width="5rem",
-        render_cell=_render_percentile_cell,
-        sort_value=lambda r: r.get("percentile") or 0,
-    )
-    col_dist = ColumnDef(
-        key="distribution",
-        header="Watts Distribution",
-        width="minmax(10rem,1fr)",
-        render_cell=_render_distribution_cell,
-        sortable=False,
-    )
-
-    if focus == "c2_age_group":
-        return [
-            col_event,
-            col_date,
-            col_age,
-            col_age_group,
-            col_result,
-            col_pace,
-            col_watts,
-            col_rank,
-            col_pct,
-            col_dist,
-        ]
-    return [
-        col_event,
-        col_date,
-        col_age,
-        col_result,
-        col_pace,
-        col_watts,
-        col_rank,
-        col_pct,
-        col_dist,
-    ]
-
-
-def _render_table(rows: list[dict], state) -> None:
-    if not rows:
-        return
-    columns = _columns_for(state.ranking_focus)
-    WorkoutTable(
-        rows,
-        columns,
-        default_sort_col="event",
-        default_sort_asc=True,
-    )
 
 
 def _render_c2_comparison_explainer(state) -> None:

@@ -148,9 +148,7 @@ def concept2_sync(client) -> None:
             with hd.box(align="center", padding=4):
                 hd.spinner()
             return
-        cached_dict, cached_version = decompress_workouts_envelope(
-            ls_wkts.result or ""
-        )
+        cached_dict, cached_version = decompress_workouts_envelope(ls_wkts.result or "")
         if cached_version == INTEGRITY_VERSION:
             sync_state.initial_workouts = cached_dict
             sync_state.cache_version_ok = True
@@ -197,11 +195,7 @@ def concept2_sync(client) -> None:
         # version of normalize_workout — no need to re-run.
         profile = ctx.profile or {}
         max_hr = profile.get("max_heart_rate")
-        trusted = (
-            sync_state.initial_workouts
-            if sync_state.cache_version_ok
-            else {}
-        )
+        trusted = sync_state.initial_workouts if sync_state.cache_version_ok else {}
         workouts_dict, quarantined = normalize_new_workouts(
             workouts_dict, trusted, max_hr=max_hr
         )
@@ -337,17 +331,13 @@ def _maybe_push_on_sync(
             try:
                 public_profiles.delete_workouts(uid)
             except Exception as exc:
-                print(
-                    f"[public_profiles] pre-republish delete failed: {exc}"
-                )
+                print(f"[public_profiles] pre-republish delete failed: {exc}")
         # display_name now lives on the profile dict (populated at OAuth /
         # stale refresh), so no extra /users/me call is needed here.
         public_profiles.publish_all(uid, prof, wkts)
 
     if not push_task.running and not push_task.done:
-        push_task.run(
-            _do_push, user_id, profile, workouts_dict, not cache_version_ok
-        )
+        push_task.run(_do_push, user_id, profile, workouts_dict, not cache_version_ok)
 
     if push_task.done:
         sync_state.published = True
@@ -560,39 +550,40 @@ def strokes_for(workout: dict) -> dict:
     # same loop body without colliding on HyperDiv's call-stack-derived
     # component keys.
 
-    cache, ready = _load_strokes_cache()
-    if not ready:
+    with hd.scope(f"strokes_for_{wid}"):
+        cache, ready = _load_strokes_cache()
+        if not ready:
+            return {"strokes": None, "status": "loading", "error": None}
+
+        public_enabled = _public_enabled()
+
+        key = str(wid)
+        if key in cache:
+            # Cache-hit: still mirror to the public directory — the entry
+            # may have been cached before the user opted in.  The mirror
+            # helper no-ops when the file already exists on disk.
+            _mirror_strokes_to_public(ctx.user_id, wid, cache[key], public_enabled)
+            return {"strokes": cache[key], "status": "loaded", "error": None}
+
+        if ctx.client is None:
+            return {"strokes": None, "status": "error", "error": "no client"}
+
+        task = hd.task()
+        if not task.running and not task.done:
+            print(f"FETCHING strokes_for_{wid}")
+            task.run(lambda: ctx.client.get_strokes(int(ctx.user_id), wid))
+        if task.running:
+            print(f"strokes_for_{wid} STILL RUNNING")
+            return {"strokes": None, "status": "loading", "error": None}
+        if task.error:
+            return {"strokes": None, "status": "error", "error": str(task.error)}
+        if task.done:
+            print(f"strokes_for_{wid} DONE")
+            strokes = task.result if isinstance(task.result, list) else []
+            _persist_strokes(ctx.user_id, wid, strokes, cache, public_enabled)
+            return {"strokes": strokes, "status": "loaded", "error": None}
+
         return {"strokes": None, "status": "loading", "error": None}
-
-    public_enabled = _public_enabled()
-
-    key = str(wid)
-    if key in cache:
-        # Cache-hit: still mirror to the public directory — the entry
-        # may have been cached before the user opted in.  The mirror
-        # helper no-ops when the file already exists on disk.
-        _mirror_strokes_to_public(ctx.user_id, wid, cache[key], public_enabled)
-        return {"strokes": cache[key], "status": "loaded", "error": None}
-
-    if ctx.client is None:
-        return {"strokes": None, "status": "error", "error": "no client"}
-
-    task = hd.task()
-    if not task.running and not task.done:
-        print(f"FETCHING strokes_for_{wid}")
-        task.run(lambda: ctx.client.get_strokes(int(ctx.user_id), wid))
-    if task.running:
-        print(f"strokes_for_{wid} STILL RUNNING")
-        return {"strokes": None, "status": "loading", "error": None}
-    if task.error:
-        return {"strokes": None, "status": "error", "error": str(task.error)}
-    if task.done:
-        print(f"strokes_for_{wid} DONE")
-        strokes = task.result if isinstance(task.result, list) else []
-        _persist_strokes(ctx.user_id, wid, strokes, cache, public_enabled)
-        return {"strokes": strokes, "status": "loaded", "error": None}
-
-    return {"strokes": None, "status": "loading", "error": None}
 
 
 def strokes_batch(workouts: list) -> dict:

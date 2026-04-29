@@ -133,19 +133,7 @@ from services.rowinglevel import fetch_rowinglevel
 
 from services.concept2_records import wr_category_label
 from components.power_curve_chart_plugin import PowerCurveChart
-from components.workout_table import (
-    WorkoutTable,
-    COL_DATE,
-    COL_TYPE,
-    COL_DISTANCE,
-    COL_TIME,
-    COL_PACE,
-    COL_WATTS,
-    COL_DRAG,
-    COL_SPM,
-    COL_HR,
-    COL_LINK,
-)
+from components.workout_table import WorkoutTable
 
 from services.predictions import PREDICTORS, PREDICTORS_BY_KEY
 from components.power_curve_workouts import (
@@ -1126,17 +1114,17 @@ def power_curve_page() -> None:
                     hd.text(f"{_poss_h2} Personal Bests")
 
             types = {r.get("type") for r in efforts_filtered_by_event_and_display}
-            cols = [COL_DATE]
+            cols = ["date"]
             if len(types) > 1:
-                cols.append(COL_TYPE)
+                cols.append("type")
             cols += [
-                COL_DISTANCE,
-                COL_TIME,
-                COL_PACE,
-                COL_WATTS,
-                COL_DRAG,
-                COL_SPM,
-                COL_HR,
-                COL_LINK,
+                "distance",
+                "time",
+                "pace",
+                "watts",
+                "drag",
+                "spm",
+                "hr",
+                "link",
             ]
             WorkoutTable(efforts_filtered_by_event_and_display, cols, paginate=False)

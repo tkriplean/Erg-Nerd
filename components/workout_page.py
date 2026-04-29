@@ -44,18 +44,6 @@ from services.formatters import (
 
 from components.workout_table import (
     WorkoutTable,
-    ColumnDef,
-    COL_DATE,
-    COL_DISTANCE,
-    COL_TIME,
-    COL_PACE,
-    COL_WATTS,
-    COL_DRAG,
-    COL_SPM,
-    COL_HR,
-    COL_LINK,
-    COL_QUALITY,
-    COL_SIMILARITY,
     render_quality_cell,
     render_spread_cell,
 )
@@ -953,32 +941,6 @@ def _table_frame(
 # ---------------------------------------------------------------------------
 
 
-def _compare_cell(w: dict, state) -> None:
-    """Render the Compare checkbox for one similar-workout row.
-
-    Muted "—" when the row has no stroke data (can't draw a line).  The
-    checkbox is disabled while Stack mode is active so the two modes stay
-    mutually exclusive.
-    """
-    if not w.get("stroke_data"):
-        hd.text("—", font_color="neutral-300", font_size="small")
-        return
-    wid = w["id"]
-    if wid is None:
-        hd.text("—", font_color="neutral-300", font_size="small")
-        return
-    checked = wid in state.compared_workouts
-    cb = hd.checkbox(checked=checked, disabled=state.stack, size="small")
-    if cb.changed:
-        current = set(state.compared_workouts)
-        if cb.checked:
-            current.add(wid)
-            state.stack = False
-        else:
-            current.discard(wid)
-        state.compared_workouts = tuple(sorted(current))
-
-
 def _interval_dimension(w: dict) -> str:
     """Return 'time' or 'distance' based on the first work interval's type;
     'unknown' if no work intervals."""
@@ -1474,67 +1436,59 @@ def workout_page(session_id: int) -> None:
                     font_color="neutral-800",
                 )
                 is_interval_workout = workout["is_interval"]
-                compare_col = ColumnDef(
-                    key="compare",
-                    header="Compare",
-                    width="5.5rem",
-                    render_value=lambda w: "",
-                    render_cell=lambda w: _compare_cell(w, state),
-                    sortable=False,
-                )
+                compare_col_entry = {
+                    "key": "compare",
+                    "compared_ids": list(state.compared_workouts),
+                    "stack_active": state.stack,
+                }
                 if is_interval_workout:
                     # Similar sessions are mostly intervals — show reps + structure
-                    reps_col = ColumnDef(
-                        "reps",
-                        "Reps",
-                        "4rem",
-                        render_value=lambda w: (
-                            str(w["reps"]) if w["is_interval"] else "—"
-                        ),
-                        sort_value=lambda w: (w["reps"] if w["is_interval"] else 0),
-                    )
-                    workout_col = ColumnDef(
-                        "workout_structure",
-                        "Workout",
-                        "minmax(8rem,1fr)",
-                        render_value=lambda w: (
-                            w["structure_key"] if w["is_interval"] else ""
-                        ),
-                    )
                     cols = [
-                        COL_DATE,
-                        reps_col,
-                        workout_col,
-                        COL_DISTANCE,
-                        COL_TIME,
-                        COL_PACE,
-                        COL_WATTS,
-                        COL_SPM,
-                        COL_HR,
-                        COL_QUALITY,
-                        COL_SIMILARITY,
-                        compare_col,
-                        COL_LINK,
+                        "date",
+                        "reps",
+                        "workout_structure",
+                        "distance",
+                        "time",
+                        "pace",
+                        "watts",
+                        "spm",
+                        "hr",
+                        "quality",
+                        "similarity",
+                        compare_col_entry,
+                        "link",
                     ]
                 else:
                     # Non-interval: show standard performance columns
                     cols = [
-                        COL_DATE,
-                        COL_DISTANCE,
-                        COL_TIME,
-                        COL_PACE,
-                        COL_WATTS,
-                        COL_DRAG,
-                        COL_SPM,
-                        COL_HR,
-                        COL_QUALITY,
-                        COL_SIMILARITY,
-                        compare_col,
-                        COL_LINK,
+                        "date",
+                        "distance",
+                        "time",
+                        "pace",
+                        "watts",
+                        "drag",
+                        "spm",
+                        "hr",
+                        "quality",
+                        "similarity",
+                        compare_col_entry,
+                        "link",
                     ]
+
+                def _on_compare_toggle(payload):
+                    wid = payload["workout_id"]
+                    current = set(state.compared_workouts)
+                    if payload["checked"]:
+                        current.add(wid)
+                        state.stack = False
+                    else:
+                        current.discard(wid)
+                    state.compared_workouts = tuple(sorted(current))
+
                 WorkoutTable(
                     similar,
                     cols,
                     default_sort_col="similarity",
                     default_sort_asc=False,
+                    on_event={"compare_toggle": _on_compare_toggle},
                 )

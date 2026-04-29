@@ -60,7 +60,10 @@ a short note points to the Profile page.  The Quality legend always renders
 
 Table
 -----
-WorkoutTable (CSS Grid) with interval-specific ColumnDef objects.
+WorkoutTable (CSS Grid) configured with the interval-specific column keys
+from `components.workout_table.COLUMN_REGISTRY`.  The Structure column is
+the interactive `structure_filter` variant — clicking a cell emits
+`structure_click`, which toggles `state.structure_filter`.
 Sortable headers (▲/▼), default sort: date descending.
 
 Columns: Date · Reps · Structure (rep-stripped) · Stimulus ·
@@ -115,18 +118,9 @@ from services.heartrate_utils import (
     hr_bin_passes,
     resolve_max_hr,
 )
-from services.formatters import fmt_date, fmt_distance, fmt_split, format_time
 from components.hyperdiv_extensions import aligned_button, grid_box
 from components.lazy_tooltip_plugin import LazyTooltip
-from components.workout_table import (
-    COL_HR_SPREAD,
-    COL_LINK,
-    COL_POWER_SPREAD,
-    COL_QUALITY,
-    ColumnDef,
-    WorkoutTable,
-    always_white,
-)
+from components.workout_table import WorkoutTable, always_white
 from components.app_context import get_profile
 from components.shared_ui import global_filter_ui
 from components.spread_quality_legends import (
@@ -969,93 +963,23 @@ def intervals_page() -> None:
         structure_filter=None,  # str | None — filter table to this structure key
     )
 
-    # ── Interval-specific column definitions (capture state for filter button) ──
-    @hd.cached
-    def _render_structure_cell(structure_key):
-        is_active = state.structure_filter == structure_key
-        btn = hd.button(
-            structure_key,
-            variant="text",
-            size="medium",
-            padding=(0, 0),
-            font_weight="semibold" if is_active else "normal",
-            font_color="primary-500" if is_active else "neutral-700",
-        )
-        if btn.clicked:
-            state.structure_filter = None if is_active else structure_key
-
-    @hd.cached
-    def _render_stimulus_cell(s):
-        if s and s != "—":
-            hd.text(
-                s, font_size="x-small", font_color="neutral-500", font_style="italic"
-            )
+    def _on_structure_click(payload):
+        sk = payload["structure_key"]
+        state.structure_filter = None if state.structure_filter == sk else sk
 
     interval_columns = [
-        ColumnDef(
-            "date",
-            "Date",
-            "10rem",
-            render_value=lambda w: fmt_date(w["date"]),
-            sort_value=lambda w: w["date"],
-        ),
-        ColumnDef(
-            "reps",
-            "Reps",
-            "4rem",
-            render_value=lambda w: str(w["reps"]) if w.get("reps") else "—",
-            sort_value=lambda w: w.get("reps") or 0,
-        ),
-        ColumnDef(
-            "structure",
-            "Structure",
-            "minmax(8rem,1fr)",
-            render_cell=lambda w: _render_structure_cell(w.get("structure_key")),
-            sortable=False,
-        ),
-        ColumnDef(
-            "stimulus",
-            "Stimulus",
-            "10rem",
-            render_cell=lambda w: _render_stimulus_cell(w.get("_stimulus", "")),
-            sortable=False,
-        ),
-        COL_POWER_SPREAD,
-        COL_HR_SPREAD,
-        COL_QUALITY,
-        ColumnDef(
-            "work",
-            "Work",
-            "6rem",
-            render_value=lambda w: fmt_distance(w.get("distance")),
-            sort_value=lambda w: w.get("distance") or 0,
-        ),
-        ColumnDef(
-            "split",
-            "Avg Split",
-            "7rem",
-            render_value=lambda w: fmt_split(w["work_pace"])
-            if w.get("work_pace")
-            else "—",
-            sort_value=lambda w: w.get("work_pace") or float("inf"),
-            default_asc=True,
-        ),
-        ColumnDef(
-            "time",
-            "Time",
-            "7rem",
-            render_value=lambda w: w.get("time_formatted")
-            or (format_time(w["time"]) if w.get("time") else "—"),
-            sort_value=lambda w: w.get("time") or 0,
-        ),
-        ColumnDef(
-            "spm",
-            "SPM",
-            "4rem",
-            render_value=lambda w: f"{w['work_spm']:.0f}" if w.get("work_spm") else "—",
-            sort_value=lambda w: w.get("work_spm") or 0,
-        ),
-        COL_LINK,
+        "date",
+        "reps",
+        {"key": "structure_filter", "active_key": state.structure_filter},
+        "stimulus",
+        "power_spread",
+        "hr_spread",
+        "quality",
+        {"key": "distance", "header": "Work", "width": "6rem"},
+        "work_pace",
+        "time",
+        "work_spm",
+        "link",
     ]
 
     # Pre-compute non-cell filters so the grid counts stay in sync with
@@ -1131,4 +1055,5 @@ def intervals_page() -> None:
                 interval_columns,
                 rows_per_page=_ROWS_PER_PAGE,
                 default_sort_col="date",
+                on_event={"structure_click": _on_structure_click},
             )
