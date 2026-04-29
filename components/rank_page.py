@@ -81,11 +81,16 @@ from components.concept2_sync import get_all_workouts
 from components.app_context import get_profile
 from components.app_context import your
 from components.rank_chart_plugin import RankChart
+from components.rank_distribution import distribution_svg
 from components.rank_ranking_modal import render_rankings_modal
 from components.shared_ui import global_filter_ui, header_dropdown
 from components.workout_table import WorkoutTable
 
 from services.volume_bins import swatch_svg
+
+# Per-row fields that are heavy and only needed server-side (for the rank
+# modal).  Stripped before shipping rows to the JS plugin.
+_HEAVY_ROW_FIELDS = ("pool", "entries", "workout")
 
 
 _INCLUDE_LABELS = {"SBs": "Season Bests", "PBs": "Personal Bests"}
@@ -631,7 +636,7 @@ def rank_page() -> None:
         best_filter=state.include_filter,
     )
     rows = _build_rows(qualifying, profile=profile, state=state)
-    _annotate_display_metadata(rows)
+    _annotate_display_metadata(rows, is_dark=hd.theme().is_dark)
 
     event_order_prop, series_prop = _build_series(rows, state)
 
@@ -711,13 +716,15 @@ def rank_page() -> None:
 _EVENT_ORDER_IDX = {_event_key(et, ev): i for i, (et, ev, _) in enumerate(_EVENT_ORDER)}
 
 
-def _annotate_display_metadata(rows: list[dict]) -> None:
+def _annotate_display_metadata(rows: list[dict], *, is_dark: bool) -> None:
     """Stash cross-row display values used by cell renderers.
 
     * ``_rank_chars`` / ``_total_chars`` — max widths (in characters) across
       all rows with a rank, so the "X of Y" cell can right-align uniformly.
     * ``_dom_min`` / ``_dom_max`` — shared watts domain for the distribution
       column so histograms of different events share an x-axis.
+    * ``_dist_uri`` — pre-baked SVG data URI for the distribution histogram
+      (the JS plugin can't compute it from raw bin counts).
     """
     ranked = [r for r in rows if r.get("rank_total")]
     if ranked:
@@ -753,6 +760,18 @@ def _annotate_display_metadata(rows: list[dict]) -> None:
         r["_total_chars"] = total_chars
         r["_dom_min"] = dom_min
         r["_dom_max"] = dom_max
+        if r.get("hist_counts") and r.get("watts") is not None:
+            r["_dist_uri"] = distribution_svg(
+                r["hist_counts"],
+                r["watts"],
+                r["hist_min"],
+                r["hist_max"],
+                x_min=dom_min,
+                x_max=dom_max,
+                is_dark=is_dark,
+            )
+        else:
+            r["_dist_uri"] = None
 
 
 def _columns_for(focus: str) -> list:
@@ -818,11 +837,21 @@ def _render_table(rows: list[dict], state) -> None:
         return
     columns = _columns_for(state.ranking_focus)
 
+    # Build an id-keyed lookup so the modal can recover ``pool`` (and the
+    # other heavy fields) without serializing them into every row shipped
+    # to the JS plugin — that's the rank-page perf killer.
+    rows_by_id = {r["id"]: r for r in rows}
+    display_rows = [
+        {k: v for k, v in r.items() if k not in _HEAVY_ROW_FIELDS}
+        for r in rows
+    ]
+
     def _on_rank_click(payload):
-        state.modal_row = payload["row"]
+        rid = payload["row_id"]
+        state.modal_row = rows_by_id.get(rid)
 
     WorkoutTable(
-        rows,
+        display_rows,
         columns,
         default_sort_col="rank_event",
         default_sort_asc=True,

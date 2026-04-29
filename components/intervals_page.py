@@ -1041,9 +1041,9 @@ def intervals_page() -> None:
                     font_color="neutral-500",
                 )
 
-            # Scope-reset trick: changing filter_key forces WorkoutTable's
-            # internal hd.state to reinitialise, resetting page to 0.
-            filter_key = (
+            # When any filter changes, push a new reset_token so the JS
+            # plugin resets page + sort to defaults.
+            reset_token = (
                 f"{state.structure_filter or 'all'}"
                 f"_{sorted(list(spread_quality_state.active_bins))}"
                 f"_{sorted(list(spread_quality_state.active_hr_bins))}"
@@ -1056,4 +1056,5 @@ def intervals_page() -> None:
                 rows_per_page=_ROWS_PER_PAGE,
                 default_sort_col="date",
                 on_event={"structure_click": _on_structure_click},
+                reset_token=reset_token,
             )

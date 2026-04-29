@@ -94,10 +94,7 @@ def distribution_svg(
         f'<svg xmlns="http://www.w3.org/2000/svg"'
         f' viewBox="0 0 {width} {height}"'
         f' preserveAspectRatio="none"'
-        f' width="100%" height="{height}">'
-        + "".join(rects)
-        + marker
-        + "</svg>"
+        f' width="100%" height="{height}">' + "".join(rects) + marker + "</svg>"
     )
     encoded = base64.b64encode(svg.encode("utf-8")).decode("ascii")
     return f"data:image/svg+xml;base64,{encoded}"

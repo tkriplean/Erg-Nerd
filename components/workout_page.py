@@ -946,7 +946,7 @@ def _interval_dimension(w: dict) -> str:
     'unknown' if no work intervals."""
     ivs = (w.get("workout") or {}).get("intervals") or []
     for iv in ivs:
-        t = (iv["machine"]).lower()
+        t = (iv["type"]).lower()
         if t in ("time", "distance"):
             return t
     return "unknown"
@@ -963,7 +963,7 @@ def _interval_volume_and_work_fraction(w: dict) -> tuple:
     0.2 means 1:4, 1.0 means continuous (no rest).
     """
     ivs = (w.get("workout") or {}).get("intervals") or []
-    work_ivs = [iv for iv in ivs if (iv["machine"]).lower() != "rest"]
+    work_ivs = [iv for iv in ivs if (iv["type"]).lower() != "rest"]
     if not work_ivs:
         return 0, 1.0
     dim = _interval_dimension(w)
