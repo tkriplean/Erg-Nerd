@@ -279,9 +279,7 @@ strokes only — the sentinel never contributes to averages.
 `localStorage` under the key `"custom_splits"` as a JSON object
 `{str(workout_id): {"unit": "m" | "s", "values": [int, ...]}}`.  They
 survive page refreshes and are loaded back automatically the next time that
-workout is opened.  Legacy entries stored as a bare list are migrated in
-memory to `{"unit": "m", "values": [...]}` on load; the new shape is written
-back to localStorage only on the next Recalculate click.
+workout is opened.
 
 ---
 

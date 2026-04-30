@@ -162,7 +162,6 @@ def compute_bin_thresholds(ref_watts: Optional[dict]) -> Optional[dict]:
         return (a + b) / 2.0
 
     # Fast-aerobic floor is defined in pace terms (marathon pace + 3 s/500m)
-    # — translate at the edge so the semantics match the legacy implementation.
     mara_pace = watts_to_pace(wmara)
     fast_aero_watts = compute_watts(mara_pace + 3.0)
 

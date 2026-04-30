@@ -210,10 +210,6 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
 #
 # Persisted shape (localStorage key "custom_splits"):
 #     {str(workout_id): {"unit": "m" | "s", "values": [int, ...]}}
-#
-# Legacy values (bare list of meters) are auto-migrated in memory on load; the
-# migrated shape is written back only when the user next clicks Recalculate on
-# that workout.
 
 _CUSTOM_SPLITS_LS_KEY = "custom_splits"
 
@@ -291,12 +287,10 @@ def _even_splits(total: int, n: int) -> list:
 
 
 def _normalize_saved_entry(saved):
-    """Coerce a localStorage value (legacy list or new dict) to the new shape.
+    """Coerce a localStorage value to the new shape.
 
     Returns {"unit": "m"|"s", "values": [int,...]} or None.
     """
-    if isinstance(saved, list):
-        return {"unit": "m", "values": [int(v) for v in saved]}
     if isinstance(saved, dict) and "unit" in saved and "values" in saved:
         return {
             "unit": saved["unit"],
@@ -336,7 +330,7 @@ def _custom_splits_ui(workout: dict, strokes: list, on_splits_change) -> None:
             return
         raw = ls.result
         parsed = json.loads(raw) if raw else {}
-        # Migrate legacy list-valued entries in memory so reads are uniform.
+
         store = {}
         for k, v in parsed.items():
             normalized = _normalize_saved_entry(v)

@@ -341,34 +341,21 @@ def get_age_group_records(gender: str, age: int, weight_kg: float) -> dict:
     # Serialize keys as "dist|2000" strings for JSON.
     cache[filter_key] = {
         "_ts": now,
-        "records": {
-            f"{etype}|{evalue}": v for (etype, evalue), v in filtered.items()
-        },
+        "records": {f"{etype}|{evalue}": v for (etype, evalue), v in filtered.items()},
     }
     _save_cache(cache)
     return filtered
 
 
 def _deserialize_records(raw: dict) -> dict:
-    """Deserialize cached records, converting flat-float legacy entries to
-    the current metadata-dict shape so older caches still work."""
+    """Deserialize cached records."""
     out: dict = {}
     for k, v in raw.items():
         parts = k.split("|")
         if len(parts) != 2:
             continue
         key = (parts[0], int(parts[1]))
-        if isinstance(v, dict):
-            out[key] = v
-        else:
-            out[key] = {
-                "result": float(v),
-                "name": "",
-                "date": "",
-                "age_category": "",
-                "weight_class": None,
-                "gender": "",
-            }
+        out[key] = v
     return out
 
 

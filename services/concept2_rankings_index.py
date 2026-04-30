@@ -100,11 +100,6 @@ def _slice_path(
     )
 
 
-def _legacy_path(event_kind: str, event_value: int) -> Path:
-    """Path for the v1 single-file layout (one file per event)."""
-    return INDEX_DIR / f"{event_kind}_{event_value}.json"
-
-
 def _url_id_for(event_kind: str, event_value: int) -> int:
     if event_kind == "dist":
         return EVENT_IDS_DIST[event_value]
@@ -248,7 +243,6 @@ def _delete_existing_slices(event_kind: str, event_value: int) -> None:
     """Remove all existing slice files for one event before a fresh write.
 
     Keeps the directory clean if a slice that previously existed is now empty.
-    Also removes the v1 single-file legacy layout if present.
     """
     if not INDEX_DIR.exists():
         return
@@ -256,12 +250,6 @@ def _delete_existing_slices(event_kind: str, event_value: int) -> None:
     for p in INDEX_DIR.glob(pattern):
         try:
             p.unlink()
-        except FileNotFoundError:
-            pass
-    legacy = _legacy_path(event_kind, event_value)
-    if legacy.exists():
-        try:
-            legacy.unlink()
         except FileNotFoundError:
             pass
 
@@ -296,16 +284,12 @@ def rebuild_event_index(event_kind: str, event_value: int) -> None:
     _delete_existing_slices(event_kind, event_value)
 
     built_at = (
-        datetime.now(timezone.utc)
-        .isoformat(timespec="seconds")
-        .replace("+00:00", "Z")
+        datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     )
 
     for (gender, age_band, weight_sentinel), entries in buckets.items():
         slice_label = f"{gender}/{age_band}/{weight_sentinel}"
-        deduped = _dedup_race_collisions(
-            entries, event_kind, event_value, slice_label
-        )
+        deduped = _dedup_race_collisions(entries, event_kind, event_value, slice_label)
         out = {
             "schema_version": SCHEMA_VERSION,
             "built_at": built_at,
@@ -421,9 +405,7 @@ def load_event_slices(
     datas: list[dict] = []
     needs_rebuild = False
     for band in bands:
-        path = _slice_path(
-            event_kind, event_value, gender, band, weight_sentinel
-        )
+        path = _slice_path(event_kind, event_value, gender, band, weight_sentinel)
         data = _read_slice_file(path)
         if data is None:
             needs_rebuild = True

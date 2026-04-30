@@ -447,23 +447,6 @@ def load_world_record_data(state, profile: dict):
 #   Public mirror: ``.public_profiles/{uid}/strokes/{rid}.json`` — written
 #                  lazily whenever the owner fetches and ``profile.public``
 #                  is True.
-#
-# Migration note: older releases stored race-normalized ``[{t:sec, d:m}]`` in
-# a single localStorage blob.  We now store raw Concept2 output
-# (``[{t:tenths, d:dm, p, spm, hr, …}]``) per record in IDB so workout_page
-# and race_page can share the cache without paying an O(N) re-encode on
-# every write.  Legacy normalized entries are detected via the absence of
-# ``p``/``spm``/``hr`` keys and ignored on read so they are re-fetched as raw.
-
-
-def _is_raw_strokes(strokes) -> bool:
-    """Heuristic: raw Concept2 strokes carry ``p``/``spm``/``hr`` keys;
-    legacy race-normalized entries carry only ``t`` and ``d``.  Empty lists
-    are treated as raw (safe default)."""
-    if not strokes:
-        return True
-    s0 = strokes[0]
-    return isinstance(s0, dict) and ("p" in s0 or "spm" in s0 or "hr" in s0)
 
 
 def _public_enabled() -> bool:
@@ -534,7 +517,7 @@ def strokes_for(workout: dict) -> dict:
 
         public_enabled = _public_enabled()
         cached = idb_cmd.result
-        if cached is not None and _is_raw_strokes(cached):
+        if cached is not None:
             _mirror_strokes_to_public(ctx.user_id, wid, cached, public_enabled)
             return {"strokes": cached, "status": "loaded", "error": None}
 
@@ -633,8 +616,6 @@ def strokes_batch(workouts: list) -> dict:
         }
 
     cache_dict = (idb_cmd.result or {}) if idb_cmd is not None else {}
-    # Drop any legacy normalized entries so they re-fetch as raw.
-    cache_dict = {k: v for k, v in cache_dict.items() if _is_raw_strokes(v)}
 
     if batch_key != batch_state.batch_key:
         missing = tuple(wid for wid in ids if str(wid) not in cache_dict)

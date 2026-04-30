@@ -53,7 +53,7 @@ The scrubbed public `profile.json` contains:
 | `user_id`      | Concept2 numeric user id                                      |
 | `display_name` | Concept2 `first_name` (or `username` fallback)                |
 | `yob`          | Year of birth (int, 4-digit) — derived from `dob` at publish  |
-| `age`          | Snapshot of age at publish time (legacy; v1-compatible read)  |
+| `age`          | Snapshot of age at publish time                               |
 | `gender`       | "Male" / "Female"                                             |
 | `weight`       | kg or lbs (see `weight_unit`)                                 |
 | `weight_unit`  | "kg" / "lbs"                                                  |
