@@ -52,6 +52,7 @@ from components.workout_page import workout_page
 from components.sessions_page import sessions_page
 from components.volume_page import volume_page
 from components.concept2_sync import concept2_sync
+from components.indexed_db import mount_indexed_db, IDB_STORES
 from components.app_context import (
     AppContext,
     get_profile,
@@ -408,7 +409,13 @@ def _app_header(current_page, is_public):
                             print(f"[disconnect] unpublish failed: {_exc}")
                         clear_token(ctx.user_id)
                         clear_session_ls()
-                        hd.local_storage.remove_item("workouts")
+                        # Drop client-side workout + stroke caches so the next
+                        # user logging in on this browser starts clean.
+                        from components import indexed_db as _idb
+
+                        _idb.clear(_idb.WORKOUTS_STORE)
+                        _idb.clear(_idb.STROKES_STORE)
+                        _idb.clear(_idb.META_STORE)
                         loc = hd.location()
                         loc.go(path="/")
 
@@ -436,6 +443,13 @@ def _dashboard_view(app_state, path_suffix: str | None = None) -> None:
     current_page = _ROUTES_PAGES.get(active_path, None if in_session else _DEFAULT_PAGE)
 
     public_banner()
+
+    # Mount the IndexedDB bridge once per render in owner mode.  Public mode
+    # reads workouts + strokes from server-side files, so it doesn't need
+    # client-side storage.  Mounting here (above the page dispatch) ensures
+    # the plugin is in the DOM whenever any consumer needs it.
+    if not is_public:
+        mount_indexed_db(IDB_STORES)
 
     with hd.box(padding=2, gap=1, padding_top=0):
         _app_header(current_page, is_public)
@@ -594,25 +608,7 @@ def _main_body() -> None:
         app_state.pending_profile = None
         return  # next render will re-read the combined key
 
-    # No session data → check legacy keys for one-time migration, else login.
     if not ls_session.result:
-        ls_uid_legacy = hd.local_storage.get_item("c2_user_id")
-        ls_profile_legacy = hd.local_storage.get_item("profile")
-        if not ls_uid_legacy.done or not ls_profile_legacy.done:
-            with hd.box(height="100vh", align="center", justify="center"):
-                hd.spinner()
-            return
-        if ls_uid_legacy.result:
-            legacy_profile: dict = {}
-            if ls_profile_legacy.result:
-                try:
-                    legacy_profile = json.loads(ls_profile_legacy.result)
-                except Exception:
-                    legacy_profile = {}
-            write_session_ls(ls_uid_legacy.result, legacy_profile)
-            hd.local_storage.remove_item("c2_user_id")
-            hd.local_storage.remove_item("profile")
-            return  # next render will read the migrated combined key
         _login_view()
         return
 

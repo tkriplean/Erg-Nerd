@@ -25,7 +25,7 @@ back or a loading sentinel.
 
     strokes_for(workout) -> {'strokes', 'status', 'error'}
         Single-workout stroke fetcher.  Uniform across owner / public modes;
-        handles the localStorage cache, on-owner-view mirror to the
+        handles the IndexedDB cache, on-owner-view mirror to the
         public-profile directory, and the "not yet cached" public-mode case.
 
     strokes_batch(workouts) -> {'by_id', 'done', 'total', 'is_loading',
@@ -37,6 +37,14 @@ The mode-aware helpers (``strokes_for``, ``strokes_batch``) read
 mode/user_id/client from ``components.app_context.AppContext`` rather than
 taking a ``ctx`` argument.
 
+Storage backend
+    Owner-mode workouts and strokes live in IndexedDB (see
+    ``components.indexed_db``) — a per-record store with 50 MB – 1 GB+
+    headroom that replaces the ~5–10 MB localStorage cap and the
+    O(N) decompress/recompress cycle the strokes cache used to pay on every
+    workout view.  ``mount_indexed_db`` is invoked once per render at the
+    top of ``app.py:_dashboard_view`` so all consumers can dispatch ops.
+
 The stroke helpers store **raw** Concept2 API strokes
 (``[{t: tenths, d: decimeters, p, spm, hr, …}]``) — workout_page consumes
 this shape directly; race_page runs ``normalize_strokes`` at the boundary.
@@ -47,11 +55,12 @@ from datetime import datetime
 import hyperdiv as hd
 
 from config import SYNTHETIC_MODE
-from services.local_storage_compression import (
-    compress_strokes_cache,
-    compress_workouts_envelope,
-    decompress_strokes_cache,
-    decompress_workouts_envelope,
+from components import indexed_db
+from components.indexed_db import (
+    META_STORE,
+    SCHEMA_VERSION_KEY,
+    STROKES_STORE,
+    WORKOUTS_STORE,
 )
 from services.data_integrity import INTEGRITY_VERSION, normalize_new_workouts
 from services.quarantine import write_quarantine
@@ -124,7 +133,7 @@ def concept2_sync(client) -> None:
     if ctx.workouts_dict is not None:
         return  # Already synced this session.
 
-    # ── Step 1: one-time localStorage read ───────────────────────────────────
+    # ── Step 1: one-time IndexedDB read ──────────────────────────────────────
     sync_state = hd.state(
         written=False,
         initial_workouts=None,
@@ -143,25 +152,43 @@ def concept2_sync(client) -> None:
     )
 
     if not sync_state.initial_loaded:
-        ls_wkts = hd.local_storage.get_item("workouts")
-        if not ls_wkts.done:
+        if not indexed_db.is_ready():
             with hd.box(align="center", padding=4):
                 hd.spinner()
             return
-        cached_dict, cached_version = decompress_workouts_envelope(ls_wkts.result or "")
+        # Fire schema-version + getAll in parallel; the IDB queue serialises
+        # them on the JS side but both polling handles resolve independently.
+        schema_cmd = indexed_db.get(META_STORE, SCHEMA_VERSION_KEY)
+        workouts_cmd = indexed_db.get_all(WORKOUTS_STORE)
+        if not (schema_cmd.done and workouts_cmd.done):
+            with hd.box(align="center", padding=4):
+                hd.spinner()
+            return
+
+        cached_records = workouts_cmd.result or []
+        cached_dict = {item["key"]: item["value"] for item in cached_records}
+        cached_version = (
+            int(schema_cmd.result) if isinstance(schema_cmd.result, int) else None
+        )
+
         if cached_version == INTEGRITY_VERSION:
             sync_state.initial_workouts = cached_dict
             sync_state.cache_version_ok = True
         else:
-            # Missing envelope, legacy un-versioned blob, or stale rules:
-            # discard so the API does a full pull and every workout passes
-            # through the current normalizer.
+            # Missing meta record, pre-IDB cold start, or stale rules: discard
+            # so the API does a full pull and every workout passes through the
+            # current normalizer.  Strokes are tied to workout shape too, so
+            # clear them in lockstep.  The clears are queued behind any
+            # outstanding reads and ahead of the upcoming put_many, so order
+            # is preserved.
             if cached_dict and cached_version != INTEGRITY_VERSION:
                 print(
-                    f"[concept2_sync] integrity_version "
+                    f"[concept2_sync] schema_version "
                     f"{cached_version!r} → {INTEGRITY_VERSION}: "
                     f"discarding {len(cached_dict)} cached workouts"
                 )
+                indexed_db.clear(WORKOUTS_STORE)
+                indexed_db.clear(STROKES_STORE)
             sync_state.initial_workouts = {}
             sync_state.cache_version_ok = False
         sync_state.initial_loaded = True
@@ -210,21 +237,28 @@ def concept2_sync(client) -> None:
                 print(f"[concept2_sync] quarantine write failed: {exc}")
 
         # Persist + public mirror BEFORE enrichment so the canonical
-        # normalized shape is what reaches localStorage and the public
+        # normalized shape is what reaches IndexedDB and the public
         # profile directory.  Enrichment fields are derived and re-applied
         # on every load.
         if not sync_state.written:
             if workouts_dict != sync_state.initial_workouts:
-                hd.local_storage.set_item(
-                    "workouts",
-                    compress_workouts_envelope(workouts_dict, INTEGRITY_VERSION),
-                )
+                # One transaction per sync — JS does N puts inside a single
+                # IDB readwrite txn so the sync write cost is O(1) round-trips.
+                indexed_db.put_many(WORKOUTS_STORE, workouts_dict)
+                indexed_db.put(META_STORE, SCHEMA_VERSION_KEY, INTEGRITY_VERSION)
             sync_state.written = True
 
         if not sync_state.published and not SYNTHETIC_MODE and ctx.profile:
             _maybe_push_on_sync(
                 client, sync_state, workouts_dict, sync_state.cache_version_ok
             )
+
+        # Detach from the dicts that the queued IDB put_many and the
+        # in-flight public-profile push still reference.  enrich_all
+        # mutates each workout in place and adds non-JSON-serializable
+        # fields (date_dt: datetime.date); persistence must see the
+        # un-enriched shape.
+        workouts_dict = {k: dict(v) for k, v in workouts_dict.items()}
 
         # Stage-2 enrichment: attach pace/watts/season/etc. once before
         # workouts reach AppContext.  Mutates in-place.
@@ -407,34 +441,19 @@ def load_world_record_data(state, profile: dict):
 # ---------------------------------------------------------------------------
 #
 # Cache layout:
-#   In-memory:   one hd.state() under a stable scope ``_STROKES_SCOPE`` so all
-#                strokes_for / strokes_batch calls in the same render tree
-#                share a single cache dict.
-#   Persistent:  localStorage key ``strokes_cache`` (compressed JSON via
-#                compress_strokes_cache).  Owner-only.
+#   Persistent:  IndexedDB store ``strokes`` (see components.indexed_db).
+#                One record per workout, key = str(workout_id), value = the
+#                raw Concept2 strokes list.  Owner-only.
 #   Public mirror: ``.public_profiles/{uid}/strokes/{rid}.json`` — written
 #                  lazily whenever the owner fetches and ``profile.public``
 #                  is True.
 #
 # Migration note: older releases stored race-normalized ``[{t:sec, d:m}]`` in
-# the localStorage cache.  We now store raw Concept2 output
-# (``[{t:tenths, d:dm, p, spm, hr, …}]``) so workout_page and race_page can
-# share one cache.  Legacy normalized entries are detected via the absence of
-# ``p``/``spm``/``hr`` keys and discarded on first load so they are re-fetched
-# as raw.
-
-
-_STROKES_LS_KEY = "strokes_cache"
-
-
-# localStorage is the single source of truth for the stroke cache.
-# ``hd.local_storage.get_item`` caches results keyed by the LS key (not by
-# call-stack position), so reads are reliably shared across every call in a
-# render.  After ``set_item`` the cache entry is invalidated, so subsequent
-# reads pick up the new value.  We deliberately avoid ``hd.state`` for the
-# cache because state keys are derived from the call stack — calling
-# ``hd.state`` from two different helpers yields two unrelated states even
-# inside the same ``hd.scope``.
+# a single localStorage blob.  We now store raw Concept2 output
+# (``[{t:tenths, d:dm, p, spm, hr, …}]``) per record in IDB so workout_page
+# and race_page can share the cache without paying an O(N) re-encode on
+# every write.  Legacy normalized entries are detected via the absence of
+# ``p``/``spm``/``hr`` keys and ignored on read so they are re-fetched as raw.
 
 
 def _is_raw_strokes(strokes) -> bool:
@@ -453,38 +472,13 @@ def _public_enabled() -> bool:
     return bool((AppContext().profile or {}).get("public"))
 
 
-def _load_strokes_cache() -> tuple[dict, bool]:
-    """
-    Return (cache_dict, ready).  Reads directly from localStorage every
-    render — cheap because hd.local_storage returns a cached async_command,
-    so this is at worst a dict re-decompress.  ``ready=False`` means
-    localStorage is still loading.
-    """
-    ls = hd.local_storage.get_item(_STROKES_LS_KEY)
-    if not ls.done:
-        return {}, False
-    if not ls.result:
-        return {}, True
-    try:
-        cache = decompress_strokes_cache(ls.result)
-    except Exception:
-        return {}, True
-    # Drop legacy normalized entries so they are re-fetched as raw.
-    return {k: v for k, v in cache.items() if _is_raw_strokes(v)}, True
-
-
 def _mirror_strokes_to_public(
     user_id: str, result_id, strokes: list, public_enabled: bool
 ) -> None:
     """Cache-on-owner-view mirror.  No-op when the owner is private, the
     strokes list is empty, or the file already exists on disk (cheap
     ``Path.is_file`` check avoids redundant atomic writes when the same
-    cached entry is touched across many renders).
-
-    ``public_enabled`` is passed by the caller so this helper never calls
-    ``hd.local_storage.get_item`` itself — important because it is called
-    from loops, and every LS read would register a fresh component with a
-    call-stack-derived key, tripping HyperDiv's duplicate-key check."""
+    cached entry is touched across many renders)."""
     if not strokes or not public_enabled:
         return
     try:
@@ -495,22 +489,6 @@ def _mirror_strokes_to_public(
         public_profiles.publish_strokes(user_id, result_id, strokes)
     except Exception as exc:
         print(f"[public_profiles] cache-on-view failed: {exc}")
-
-
-def _persist_strokes(
-    user_id: str, wid, strokes: list, cache: dict, public_enabled: bool
-) -> None:
-    """Merge one entry into ``cache`` (the render-local dict returned by
-    ``_load_strokes_cache``), write the full merged cache back to
-    localStorage, and mirror to the public-profile directory if opted in."""
-    merged = dict(cache)
-    merged[str(wid)] = strokes
-    try:
-        hd.local_storage.set_item(_STROKES_LS_KEY, compress_strokes_cache(merged))
-    except Exception as exc:
-        print(f"[strokes_cache] persist failed: {exc}")
-    cache[str(wid)] = strokes  # reflect in caller's dict so same-render reads see it
-    _mirror_strokes_to_public(user_id, wid, strokes, public_enabled)
 
 
 def strokes_for(workout: dict) -> dict:
@@ -528,7 +506,7 @@ def strokes_for(workout: dict) -> dict:
     - ``no_strokes``: workout has no stroke_data flag — nothing to fetch.
     - ``uncached``  : public-mode only; the owner has not yet viewed this
                       session so the server has no stroke file.
-    - ``loading``   : localStorage read or API task is in flight.
+    - ``loading``   : IndexedDB read or API task is in flight.
     - ``loaded``    : ``strokes`` is a list (may be empty if API returned none).
     - ``error``     : the API fetch failed; ``error`` carries the message.
     """
@@ -545,25 +523,20 @@ def strokes_for(workout: dict) -> dict:
             return {"strokes": None, "status": "uncached", "error": None}
         return {"strokes": cached, "status": "loaded", "error": None}
 
-    # Owner mode.  Wrap all LS reads + the fetch task in a per-wid scope so
+    # Owner mode.  Wrap all reads + the fetch task in a per-wid scope so
     # callers can invoke strokes_for(wid=A), strokes_for(wid=B) from the
     # same loop body without colliding on HyperDiv's call-stack-derived
     # component keys.
-
     with hd.scope(f"strokes_for_{wid}"):
-        cache, ready = _load_strokes_cache()
-        if not ready:
+        idb_cmd = indexed_db.get(STROKES_STORE, str(wid))
+        if not idb_cmd.done:
             return {"strokes": None, "status": "loading", "error": None}
 
         public_enabled = _public_enabled()
-
-        key = str(wid)
-        if key in cache:
-            # Cache-hit: still mirror to the public directory — the entry
-            # may have been cached before the user opted in.  The mirror
-            # helper no-ops when the file already exists on disk.
-            _mirror_strokes_to_public(ctx.user_id, wid, cache[key], public_enabled)
-            return {"strokes": cache[key], "status": "loaded", "error": None}
+        cached = idb_cmd.result
+        if cached is not None and _is_raw_strokes(cached):
+            _mirror_strokes_to_public(ctx.user_id, wid, cached, public_enabled)
+            return {"strokes": cached, "status": "loaded", "error": None}
 
         if ctx.client is None:
             return {"strokes": None, "status": "error", "error": "no client"}
@@ -573,14 +546,17 @@ def strokes_for(workout: dict) -> dict:
             print(f"FETCHING strokes_for_{wid}")
             task.run(lambda: ctx.client.get_strokes(int(ctx.user_id), wid))
         if task.running:
-            print(f"strokes_for_{wid} STILL RUNNING")
             return {"strokes": None, "status": "loading", "error": None}
         if task.error:
             return {"strokes": None, "status": "error", "error": str(task.error)}
         if task.done:
             print(f"strokes_for_{wid} DONE")
             strokes = task.result if isinstance(task.result, list) else []
-            _persist_strokes(ctx.user_id, wid, strokes, cache, public_enabled)
+            indexed_db.put(STROKES_STORE, str(wid), strokes)
+            _mirror_strokes_to_public(ctx.user_id, wid, strokes, public_enabled)
+            # Return the freshly-fetched value directly; the IDB write
+            # invalidates the cached read so subsequent renders pick up the
+            # same value from storage.
             return {"strokes": strokes, "status": "loaded", "error": None}
 
         return {"strokes": None, "status": "loading", "error": None}
@@ -601,18 +577,13 @@ def strokes_batch(workouts: list) -> dict:
         }
 
     Owner: fires at most one ``client.get_strokes`` task per render so the
-    caller can show honest progress; persists to localStorage and mirrors
-    to the public-profile directory if opted in.
+    caller can show honest progress; persists each fetched record to
+    IndexedDB individually and mirrors to the public-profile directory if
+    opted in.
 
     Public: synchronous disk reads; uncached workouts go in ``uncached_count``
     and are absent from ``by_id`` so the caller can exclude them.
     """
-    # ``by_id_snapshot`` lets us serve the last-known view while
-    # ``hd.local_storage`` is mid-reload.  Every ``set_item`` invalidates the
-    # LS cache, so the render immediately after a fetch completes sees
-    # ``ls.done == False`` for one tick and ``_load_strokes_cache`` reports
-    # "not ready" — without the snapshot the progress bar would flicker to
-    # 0/0 between every completed fetch.
     batch_state = hd.state(batch_key="", queue=(), total=0, done=0, by_id_snapshot={})
 
     ctx = AppContext()
@@ -645,12 +616,14 @@ def strokes_batch(workouts: list) -> dict:
             "uncached_count": uncached,
         }
 
-    # Owner mode
-    cache, ready = _load_strokes_cache()
-    if not ready:
-        # LS is mid-reload (set_item invalidates the entry for one tick).
-        # Serve the last snapshot + progress so callers see monotonic
-        # advancement instead of a flicker to 0/0 between every fetch.
+    # Owner mode — one batched IDB read per render covers every requested id.
+    id_strs = [str(wid) for wid in ids]
+    idb_cmd = indexed_db.get_many(STROKES_STORE, id_strs) if id_strs else None
+    if idb_cmd is not None and not idb_cmd.done:
+        # IDB read in flight (a fresh request fires after each per-workout
+        # write, since writes invalidate the store's cached reads).  Serve
+        # the last snapshot + progress so callers see monotonic advancement
+        # instead of a flicker to 0/0 between every fetch.
         return {
             "by_id": dict(batch_state.by_id_snapshot),
             "done": batch_state.done,
@@ -659,17 +632,17 @@ def strokes_batch(workouts: list) -> dict:
             "uncached_count": 0,
         }
 
+    cache_dict = (idb_cmd.result or {}) if idb_cmd is not None else {}
+    # Drop any legacy normalized entries so they re-fetch as raw.
+    cache_dict = {k: v for k, v in cache_dict.items() if _is_raw_strokes(v)}
+
     if batch_key != batch_state.batch_key:
-        missing = tuple(wid for wid in ids if str(wid) not in cache)
+        missing = tuple(wid for wid in ids if str(wid) not in cache_dict)
         batch_state.queue = missing
         batch_state.total = len(missing)
         batch_state.done = 0
         batch_state.batch_key = batch_key
 
-    # Read the public-toggle once per render.  ``_public_enabled`` wraps
-    # ``hd.local_storage.get_item("profile")`` — calling it inside the
-    # mirror loop below would register N components with the same key and
-    # trip HyperDiv's duplicate-key check.
     public_enabled = _public_enabled()
 
     if batch_state.queue and ctx.client is not None:
@@ -680,20 +653,25 @@ def strokes_batch(workouts: list) -> dict:
             task.run(lambda nid=next_id: ctx.client.get_strokes(int(ctx.user_id), nid))
         if task.done:
             print("STROKE CACHE FETCHED")
-
             if task.error:
                 print(f"[strokes_batch] error on {next_id}: {task.error}")
                 batch_state.queue = batch_state.queue[1:]
                 batch_state.done += 1
             else:
                 strokes = task.result if isinstance(task.result, list) else []
-                _persist_strokes(ctx.user_id, next_id, strokes, cache, public_enabled)
+                indexed_db.put(STROKES_STORE, str(next_id), strokes)
+                _mirror_strokes_to_public(ctx.user_id, next_id, strokes, public_enabled)
+                # Reflect the fresh entry in the local view so the snapshot
+                # below carries it forward across the IDB cache invalidation
+                # that put() just triggered.
+                cache_dict[str(next_id)] = strokes
                 batch_state.queue = batch_state.queue[1:]
                 batch_state.done += 1
 
-    by_id = {str(wid): cache[str(wid)] for wid in ids if str(wid) in cache}
-    # Snapshot so the next render can serve the same view if LS is mid-reload
-    # (every set_item invalidates hd.local_storage's cache for one tick).
+    by_id = {str(wid): cache_dict[str(wid)] for wid in ids if str(wid) in cache_dict}
+    # Snapshot so the next render can serve the same view while the IDB
+    # re-read is in flight (every put() invalidates the store's cached reads
+    # for one render tick).
     batch_state.by_id_snapshot = by_id
     # Cache-hit mirror: ensure every workout visible on this page is also
     # present in the public directory when the owner is opted in.  The

@@ -1,3 +1,14 @@
+"""
+services/local_storage_compression.py
+
+Compression helpers for the workout dict.  Originally written to keep
+the per-browser workouts blob inside the ~5–10 MB ``localStorage`` cap;
+the client-side cache now lives in IndexedDB (see
+``components.indexed_db``) so the localStorage consumer is gone.  These
+helpers remain because :mod:`services.public_profiles` reuses the same
+encoding for the server-side public-profile JSON files.
+"""
+
 from __future__ import annotations
 
 import base64
@@ -8,7 +19,8 @@ from services.formatters import format_time
 
 
 # ---------------------------------------------------------------------------
-# Workout localStorage compression
+# Workout dict compression — used by services.public_profiles for the
+# server-side ``.public_profiles/{uid}/workouts.json`` payload.
 # ---------------------------------------------------------------------------
 
 # Fields that are always redundant and never used by the app.
@@ -145,89 +157,3 @@ def decompress_workouts(stored: str) -> dict:
         return {}
 
 
-# ---------------------------------------------------------------------------
-# Versioned envelope around the workouts payload
-# ---------------------------------------------------------------------------
-#
-# The workouts that sit in localStorage have already passed through
-# ``services.data_integrity.normalize_workout``.  When the rules in that
-# module change we need to invalidate the cache and force a full re-fetch
-# from Concept2.  We do that with a thin envelope that records the integrity
-# version alongside the compressed payload:
-#
-#   {"v": <int>, "w": "<base64-compressed-workouts>"}
-#
-# Pre-versioning caches stored the raw compressed string at the same key.
-# ``decompress_workouts_envelope`` detects that legacy shape, returns the
-# inner dict, and reports ``None`` for the version so the caller knows to
-# discard.
-
-
-def compress_workouts_envelope(workouts_dict: dict, integrity_version: int) -> str:
-    """Wrap the compressed workouts payload in a versioned envelope.
-
-    The envelope is itself a JSON string suitable for direct
-    ``localStorage.setItem``.  Use ``decompress_workouts_envelope`` to read
-    it back.
-    """
-    return json.dumps(
-        {"v": int(integrity_version), "w": compress_workouts(workouts_dict)}
-    )
-
-
-def decompress_workouts_envelope(stored: str) -> tuple[dict, int | None]:
-    """Reverse of ``compress_workouts_envelope``.
-
-    Returns ``(workouts_dict, integrity_version)``:
-
-    - ``({}, None)`` — empty / invalid blob.  Caller should treat the
-      cache as missing.
-    - ``(<dict>, None)`` — pre-versioning legacy blob: the inner payload
-      decoded but the envelope was absent.  Caller should treat as
-      version-mismatched and re-fetch.
-    - ``(<dict>, <int>)`` — versioned envelope; caller compares the int
-      to ``INTEGRITY_VERSION``.
-    """
-    if not stored:
-        return {}, None
-    try:
-        outer = json.loads(stored)
-    except (TypeError, ValueError):
-        outer = None
-    if isinstance(outer, dict) and "v" in outer and "w" in outer:
-        try:
-            return decompress_workouts(outer["w"]), int(outer["v"])
-        except Exception:
-            return {}, None
-    # Legacy: the value at the key was the raw compressed string from
-    # before the envelope existed.  Decode it but flag as un-versioned.
-    legacy = decompress_workouts(stored)
-    return legacy, None
-
-
-# ---------------------------------------------------------------------------
-# Stroke cache localStorage compression
-# ---------------------------------------------------------------------------
-
-
-def compress_strokes_cache(strokes_dict: dict) -> str:
-    """
-    Compress the stroke cache dict for browser localStorage.
-
-    The stroke cache maps str(workout_id) → [{t: float, d: float}, …].
-    The dict is JSON-serialised, zlib-compressed (level 9), and base64-encoded.
-
-    Typical reduction: ~5–8× vs raw JSON for a set of 2k stroke arrays.
-    """
-    raw = json.dumps(strokes_dict).encode()
-    return base64.b64encode(zlib.compress(raw, level=9)).decode()
-
-
-def decompress_strokes_cache(stored: str) -> dict:
-    """
-    Reverse of compress_strokes_cache(). Returns the dict, or {} on error.
-    """
-    try:
-        return json.loads(zlib.decompress(base64.b64decode(stored)))
-    except Exception:
-        return {}
