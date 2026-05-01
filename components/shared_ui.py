@@ -52,56 +52,95 @@ def global_filter_ui() -> None:
                     with hd.box(
                         padding=1, gap=0.5, background_color="neutral-50", min_width=14
                     ):
-                        # Convenience shortcuts
+                        # Convenience shortcuts.  Each entry is (label, kind, n):
+                        #   kind="top"      — keep newest n seasons
+                        #   kind="single"   — keep only all_seasons[n] (single
+                        #                     specific season)
                         _shortcuts = [
-                            ("All Seasons", 0),
-                            ("Last Season", 1),
-                            ("Last 2 Seasons", 2),
-                            ("Last 5 Seasons", 5),
+                            ("All Seasons", "top", 0),
+                            ("This Season", "top", 1),
+                            ("Previous Season", "single", 1),
+                            ("Last 2 Seasons", "top", 2),
+                            ("Last 5 Seasons", "top", 5),
                         ]
                         with hd.box(gap=0.25, padding_bottom=0.5):
-                            for _lbl, _n in _shortcuts:
-                                if _n == 0 or len(all_seasons) >= _n:
-                                    with hd.scope(f"shortcut_{_n}"):
-                                        _active = (_n == 0 and not _excl) or (
-                                            _n > 0
-                                            and len(_excl)
-                                            == max(0, len(all_seasons) - _n)
-                                            and all(
-                                                s in _excl for s in all_seasons[_n:]
+                            for _lbl, _kind, _n in _shortcuts:
+                                _available = (_kind == "top" and (_n == 0 or len(all_seasons) >= _n)) or (
+                                    _kind == "single" and len(all_seasons) > _n
+                                )
+                                if _available:
+                                    with hd.scope(f"shortcut_{_kind}_{_n}"):
+                                        if _kind == "top":
+                                            _active = (_n == 0 and not _excl) or (
+                                                _n > 0
+                                                and len(_excl)
+                                                == max(0, len(all_seasons) - _n)
+                                                and all(
+                                                    s in _excl
+                                                    for s in all_seasons[_n:]
+                                                )
                                             )
-                                        )
+                                        else:
+                                            _kept = [
+                                                s for s in all_seasons if s not in _excl
+                                            ]
+                                            _active = (
+                                                len(_kept) == 1
+                                                and _kept[0] == all_seasons[_n]
+                                            )
                                         if hd.button(
                                             _lbl,
                                             size="small",
                                             variant="primary" if _active else "text",
                                             width="100%",
                                         ).clicked:
-                                            if _n == 0:
-                                                gstate.excluded_seasons = ()
+                                            if _kind == "top":
+                                                if _n == 0:
+                                                    gstate.excluded_seasons = ()
+                                                else:
+                                                    gstate.excluded_seasons = tuple(
+                                                        sorted(all_seasons[_n:])
+                                                    )
                                             else:
+                                                _keep = all_seasons[_n]
                                                 gstate.excluded_seasons = tuple(
-                                                    sorted(all_seasons[_n:])
+                                                    sorted(
+                                                        s
+                                                        for s in all_seasons
+                                                        if s != _keep
+                                                    )
                                                 )
                                             _se_dd.opened = False
 
                         hd.divider()
 
-                        # Per-season checkboxes
+                        # Per-season checkboxes.  Disallow unchecking the last
+                        # remaining season — at least one must always be kept.
                         with hd.box(gap=0.25, padding_top=0.5):
                             for season in all_seasons:
                                 with hd.scope(f"gs_{season}"):
                                     _is_sel = season not in gstate.excluded_seasons
-                                    cb = hd.checkbox(season, checked=_is_sel)
+                                    _is_last_kept = _is_sel and (
+                                        len(all_seasons) - len(_excl) == 1
+                                    )
+                                    cb = hd.checkbox(
+                                        season,
+                                        checked=_is_sel,
+                                        disabled=_is_last_kept,
+                                    )
                                     if cb.changed:
                                         _e = set(gstate.excluded_seasons)
                                         if cb.checked:
                                             _e.discard(season)
                                         else:
-                                            _e.add(season)
+                                            if len(all_seasons) - len(
+                                                _e & set(all_seasons)
+                                            ) > 1:
+                                                _e.add(season)
                                         gstate.excluded_seasons = tuple(sorted(_e))
-                                    if cb.checked != _is_sel:
-                                        cb.checked = _is_sel
+                                    _desired = season not in gstate.excluded_seasons
+                                    if cb.checked != _desired:
+                                        cb.checked = _desired
 
         # ── Machine selector (only when >1 type) ───────────────────────────────
         if len(machine_types) > 1:
