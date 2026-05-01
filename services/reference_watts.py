@@ -7,6 +7,12 @@ history that is anachronistic: a 2009 row gets graded against 2026 fitness.
 This module replaces that snapshot with a **quarterly** index of reference
 watts, built once per unique workout-set, interpolated at call time.
 
+Indices are **per machine**.  Callers must pass a single-machine workout list
+to ``build_reference_watts_index`` / ``resolve_index`` / ``get_reference_watts``;
+the upstream global filter (``gstate.machine`` via ``get_all_workouts``) does
+this filtering.  The machine is captured on each index dict so interpolation
+knows which ranked-event grid to scan.
+
 Pipeline
 --------
 1.  `_quality_efforts(all_workouts)` — the same stage-1 filter the Power Curve
@@ -68,13 +74,14 @@ from services.critical_power_model import (
     fit_critical_power,
 )
 from services.rowing_utils import (
-    RANKED_DISTANCES,
-    RANKED_TIMES,
+    ranked_distances,
+    ranked_times,
     apply_quality_filters,
     compute_pauls_constant,
     compute_watts,
     is_rankable_noninterval,
     pauls_law_pace,
+    workout_machine,
     PACE_MAX,
     PACE_MIN,
 )
@@ -86,16 +93,21 @@ except Exception:  # pragma: no cover — scipy is a first-order dep already
 
 
 # ---------------------------------------------------------------------------
-# Event metadata — all 13 ranked events
+# Event metadata — resolved per machine
 # ---------------------------------------------------------------------------
-
 # (cat_key, dist_m_or_None, duration_s_or_None)
 #   Distance events: dist_m is the event distance; duration varies by performance.
 #   Time events:     duration_s is the event definition; distance varies.
-_DIST_EVENTS: list = [(("dist", d), d, None) for d, _ in RANKED_DISTANCES]
-_TIME_EVENTS: list = [(("time", t), None, t / 10.0) for t, _ in RANKED_TIMES]
-_ALL_EVENTS: list = _DIST_EVENTS + _TIME_EVENTS
-_ALL_CAT_KEYS: list = [ck for ck, _, _ in _ALL_EVENTS]
+
+
+def _all_events(machine: str) -> list:
+    return [(("dist", d), d, None) for d, _ in ranked_distances(machine)] + [
+        (("time", t), None, t / 10.0) for t, _ in ranked_times(machine)
+    ]
+
+
+def _all_cat_keys(machine: str) -> list:
+    return [ck for ck, _, _ in _all_events(machine)]
 
 WINDOW_DAYS = 365
 INDEX_VERSION = 1
@@ -234,6 +246,11 @@ def build_reference_watts_index(
 ) -> dict:
     """Run the full quarterly build; return the index and cache it.
 
+    Invariant: ``all_workouts`` must be from a single machine. Callers filter
+    by ``gstate.machine`` upstream; the cache key (``input_hash``) includes
+    the per-workout ``machine`` field as a safety check, naturally separating
+    indices when this contract is honored.
+
     ``on_progress(i, n, label)`` is invoked once per marker (0-indexed) and one
     final time with (n, n, "done").  Idempotent: repeated calls with the same
     ``all_workouts`` return the cached index immediately.
@@ -249,12 +266,14 @@ def build_reference_watts_index(
             on_progress(n, n, "done")
         return cached
 
+    machine = workout_machine(all_workouts[0]) if all_workouts else "rower"
     quality = _quality_efforts(all_workouts)
 
     if not quality:
         index = {
             "version": INDEX_VERSION,
             "input_hash": h,
+            "machine": machine,
             "markers": [],
         }
         _INDEX_CACHE[h] = index
@@ -272,7 +291,7 @@ def build_reference_watts_index(
         label = m.isoformat()
         if on_progress:
             on_progress(i, n, label)
-        refs = _compute_marker_refs(m, quality, cp_fit_cache)
+        refs = _compute_marker_refs(m, quality, cp_fit_cache, machine)
         if refs is not None:
             result_markers.append(refs)
 
@@ -282,6 +301,7 @@ def build_reference_watts_index(
     index = {
         "version": INDEX_VERSION,
         "input_hash": h,
+        "machine": machine,
         "markers": result_markers,
     }
     _INDEX_CACHE[h] = index
@@ -351,7 +371,9 @@ def _window_pbs(quality: list, start: date, end: date) -> dict:
     return best
 
 
-def _compute_marker_refs(marker: date, quality: list, cp_cache: dict) -> Optional[dict]:
+def _compute_marker_refs(
+    marker: date, quality: list, cp_cache: dict, machine: str
+) -> Optional[dict]:
     """Build ``MarkerRefs`` for one marker, or None if no PBs in window."""
     start = marker - timedelta(days=WINDOW_DAYS)
     pbs = _window_pbs(quality, start, marker)
@@ -359,6 +381,8 @@ def _compute_marker_refs(marker: date, quality: list, cp_cache: dict) -> Optiona
         return None
 
     pb_list = list(pbs.values())
+    all_events = _all_events(machine)
+    all_cat_keys = _all_cat_keys(machine)
 
     # Predictor cascade.
     cp_params = None
@@ -369,14 +393,14 @@ def _compute_marker_refs(marker: date, quality: list, cp_cache: dict) -> Optiona
     source_tag: dict = {}
 
     if cp_params is not None:
-        for ck, dist_m, dur_s in _ALL_EVENTS:
+        for ck, dist_m, dur_s in all_events:
             w = _cp_watts_at_event(cp_params, dist_m, dur_s)
             if w is not None:
                 predicted[ck] = w
                 source_tag[ck] = "cp"
 
     # Fall back through Paul's Law where CP didn't cover (or wasn't fit).
-    if len(predicted) < len(_ALL_CAT_KEYS):
+    if len(predicted) < len(all_cat_keys):
         # Build lifetime-best-style dicts for Paul's regression.
         lb = {ck: p["pace"] for ck, p in pbs.items()}
         lb_anchor: dict = {}
@@ -407,7 +431,7 @@ def _compute_marker_refs(marker: date, quality: list, cp_cache: dict) -> Optiona
             if len(pbs) >= 4 and k != PAULS_DEFAULT_K
             else ("pauls" if len(pbs) >= 4 else "pauls_default")
         )
-        for ck, dist_m, dur_s in _ALL_EVENTS:
+        for ck, dist_m, dur_s in all_events:
             if ck in predicted:
                 continue
             w = _pauls_watts_at_event(anchor_pace, anchor_dist, dist_m, dur_s, k)
@@ -419,7 +443,7 @@ def _compute_marker_refs(marker: date, quality: list, cp_cache: dict) -> Optiona
     # PB and no prediction, use the PB alone.
     final_watts: dict = {}
     final_source: dict = {}
-    for ck in _ALL_CAT_KEYS:
+    for ck in all_cat_keys:
         pb = pbs.get(ck)
         pred_w = predicted.get(ck)
         if pb is not None and pred_w is not None:
@@ -564,8 +588,9 @@ def _interpolate(when: date, index: dict) -> dict:
         return dict(m0["watts"])
     w = (when - m0["date"]).days / span
 
+    machine = index.get("machine") or "rower"
     out: dict = {}
-    for ck in _ALL_CAT_KEYS:
+    for ck in _all_cat_keys(machine):
         v0 = m0["watts"].get(ck)
         v1 = m1["watts"].get(ck)
         if v0 is not None and v1 is not None:
@@ -627,6 +652,7 @@ def serialize_index(index: dict) -> dict:
     return {
         "version": index.get("version", INDEX_VERSION),
         "input_hash": index.get("input_hash", ""),
+        "machine": index.get("machine", "rower"),
         "markers": [
             {
                 "date": m["date"].isoformat(),
@@ -644,6 +670,7 @@ def deserialize_index(json_dict: dict) -> dict:
     return {
         "version": json_dict.get("version", INDEX_VERSION),
         "input_hash": json_dict.get("input_hash", ""),
+        "machine": json_dict.get("machine", "rower"),
         "markers": [
             {
                 "date": date.fromisoformat(m["date"]),

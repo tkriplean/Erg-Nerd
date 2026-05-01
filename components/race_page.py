@@ -45,10 +45,11 @@ import json
 import hyperdiv as hd
 
 from services.rowing_utils import (
-    RANKED_DISTANCES,
-    RANKED_TIMES,
-    RANKED_DIST_SET,
-    RANKED_TIME_SET,
+    ranked_distances,
+    ranked_times,
+    ranked_dist_set,
+    ranked_time_set,
+    workout_machine,
     apply_best_only,
     age_from_dob,
     is_30r20,
@@ -61,7 +62,8 @@ from services.stroke_utils import (
     normalize_strokes,
 )
 from services.rowing_utils import season_color
-from services.concept2_records import get_age_group_records
+from services.concept2_records import get_age_group_records, wr_machine_supported
+from services.global_state import GlobalFilters
 from components.app_context import get_profile
 from services.rowing_utils import (
     apply_quality_filters,
@@ -87,7 +89,7 @@ _DEFAULT_EVENT_TYPE = "dist"
 _DEFAULT_EVENT_VALUE = 2000
 
 # Race-Page-only pseudo-event: 30 minutes capped at avg SR ≤ 20.5.
-# Not added to RANKED_TIMES so it stays invisible to other pages.
+# Not added to ranked_times() so it stays invisible to other pages.
 EVENT_TYPE_R20 = "time_r20"
 EVENT_VALUE_R20 = 18000  # 30 min, in tenths
 
@@ -109,17 +111,18 @@ def _fmt_event(etype: str, evalue: int) -> str:
         return f"{mins} min"
 
 
-def _fmt_event_long(etype: str, evalue: int) -> str:
-    """Return the canonical display label from RANKED_DISTANCES / RANKED_TIMES."""
+def _fmt_event_long(etype: str, evalue: int, machine: str = "rower") -> str:
+    """Return the canonical display label from the per-machine ranked tables."""
     if etype == EVENT_TYPE_R20:
         return "30 r20"
     if etype == "dist":
         return next(
-            (lbl for d, lbl in RANKED_DISTANCES if d == evalue),
+            (lbl for d, lbl in ranked_distances(machine) if d == evalue),
             _fmt_event(etype, evalue),
         )
     return next(
-        (lbl for t, lbl in RANKED_TIMES if t == evalue), _fmt_event(etype, evalue)
+        (lbl for t, lbl in ranked_times(machine) if t == evalue),
+        _fmt_event(etype, evalue),
     )
 
 
@@ -137,19 +140,20 @@ def _event_workouts(workouts: list, etype: str, evalue: int, machine: str) -> li
     ranked distance (avoids treating a 2k that happened to take exactly 30 min
     as a time event).
     """
+    dist_set = ranked_dist_set(machine)
     out = []
     for w in workouts:
-        if machine != "All" and w.get("type", "rower") != machine:
+        if w.get("type", "rower") != machine:
             continue
         d = w.get("distance") or 0
         if etype == "dist" and d == evalue:
             out.append(w)
-        elif etype == "time" and w.get("time") == evalue and d not in RANKED_DIST_SET:
+        elif etype == "time" and w.get("time") == evalue and d not in dist_set:
             out.append(w)
         elif (
             etype == EVENT_TYPE_R20
             and w.get("time") == evalue
-            and d not in RANKED_DIST_SET
+            and d not in dist_set
             and is_30r20(w)
         ):
             out.append(w)
@@ -272,7 +276,9 @@ def _race_stroke_graph(
         primary_wkt = next((w for w in with_strokes if w["id"] == pb_id), None)
     if primary_wkt is None:
         first = sorted_racing_workouts[0]
-        is_time_event = first.get("distance") not in RANKED_DIST_SET
+        is_time_event = first.get("distance") not in ranked_dist_set(
+            workout_machine(first)
+        )
         if is_time_event:
             primary_wkt = max(with_strokes, key=lambda w: w.get("distance") or 0)
         else:
@@ -407,7 +413,7 @@ def race_page() -> None:
     Parameters
     ----------
     excluded_seasons  Global season filter from app.py (tuple of "YYYY-YY" strings).
-    machine           Global machine filter from app.py ("All" or machine type string).
+    machine           Global machine filter (a single machine type string).
 
     Renders:
       1. Filter bar (event selector + include filter)
@@ -451,24 +457,29 @@ def race_page() -> None:
     rankable_efforts = apply_quality_filters(rankable_efforts)
 
     # ── Compute available events ──────────────────────────────────────────────
+    gstate = GlobalFilters()
+    machine = gstate.machine
+    dist_set = ranked_dist_set(machine)
+    time_set = ranked_time_set(machine)
+
     event_counts: dict = {}
     r20_count = 0
     for w in rankable_efforts:
         d = w.get("distance") or 0
         t = w.get("time")
-        if d in RANKED_DIST_SET:
+        if d in dist_set:
             event_counts[("dist", d)] = event_counts.get(("dist", d), 0) + 1
-        elif t in RANKED_TIME_SET and d not in RANKED_DIST_SET:
+        elif t in time_set and d not in dist_set:
             event_counts[("time", t)] = event_counts.get(("time", t), 0) + 1
-        if is_30r20(w) and d not in RANKED_DIST_SET:
+        if is_30r20(w) and d not in dist_set:
             r20_count += 1
 
     available_events: list = []
-    for dist, _ in RANKED_DISTANCES:
+    for dist, _ in ranked_distances(machine):
         if event_counts.get(("dist", dist), 0) > 0:
             available_events.append(("dist", dist))
     r20_added = False
-    for tenths, _ in RANKED_TIMES:
+    for tenths, _ in ranked_times(machine):
         if event_counts.get(("time", tenths), 0) > 0:
             available_events.append(("time", tenths))
             if tenths == 18000 and r20_count > 0:
@@ -494,7 +505,7 @@ def race_page() -> None:
     # Used by the scatter plot below the table (include_filter intentionally
     # ignored — the scatter shows the long-arc trend across all efforts).
     all_event_workouts = _event_workouts(
-        rankable_efforts, event_type, event_value, "All"
+        rankable_efforts, event_type, event_value, machine
     )
 
     # Race scope: additionally apply include_filter
@@ -548,10 +559,14 @@ def race_page() -> None:
     )
 
     # ── World Record ghost boat ────────────────────────────────────────────────
-    # Available only when: profile is complete, machine filter is rower (WR
-    # records are RowErg only), and the user has enabled the toggle.
+    # Available only when: profile is complete, the selected machine has WRs
+    # (rower / skierg), and the user has enabled the toggle.
     # 30 r20 has no Concept2 world record, so the ghost lane is suppressed.
-    _wr_available = profile_complete(profile) and not is_r20_event
+    _wr_available = (
+        profile_complete(profile)
+        and not is_r20_event
+        and wr_machine_supported(machine)
+    )
 
     # Compute the profile key regardless of toggle state so UI status text
     # can reference it when the checkbox is visible.
@@ -563,7 +578,7 @@ def race_page() -> None:
             if profile.get("weight_unit") == "lbs"
             else float(profile.get("weight") or 0)
         )
-        _wr_key = f"{_g_api}|{_wr_age}|{_wr_wt_kg:.1f}"
+        _wr_key = f"{machine}|{_g_api}|{_wr_age}|{_wr_wt_kg:.1f}"
     else:
         _wr_key = ""
 
@@ -573,7 +588,9 @@ def race_page() -> None:
         if state.wr_records_key != _wr_key:
             _wr_task = hd.task()
             if not _wr_task.running and not _wr_task.done:
-                _wr_task.run(get_age_group_records, _g_api, _wr_age, _wr_wt_kg)
+                _wr_task.run(
+                    get_age_group_records, _g_api, _wr_age, _wr_wt_kg, machine
+                )
             if _wr_task.done and not _wr_task.error:
                 print("WORLD RECORDS LOADED")
                 state.wr_records = _wr_task.result
@@ -599,7 +616,7 @@ def race_page() -> None:
         "SBs": "Season Bests",
         "top": "Top 10 Efforts",
     }
-    _cur_event_lbl = _fmt_event_long(event_type, event_value)
+    _cur_event_lbl = _fmt_event_long(event_type, event_value, machine)
     _cur_include_lbl = _include_long.get(state.include_filter, state.include_filter)
 
     with hd.box(align="center", gap=3, padding=2, min_height="80vh"):
@@ -623,7 +640,7 @@ def race_page() -> None:
                             state,
                             key="event_dd",
                             labels={
-                                v: f"{_fmt_event_long(v[0], v[1])}"
+                                v: f"{_fmt_event_long(v[0], v[1], machine)}"
                                 for v in available_events
                             },
                             current_value=state.event,
@@ -717,7 +734,7 @@ def race_page() -> None:
                 elif not is_loading:
                     with hd.box(padding=3, align="center"):
                         hd.text(
-                            f"No {_fmt_event_long(event_type, event_value)} results in the selected scope.",
+                            f"No {_fmt_event_long(event_type, event_value, machine)} results in the selected scope.",
                             font_color="neutral-500",
                         )
 
@@ -735,7 +752,7 @@ def race_page() -> None:
 
                 with hd.box(padding_top=2, gap=0.5, width="100%", align="center"):
                     hd.h2(
-                        f"{_fmt_event_long(event_type, event_value)}s Over Time",
+                        f"{_fmt_event_long(event_type, event_value, machine)}s Over Time",
                     )
 
                     RaceScatterChart(config=_scatter_cfg, height="40vh")

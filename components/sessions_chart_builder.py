@@ -15,8 +15,9 @@ import hyperdiv as hd
 from scipy.optimize import brentq
 
 from services.rowing_utils import (
-    RANKED_DIST_SET,
-    RANKED_TIME_SET,
+    ranked_dist_set,
+    ranked_time_set,
+    workout_machine,
 )
 
 from services.formatters import fmt_date
@@ -122,19 +123,20 @@ def _build_pb_list(workouts: list) -> list:
     """
     bests: dict = {}  # event_key → workout dict
     for r in workouts:
-        if r["is_interval"]: 
+        if r["is_interval"]:
             continue
         dist = r.get("distance") or 0
         time_tenths = r.get("time") or 0
         if not dist or not time_tenths:
             continue
-        if dist in RANKED_DIST_SET and dist >= _CP_MIN_DIST_M:
+        machine = workout_machine(r)
+        if dist in ranked_dist_set(machine) and dist >= _CP_MIN_DIST_M:
             key = ("dist", dist)
             T = time_tenths / 10.0
             prev = bests.get(key)
             if prev is None or T < (prev["time"] / 10.0):
                 bests[key] = r
-        elif time_tenths in RANKED_TIME_SET:
+        elif time_tenths in ranked_time_set(machine):
             key = ("time", time_tenths)
             prev = bests.get(key)
             if prev is None or dist > (prev.get("distance") or 0):

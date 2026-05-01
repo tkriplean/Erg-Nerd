@@ -4,8 +4,8 @@ from services.predictions import PREDICTORS, PREDICTORS_BY_KEY
 from components.hyperdiv_extensions import grid_box
 
 from services.rowing_utils import (
-    RANKED_DISTANCES,
-    RANKED_TIMES,
+    ranked_distances,
+    ranked_times,
 )
 
 
@@ -14,6 +14,7 @@ def prediction_table(
     accuracy: dict,
     rl_available: bool = True,
     pauls_k: float = 5.0,
+    machine: str = "rower",
 ) -> None:
     """
     Renders the multi-model prediction grid (Your PB, CP, Log-Log, Paul's Law,
@@ -91,18 +92,28 @@ def prediction_table(
 
                 if _row["event_type"] == "dist":
                     _ev_idx = next(
-                        i
-                        for i, (d, _) in enumerate(RANKED_DISTANCES)
-                        if d == _row["event_value"]
+                        (
+                            i
+                            for i, (d, _) in enumerate(ranked_distances(machine))
+                            if d == _row["event_value"]
+                        ),
+                        None,
                     )
-                    _ev_enabled = state.dist_enabled[_ev_idx]
+                    _ev_enabled = (
+                        state.dist_enabled[_ev_idx] if _ev_idx is not None else False
+                    )
                 else:
                     _ev_idx = next(
-                        i
-                        for i, (t, _) in enumerate(RANKED_TIMES)
-                        if t == _row["event_value"]
+                        (
+                            i
+                            for i, (t, _) in enumerate(ranked_times(machine))
+                            if t == _row["event_value"]
+                        ),
+                        None,
                     )
-                    _ev_enabled = state.time_enabled[_ev_idx]
+                    _ev_enabled = (
+                        state.time_enabled[_ev_idx] if _ev_idx is not None else False
+                    )
 
                 # Event cell
                 with hd.box(

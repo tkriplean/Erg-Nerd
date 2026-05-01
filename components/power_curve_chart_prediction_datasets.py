@@ -30,7 +30,7 @@ import re as _re
 import numpy as np
 
 from services.rowing_utils import (
-    RANKED_DIST_VALUES,
+    ranked_dist_values,
     PACE_MIN,
     PACE_MAX,
     apply_best_only,
@@ -130,6 +130,7 @@ def wr_pred_datasets(
     is_dark: bool,
     x_fn,
     pauls_k: float = 5.0,
+    machine: str = "rower",
 ) -> list:
     """
     Build WC prediction datasets using the currently selected predictor applied
@@ -151,7 +152,9 @@ def wr_pred_datasets(
         # using the WC 2k record as the reference for the user's demographics).
         wr_rl = wr_data.get("rl_predictions") or {}
         if wr_rl:
-            ds = _rowinglevel_datasets(wr_rl, wr_color, _y, False, lba, x_fn=x_fn)
+            ds = _rowinglevel_datasets(
+                wr_rl, wr_color, _y, False, lba, x_fn=x_fn, machine=machine
+            )
             for d in ds:
                 d["label"] = "_wr_pred"
             return ds
@@ -171,6 +174,7 @@ def wr_pred_datasets(
                 False,
                 is_dark,
                 x_fn=x_fn,
+                machine=machine,
             )
             for d in ds_list:
                 d["label"] = "_wr_pred"
@@ -178,13 +182,15 @@ def wr_pred_datasets(
         eff = "loglog"  # fallback when CP fit unavailable
 
     if eff == "loglog":
-        ds = _loglog_dataset(lb, lba, wr_color, _y, x_fn=x_fn)
+        ds = _loglog_dataset(lb, lba, wr_color, _y, x_fn=x_fn, machine=machine)
         for d in ds:
             d["label"] = "_wr_pred"
         return ds
 
     if eff == "pauls_law":
-        ds = _pauls_law_datasets(lb, lba, wr_color, _y, False, pauls_k=5.0, x_fn=x_fn)
+        ds = _pauls_law_datasets(
+            lb, lba, wr_color, _y, False, pauls_k=5.0, x_fn=x_fn, machine=machine
+        )
         for d in ds:
             d["label"] = "_wr_pred"
         return ds
@@ -203,6 +209,7 @@ def wr_pred_datasets(
             show_watts,
             show_components=False,
             x_fn=x_fn,
+            machine=machine,
         )
         for d in ds:
             d["label"] = "_wr_pred"
@@ -217,7 +224,13 @@ def wr_pred_datasets(
 
 
 def _rowinglevel_datasets(
-    rl_predictions, pred_color, y_fn, show_components, lifetime_best_anchor, x_fn=None
+    rl_predictions,
+    pred_color,
+    y_fn,
+    show_components,
+    lifetime_best_anchor,
+    x_fn=None,
+    machine: str = "rower",
 ) -> list:
     """RowingLevel distance-weighted average curve + optional per-anchor component curves.
 
@@ -294,6 +307,7 @@ def _pauls_law_datasets(
     show_components,
     pauls_k: float = 5.0,
     x_fn=None,
+    machine: str = "rower",
 ) -> list:
     """Paul's Law average curve + optional per-anchor component curves.
 
@@ -303,6 +317,7 @@ def _pauls_law_datasets(
     if x_fn is None:
         x_fn = lambda d, p: d
 
+    dist_values = ranked_dist_values(machine)
     out = []
     _pl_by_dist: dict = {}
     _pl_per_anchor: dict = {}
@@ -311,7 +326,7 @@ def _pauls_law_datasets(
         if not anchor_dist:
             continue
         cat_pts = []
-        for d in RANKED_DIST_VALUES:
+        for d in dist_values:
             predicted = pauls_law_pace(pb_pace, anchor_dist, d, k=pauls_k)
             if PACE_MIN <= predicted <= PACE_MAX:
                 _pl_by_dist.setdefault(d, []).append(predicted)
@@ -319,7 +334,7 @@ def _pauls_law_datasets(
         if len(cat_pts) >= 2:
             _pl_per_anchor[cat] = cat_pts
     _pl_avg_pts = []
-    for d in RANKED_DIST_VALUES:
+    for d in dist_values:
         paces = _pl_by_dist.get(d)
         if paces:
             avg_p = sum(paces) / len(paces)
@@ -345,7 +360,12 @@ def _pauls_law_datasets(
 
 
 def _loglog_dataset(
-    lifetime_best, lifetime_best_anchor, pred_color, y_fn, x_fn=None
+    lifetime_best,
+    lifetime_best_anchor,
+    pred_color,
+    y_fn,
+    x_fn=None,
+    machine: str = "rower",
 ) -> list:
     """Log-log power law fit curve.
 
@@ -359,7 +379,7 @@ def _loglog_dataset(
         return []
     slope, intercept = fit
     pred_pts = []
-    for d in RANKED_DIST_VALUES:
+    for d in ranked_dist_values(machine):
         predicted = loglog_predict_pace(slope, intercept, d)
         if PACE_MIN <= predicted <= PACE_MAX:
             pred_pts.append({"x": x_fn(d, predicted), "y": y_fn(predicted)})
@@ -381,6 +401,7 @@ def _cp_datasets(
     show_components,
     is_dark,
     x_fn=None,
+    machine: str = "rower",
 ) -> tuple[list, list]:
     """CP curve, event marker dots, optional crossover vline + text, optional fast/slow components.
 
@@ -438,6 +459,7 @@ def _cp_datasets(
         selected_dists=_cp_sel_dists_key,
         selected_times=_cp_sel_times_key,
         show_watts=show_watts,
+        machine=machine,
     )
     ev_pts = _convert_pts(ev_pts)
     ev_pts = [p for p in ev_pts if x_min <= p["x"] <= x_max]
@@ -601,6 +623,7 @@ def _average_datasets(
     show_watts,
     show_components=False,
     x_fn=None,
+    machine: str = "rower",
 ) -> list:
     """Ensemble average of all available prediction models + optional component curves.
 
@@ -640,10 +663,14 @@ def _average_datasets(
     )
 
     # ── Sample distances ───────────────────────────────────────────────────────
-    # Always sample in distance-space (100m to 42195m) so all models get a
-    # consistent input domain.  x_fn converts to the correct chart x at the end.
+    # Always sample in distance-space across the machine's ranked-event span so
+    # all models get a consistent input domain.  x_fn converts to the correct
+    # chart x at the end.
     _n_pts = 80
-    _sample_dists = list(np.logspace(math.log10(100.0), math.log10(42195.0), _n_pts))
+    _machine_dists = ranked_dist_values(machine)
+    _samp_lo = float(min(_machine_dists)) if _machine_dists else 100.0
+    _samp_hi = float(max(_machine_dists)) if _machine_dists else 42195.0
+    _sample_dists = list(np.logspace(math.log10(_samp_lo), math.log10(_samp_hi), _n_pts))
 
     # Containers for per-model curves (used when show_components)
     _ll_pts, _pl_pts, _cp_pts_avg, _rl_pts_avg = [], [], [], []

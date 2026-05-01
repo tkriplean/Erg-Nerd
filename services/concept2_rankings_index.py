@@ -69,17 +69,17 @@ from pathlib import Path
 from typing import Iterator, Optional
 
 from services.concept2_rankings import (
-    EVENT_IDS_DIST,
-    EVENT_IDS_TIME,
     YOUTH_BANDS,
     Category,
     entry_watts,
+    event_ids_dist,
+    event_ids_time,
     iter_all_categories,
     page_filename,
     rankings_age_band,
     read_page1_payload,
 )
-from services.rowing_utils import RANKED_DISTANCES, RANKED_TIMES
+from services.rowing_utils import ranked_distances, ranked_times
 
 INDEX_DIR = Path(".c2_rankings_index")
 SCHEMA_VERSION = 2
@@ -93,17 +93,25 @@ def _slice_path(
     gender: str,
     age_band: str,
     weight_sentinel: str,
+    machine: str = "rower",
 ) -> Path:
+    """Resolve the on-disk path for one ranking-index slice.
+
+    For ``machine="rower"`` the filename matches the historical rower-only
+    layout (no machine prefix), so pre-existing files keep working without
+    migration. Other machines get a ``"{machine}_"`` prefix.
+    """
+    prefix = "" if machine == "rower" else f"{machine}_"
     return (
         INDEX_DIR
-        / f"{event_kind}_{event_value}_{gender}_{age_band}_{weight_sentinel}.json"
+        / f"{prefix}{event_kind}_{event_value}_{gender}_{age_band}_{weight_sentinel}.json"
     )
 
 
-def _url_id_for(event_kind: str, event_value: int) -> int:
+def _url_id_for(event_kind: str, event_value: int, machine: str = "rower") -> int:
     if event_kind == "dist":
-        return EVENT_IDS_DIST[event_value]
-    return EVENT_IDS_TIME[event_value]
+        return event_ids_dist(machine)[event_value]
+    return event_ids_time(machine)[event_value]
 
 
 def _weight_sentinel(weight: Optional[str]) -> str:
@@ -239,14 +247,21 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
     os.replace(tmp, path)
 
 
-def _delete_existing_slices(event_kind: str, event_value: int) -> None:
+def _slice_glob_pattern(event_kind: str, event_value: int, machine: str) -> str:
+    prefix = "" if machine == "rower" else f"{machine}_"
+    return f"{prefix}{event_kind}_{event_value}_*.json"
+
+
+def _delete_existing_slices(
+    event_kind: str, event_value: int, machine: str = "rower"
+) -> None:
     """Remove all existing slice files for one event before a fresh write.
 
     Keeps the directory clean if a slice that previously existed is now empty.
     """
     if not INDEX_DIR.exists():
         return
-    pattern = f"{event_kind}_{event_value}_*.json"
+    pattern = _slice_glob_pattern(event_kind, event_value, machine)
     for p in INDEX_DIR.glob(pattern):
         try:
             p.unlink()
@@ -254,21 +269,26 @@ def _delete_existing_slices(event_kind: str, event_value: int) -> None:
             pass
 
 
-def _invalidate_slice_cache(event_kind: str, event_value: int) -> None:
+def _invalidate_slice_cache(
+    event_kind: str, event_value: int, machine: str = "rower"
+) -> None:
     """Drop cached entries for one event so the next read re-parses from disk."""
-    prefix = f"{event_kind}_{event_value}_"
+    prefix = "" if machine == "rower" else f"{machine}_"
+    file_prefix = f"{prefix}{event_kind}_{event_value}_"
     for p in list(_SLICE_CACHE.keys()):
-        if p.parent == INDEX_DIR and p.name.startswith(prefix):
+        if p.parent == INDEX_DIR and p.name.startswith(file_prefix):
             del _SLICE_CACHE[p]
 
 
-def rebuild_event_index(event_kind: str, event_value: int) -> None:
+def rebuild_event_index(
+    event_kind: str, event_value: int, machine: str = "rower"
+) -> None:
     """Walk the scraper cache and rewrite every slice file for the event."""
-    _invalidate_slice_cache(event_kind, event_value)
-    url_id = _url_id_for(event_kind, event_value)
+    _invalidate_slice_cache(event_kind, event_value, machine)
+    url_id = _url_id_for(event_kind, event_value, machine)
 
     buckets: dict[tuple[str, str, str], list[dict]] = {}
-    for cat in iter_all_categories(event_ids=[url_id]):
+    for cat in iter_all_categories(event_ids=[url_id], machine=machine):
         if cat.event_kind != event_kind or cat.event_value != event_value:
             continue
         payload = read_page1_payload(cat)
@@ -281,7 +301,7 @@ def rebuild_event_index(event_kind: str, event_value: int) -> None:
         bucket.extend(_walk_category_pages(cat))
 
     INDEX_DIR.mkdir(parents=True, exist_ok=True)
-    _delete_existing_slices(event_kind, event_value)
+    _delete_existing_slices(event_kind, event_value, machine)
 
     built_at = (
         datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
@@ -295,13 +315,16 @@ def rebuild_event_index(event_kind: str, event_value: int) -> None:
             "built_at": built_at,
             "event_kind": event_kind,
             "event_value": event_value,
+            "machine": machine,
             "gender": gender,
             "age_band": age_band,
             "weight": weight_sentinel,
             "entries": deduped,
         }
         _atomic_write_json(
-            _slice_path(event_kind, event_value, gender, age_band, weight_sentinel),
+            _slice_path(
+                event_kind, event_value, gender, age_band, weight_sentinel, machine
+            ),
             out,
         )
 
@@ -384,6 +407,7 @@ def load_event_slices(
     k: int = 0,
     weight: Optional[str],
     rebuild_if_missing: bool = True,
+    machine: str = "rower",
 ) -> list[dict]:
     """Load all entries for one event covering the demographic slice and the
     age window ``[target_age - k, target_age + k]``.
@@ -405,7 +429,9 @@ def load_event_slices(
     datas: list[dict] = []
     needs_rebuild = False
     for band in bands:
-        path = _slice_path(event_kind, event_value, gender, band, weight_sentinel)
+        path = _slice_path(
+            event_kind, event_value, gender, band, weight_sentinel, machine
+        )
         data = _read_slice_file(path)
         if data is None:
             needs_rebuild = True
@@ -421,7 +447,7 @@ def load_event_slices(
         return out
 
     if rebuild_if_missing:
-        rebuild_event_index(event_kind, event_value)
+        rebuild_event_index(event_kind, event_value, machine)
         return load_event_slices(
             event_kind,
             event_value,
@@ -430,19 +456,24 @@ def load_event_slices(
             k=k,
             weight=weight,
             rebuild_if_missing=False,
+            machine=machine,
         )
     return []
 
 
 def iter_event_entries(
-    event_kind: str, event_value: int, *, rebuild_if_missing: bool = True
+    event_kind: str,
+    event_value: int,
+    *,
+    rebuild_if_missing: bool = True,
+    machine: str = "rower",
 ) -> Iterator[dict]:
     """Yield every entry of every slice for ``(event_kind, event_value)``.
 
     Slice metadata (``gender``, ``age_band``, ``weight``) is attached to each
     yielded entry. If no slice files exist for the event, the index is
     rebuilt once before iteration."""
-    pattern = f"{event_kind}_{event_value}_*.json"
+    pattern = _slice_glob_pattern(event_kind, event_value, machine)
 
     def _paths() -> list[Path]:
         if not INDEX_DIR.exists():
@@ -451,7 +482,7 @@ def iter_event_entries(
 
     paths = _paths()
     if not paths and rebuild_if_missing:
-        rebuild_event_index(event_kind, event_value)
+        rebuild_event_index(event_kind, event_value, machine)
         paths = _paths()
 
     for p in paths:
@@ -462,12 +493,12 @@ def iter_event_entries(
             yield e
 
 
-def rebuild_all_indices() -> None:
-    """Rebuild every ranked event's slice files from the scraper cache."""
-    for d, _ in RANKED_DISTANCES:
-        rebuild_event_index("dist", d)
-    for t, _ in RANKED_TIMES:
-        rebuild_event_index("time", t)
+def rebuild_all_indices(machine: str = "rower") -> None:
+    """Rebuild every ranked event's slice files for ``machine``."""
+    for d, _ in ranked_distances(machine):
+        rebuild_event_index("dist", d, machine)
+    for t, _ in ranked_times(machine):
+        rebuild_event_index("time", t, machine)
 
 
 if __name__ == "__main__":

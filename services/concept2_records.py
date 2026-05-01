@@ -1,17 +1,25 @@
 """
-Concept2 world-record lookup service.
+Concept2 world-record lookup service — per machine.
 
 Fetches world records from the public Concept2 JSON API:
-  GET https://log.concept2.com/api/records/rower/world
+  GET https://log.concept2.com/api/records/{machine}/world      (machine ∈ {rower, skierg})
 
-Returns all 2700+ records in one unauthenticated call.  We cache the raw
-payload for 7 days and filter locally by gender, age category, and weight
-class to produce a dict of {(etype, evalue): float} matching our ranked
-event definitions.
+Bikeerg has no Concept2 world records; ``wr_machine_supported(machine)`` is
+the public predicate callers should consult before invoking the fetch path.
+
+Returns all records for one machine in one unauthenticated call.  We cache
+the raw payload (under ``_raw_{machine}``) for 7 days and filter locally by
+gender, age category, and weight class to produce a dict of
+{(etype, evalue): float} matching our ranked event definitions.  Only the
+machine's canonical record type is retained (``RowErg`` for rower, ``SkiErg``
+for skierg) — the rower endpoint also publishes Dynamic / Slides records,
+which we intentionally ignore.
 
 Public API
 ----------
-  get_age_group_records(gender, age, weight_kg)
+  WR_AVAILABLE_MACHINES, wr_machine_supported(machine)
+
+  get_age_group_records(gender, age, weight_kg, machine="rower")
       → {("dist", 2000): {"result": 347.8, "name": "...",
                           "date": "2024-03-10",
                           "age_category": "30-39",
@@ -28,10 +36,10 @@ Public API
         lb  {(etype, evalue): pace_sec_per_500m}
         lba {(etype, evalue): anchor_distance_meters}
 
-  fetch_wr_data(gender_api, age, weight_kg)
+  fetch_wr_data(gender_api, age, weight_kg, machine="rower")
       → dict{"records", "cp_params", "lb", "lba", "rl_predictions"} or None
-        Blocking: fetch records, fit CP, optionally fetch RL predictions.
-        Intended to run inside hd.task().
+        Blocking: fetch records, fit CP, optionally fetch RL predictions
+        (rower only).  Intended to run inside hd.task().
 """
 
 from __future__ import annotations
@@ -43,8 +51,8 @@ import urllib.request
 from pathlib import Path
 
 from services.rowing_utils import (
-    RANKED_DISTANCES,
-    RANKED_TIMES,
+    ranked_distances,
+    ranked_times,
     compute_watts,
     age_from_dob,
     profile_complete,
@@ -56,7 +64,29 @@ from services.rowinglevel import fetch_predictions as rl_fetch_predictions
 # Constants
 # ---------------------------------------------------------------------------
 
-_API_URL = "https://log.concept2.com/api/records/rower/world"
+# Per-machine WR endpoints. Bikeerg has no Concept2 world records.
+_API_URL_BY_MACHINE: dict[str, str] = {
+    "rower": "https://log.concept2.com/api/records/rower/world",
+    "skierg": "https://log.concept2.com/api/records/skierg/world",
+}
+
+# Each machine has a single "type" string in the records payload that we treat
+# as its WR. Other ``type`` values within an endpoint (e.g. Dynamic / Slides
+# inside the rower payload) are intentionally ignored.
+_RECORD_TYPE_BY_MACHINE: dict[str, str] = {
+    "rower": "RowErg",
+    "skierg": "SkiErg",
+}
+
+# Public contract: machines for which Concept2 publishes WR data.
+WR_AVAILABLE_MACHINES: frozenset[str] = frozenset(_API_URL_BY_MACHINE)
+
+
+def wr_machine_supported(machine: str) -> bool:
+    """True iff ``machine`` has Concept2 world records available."""
+    return machine in WR_AVAILABLE_MACHINES
+
+
 _CACHE_PATH = Path(".concept2_records_cache.json")
 _CACHE_TTL = 7 * 24 * 3600  # 7 days in seconds
 
@@ -87,11 +117,18 @@ _AGE_BANDS: list[tuple[int, str]] = [
     (0, "12 and Under"),
 ]
 
-# Distance event: value = meters, matches RANKED_DISTANCES[*][0]
-_RANKED_DIST_SET = {d for d, _ in RANKED_DISTANCES}
-# Time event: value = tenths of a second.  Concept2 API uses minutes.
-# minutes = tenths // 600
-_RANKED_TIME_BY_MINUTES: dict[int, int] = {t // 600: t for t, _ in RANKED_TIMES}
+def _ranked_dist_set_for(machine: str) -> set[int]:
+    """Distance event values (meters) that Concept2 publishes WRs for."""
+    return {d for d, _ in ranked_distances(machine)}
+
+
+def _ranked_time_by_minutes(machine: str) -> dict[int, int]:
+    """Map of API minutes → tenths-of-second event value, for time events.
+
+    Concept2 publishes time-event distances under integer minutes; our internal
+    representation uses tenths.  ``minutes = tenths // 600``.
+    """
+    return {t // 600: t for t, _ in ranked_times(machine)}
 
 
 # ---------------------------------------------------------------------------
@@ -152,15 +189,15 @@ def _parse_result(result_str: str, event_type: str) -> float | None:
     return None
 
 
-def _ranked_event_for(event: int, event_type: str) -> tuple | None:
+def _ranked_event_for(event: int, event_type: str, machine: str) -> tuple | None:
     """
-    Map API event/event_type → (etype, evalue) as used in RANKED_DISTANCES /
-    RANKED_TIMES, or None if the event is not in our ranked set.
+    Map API event/event_type → (etype, evalue) as used in the per-machine
+    ranked event tables, or None if the event is not in our ranked set.
     """
     if event_type == "distance":
-        return ("dist", event) if event in _RANKED_DIST_SET else None
+        return ("dist", event) if event in _ranked_dist_set_for(machine) else None
     if event_type == "time":
-        tenths = _RANKED_TIME_BY_MINUTES.get(event)
+        tenths = _ranked_time_by_minutes(machine).get(event)
         return ("time", tenths) if tenths is not None else None
     return None
 
@@ -208,10 +245,14 @@ def _save_cache(data: dict) -> None:
         pass
 
 
-def _fetch_raw_records_from_api() -> list[dict]:
-    """HTTP GET the Concept2 world records API.  Raises on failure."""
+def _fetch_raw_records_from_api(machine: str) -> list[dict]:
+    """HTTP GET the Concept2 world records API for ``machine``.  Raises on failure.
+
+    Caller must check ``wr_machine_supported(machine)`` first.
+    """
+    url = _API_URL_BY_MACHINE[machine]
     req = urllib.request.Request(
-        _API_URL,
+        url,
         headers={
             "User-Agent": (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -225,18 +266,23 @@ def _fetch_raw_records_from_api() -> list[dict]:
 
 
 def _filter_records(
-    raw: list[dict], gender: str, age_cat: str, wt_class: str | None
+    raw: list[dict],
+    gender: str,
+    age_cat: str,
+    wt_class: str | None,
+    machine: str,
 ) -> dict:
     """
     Filter the raw API payload and return {(etype, evalue): metadata_dict} for
-    RowErg world records matching the specified gender/age/weight.
+    world records matching the specified gender/age/weight on ``machine``.
 
     metadata_dict keys: result (float), name, date, age_category, weight_class,
     gender.  ``result`` is seconds for dist events, meters for time events.
     """
+    record_type = _RECORD_TYPE_BY_MACHINE[machine]
     best: dict[tuple, dict] = {}
     for r in raw:
-        if r.get("type") != "RowErg":
+        if r.get("type") != record_type:
             continue
         if r.get("class") != "World":
             continue
@@ -253,7 +299,7 @@ def _filter_records(
         if wt_class is None and r_wt is not None:
             continue
 
-        key = _ranked_event_for(r.get("event"), r.get("event_type", ""))
+        key = _ranked_event_for(r.get("event"), r.get("event_type", ""), machine)
         if key is None:
             continue
         parsed = _parse_result(r.get("result", ""), r.get("event_type", ""))
@@ -289,28 +335,36 @@ def _filter_records(
 # ---------------------------------------------------------------------------
 
 
-def get_age_group_records(gender: str, age: int, weight_kg: float) -> dict:
+def get_age_group_records(
+    gender: str, age: int, weight_kg: float, machine: str = "rower"
+) -> dict:
     """
-    Fetch (or retrieve from 7-day cache) Concept2 RowErg world records for
-    the given age group and weight class.
+    Fetch (or retrieve from 7-day cache) Concept2 world records for ``machine``
+    in the given age group and weight class.
 
     Parameters
     ----------
     gender    : 'M' or 'F'  (Concept2 API format)
     age       : integer years
     weight_kg : body weight in kilograms
+    machine   : "rower" or "skierg"; bikeerg is not supported (no Concept2 WRs)
 
     Returns
     -------
     dict keyed by ranked-event tuple, e.g.:
         {("dist", 2000): {"result": 347.8, "name": "...", "date": "...", ...},
          ("time", 18000): {"result": 9207.0, ...}}
-    Empty dict if the API is unreachable and no cache is available.
+    Empty dict if the API is unreachable and no cache is available, or if
+    ``machine`` has no WRs available.
     """
+    if not wr_machine_supported(machine):
+        return {}
+
     age_cat = age_category(age)
 
     wt_class = weight_class_str(weight_kg, gender, age)
-    filter_key = f"{gender}|{age_cat}|{wt_class}"
+    filter_key = f"{machine}|{gender}|{age_cat}|{wt_class}"
+    raw_key = f"_raw_{machine}"
 
     cache = _load_cache()
     now = time.time()
@@ -322,13 +376,13 @@ def get_age_group_records(gender: str, age: int, weight_kg: float) -> dict:
             return _deserialize_records(entry.get("records", {}))
 
     # Load raw payload — reuse if cached and fresh, otherwise re-fetch.
-    raw_entry = cache.get("_raw", {})
+    raw_entry = cache.get(raw_key, {})
     if now - raw_entry.get("_ts", 0) < _CACHE_TTL and "data" in raw_entry:
         raw = raw_entry["data"]
     else:
         try:
-            raw = _fetch_raw_records_from_api()
-            cache["_raw"] = {"_ts": now, "data": raw}
+            raw = _fetch_raw_records_from_api(machine)
+            cache[raw_key] = {"_ts": now, "data": raw}
         except Exception:
             # API unavailable: return whatever filtered records we have (may be stale).
             if filter_key in cache:
@@ -337,7 +391,7 @@ def get_age_group_records(gender: str, age: int, weight_kg: float) -> dict:
             return {}
 
     # Filter and cache.
-    filtered = _filter_records(raw, gender, age_cat, wt_class)
+    filtered = _filter_records(raw, gender, age_cat, wt_class, machine)
     # Serialize keys as "dist|2000" strings for JSON.
     cache[filter_key] = {
         "_ts": now,
@@ -359,33 +413,39 @@ def _deserialize_records(raw: dict) -> dict:
     return out
 
 
-def get_records_for_age(gender: str, age: int, weight_kg: float) -> dict:
+def get_records_for_age(
+    gender: str, age: int, weight_kg: float, machine: str = "rower"
+) -> dict:
     """
     Return {(etype, evalue): value} for the WR age_category that contains
     ``age`` — like ``get_age_group_records`` but optimised for callers that
     iterate over many ages and would otherwise re-filter the cached raw
     payload repeatedly.
 
-    Reuses the in-memory cached ``_raw`` payload without re-fetching. Falls
-    back to ``get_age_group_records`` if the raw payload is missing or stale
-    (so the first call still triggers one network round-trip).
+    Reuses the in-memory cached ``_raw_{machine}`` payload without re-fetching.
+    Falls back to ``get_age_group_records`` if the raw payload is missing or
+    stale (so the first call still triggers one network round-trip).
     """
+    if not wr_machine_supported(machine):
+        return {}
+
     age_cat = age_category(age)
     wt_class = weight_class_str(weight_kg, gender, age)
+    raw_key = f"_raw_{machine}"
 
     cache = _load_cache()
     now = time.time()
-    raw_entry = cache.get("_raw", {})
+    raw_entry = cache.get(raw_key, {})
     raw = raw_entry.get("data") if now - raw_entry.get("_ts", 0) < _CACHE_TTL else None
     if raw is None:
         # Trigger a normal fetch + cache via get_age_group_records, then re-read.
-        get_age_group_records(gender, age, weight_kg)
+        get_age_group_records(gender, age, weight_kg, machine)
         cache = _load_cache()
-        raw_entry = cache.get("_raw", {})
+        raw_entry = cache.get(raw_key, {})
         raw = raw_entry.get("data")
         if not raw:
             return {}
-    return _filter_records(raw, gender, age_cat, wt_class)
+    return _filter_records(raw, gender, age_cat, wt_class, machine)
 
 
 def records_to_cp_input(records: dict) -> list[dict]:
@@ -470,27 +530,41 @@ def records_to_lbest(records: dict) -> tuple[dict, dict]:
 # ---------------------------------------------------------------------------
 
 
-def fetch_wr_data(gender_api: str, age: int, weight_kg: float) -> dict | None:
+def fetch_wr_data(
+    gender_api: str, age: int, weight_kg: float, machine: str = "rower"
+) -> dict | None:
     """
     Blocking function — intended to run inside hd.task().
-    Fetches Concept2 world records for the given gender/age/weight,
-    fits the CP model (when enough data), builds lb/lba dicts, and
-    optionally fetches RowingLevel predictions using the WC 2k record
+    Fetches Concept2 world records for the given gender/age/weight on
+    ``machine``, fits the CP model (when enough data), builds lb/lba dicts,
+    and (rower only) fetches RowingLevel predictions using the WC 2k record
     as the reference performance.
 
     Returns a dict {"records", "cp_params", "lb", "lba", "rl_predictions"}
-    or None if the API returned no records at all.
+    or None if the API returned no records at all (or ``machine`` has no WRs).
     """
-    records = get_age_group_records(gender_api, age, weight_kg)
+    if not wr_machine_supported(machine):
+        return None
+    records = get_age_group_records(gender_api, age, weight_kg, machine)
     if not records:
         return None
     cp_input = records_to_cp_input(records)
     cp_params = fit_critical_power(cp_input) if len(cp_input) >= 5 else None
     lb, lba = records_to_lbest(records)
 
-    # RowingLevel predictions: use WC record at best available dist event as
-    # the reference performance (prefer 2k, the canonical RL anchor).
+    # RowingLevel predictions: rower-only (RowingLevel.com is rower-only).
     rl_predictions: dict = {}
+    if machine != "rower":
+        return {
+            "records": records,
+            "cp_params": cp_params,
+            "lb": lb,
+            "lba": lba,
+            "rl_predictions": rl_predictions,
+        }
+
+    # Use WC record at best available dist event as the reference performance
+    # (prefer 2k, the canonical RL anchor).
     gender_rl = "Male" if gender_api == "M" else "Female"
     _ref_dist, _ref_time_s = None, None
     for _d in [2000, 1000, 5000, 6000, 10000, 500, 21097]:

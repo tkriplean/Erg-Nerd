@@ -129,8 +129,8 @@ def enrich_for_storage(w: dict) -> dict:
     w["day"] = w["date"][:10]
     w["season"] = season_from_date(dt)
 
-    w["cat_key"] = workout_cat_key(w)
     w["machine"] = w.get("type") or "rower"
+    w["cat_key"] = workout_cat_key(w)
     w["is_interval"] = w.get("workout_type") in INTERVAL_WORKOUT_TYPES
 
     if w["is_interval"]:

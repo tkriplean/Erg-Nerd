@@ -33,8 +33,8 @@ from scipy.optimize import brentq, curve_fit
 from services.rowing_utils import (
     PACE_MIN,
     PACE_MAX,
-    RANKED_DISTANCES,
-    RANKED_TIMES,
+    ranked_distances,
+    ranked_times,
     watts_to_pace,
 )
 
@@ -252,6 +252,7 @@ def critical_power_event_points(
     selected_dists: set,
     selected_times: set,
     show_watts: bool,
+    machine: str = "rower",
 ) -> list[dict]:
     """
     Generate one Chart.js {x, y, _event_label} point per selected ranked event,
@@ -272,7 +273,7 @@ def critical_power_event_points(
     pts = []
 
     # Distance events — solve: (P(t)/2.80)^(1/3) * t = dist_m
-    for dist_m, label in RANKED_DISTANCES:
+    for dist_m, label in ranked_distances(machine):
         if dist_m not in selected_dists:
             continue
 
@@ -292,7 +293,7 @@ def critical_power_event_points(
             pts.append({**pt, "_event_label": label})
 
     # Time events — duration is fixed by definition
-    for time_tenths, label in RANKED_TIMES:
+    for time_tenths, label in ranked_times(machine):
         if time_tenths not in selected_times:
             continue
         t = time_tenths / 10.0

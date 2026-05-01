@@ -13,33 +13,115 @@ from datetime import date, datetime
 from typing import Iterable, Optional
 
 # ---------------------------------------------------------------------------
-# Ranked event definitions
+# Ranked event definitions — per-machine
 # ---------------------------------------------------------------------------
+# RowErg and SkiErg share the same ranked set. BikeErg has a different event
+# grid (no 100m / 4-min / 6k / 2k / Half / Marathon; adds 200m / 4k / 20k / 40k).
+# Concept2 publishes WR / rankings under these same event taxonomies.
 
 # (meters, display label)
-RANKED_DISTANCES = [
-    (100, "100m"),
-    (500, "500m"),
-    (1000, "1k"),
-    (2000, "2k"),
-    (5000, "5k"),
-    (6000, "6k"),
-    (10000, "10k"),
-    (21097, "½ Marathon"),
-    (42195, "Marathon"),
-]
+_RANKED_DISTANCES_BY_MACHINE: dict[str, list[tuple[int, str]]] = {
+    "rower": [
+        (100, "100m"),
+        (500, "500m"),
+        (1000, "1k"),
+        (2000, "2k"),
+        (5000, "5k"),
+        (6000, "6k"),
+        (10000, "10k"),
+        (21097, "½ Marathon"),
+        (42195, "Marathon"),
+        (100000, "100k"),
+    ],
+    "skierg": [
+        (100, "100m"),
+        (500, "500m"),
+        (1000, "1k"),
+        (2000, "2k"),
+        (5000, "5k"),
+        (6000, "6k"),
+        (10000, "10k"),
+        (21097, "½ Marathon"),
+        (42195, "Marathon"),
+        (100000, "100k"),
+    ],
+    "bikeerg": [
+        (200, "200m"),
+        (500, "500m"),
+        (1000, "1k"),
+        (4000, "4k"),
+        (10000, "10k"),
+        (20000, "20k"),
+        (40000, "40k"),
+        (100000, "100k"),
+    ],
+}
 
 # (tenths of a second, display label)
-RANKED_TIMES = [
-    (600, "1 min"),
-    (2400, "4 min"),
-    (18000, "30 min"),
-    (36000, "60 min"),
-]
+_RANKED_TIMES_BY_MACHINE: dict[str, list[tuple[int, str]]] = {
+    "rower": [
+        (600, "1 min"),
+        (2400, "4 min"),
+        (18000, "30 min"),
+        (36000, "60 min"),
+    ],
+    "skierg": [
+        (600, "1 min"),
+        (2400, "4 min"),
+        (18000, "30 min"),
+        (36000, "60 min"),
+    ],
+    "bikeerg": [
+        (600, "1 min"),
+        (18000, "30 min"),
+        (36000, "60 min"),
+    ],
+}
 
-RANKED_DIST_SET = {d for d, _ in RANKED_DISTANCES}
-RANKED_TIME_SET = {t for t, _ in RANKED_TIMES}
-RANKED_DIST_VALUES = [d for d, _ in RANKED_DISTANCES]
+
+def _resolve_machine(machine: Optional[str]) -> str:
+    """Map a machine string to a key in the ranked-event tables, defaulting to rower.
+
+    Concept2 returns several machine ``type`` values that share the rower event
+    taxonomy (paddle/water/snow/rollerski/multierg etc.); they fall back to the
+    rower table here. Unknown machines also fall back to rower so the app keeps
+    rendering rather than crashing.
+    """
+    if machine and machine in _RANKED_DISTANCES_BY_MACHINE:
+        return machine
+    return "rower"
+
+
+def ranked_distances(machine: Optional[str] = None) -> list[tuple[int, str]]:
+    """Return ``[(meters, label), ...]`` for the given machine."""
+    return _RANKED_DISTANCES_BY_MACHINE[_resolve_machine(machine)]
+
+
+def ranked_times(machine: Optional[str] = None) -> list[tuple[int, str]]:
+    """Return ``[(tenths_s, label), ...]`` for the given machine."""
+    return _RANKED_TIMES_BY_MACHINE[_resolve_machine(machine)]
+
+
+def ranked_dist_set(machine: Optional[str] = None) -> set[int]:
+    return {d for d, _ in ranked_distances(machine)}
+
+
+def ranked_time_set(machine: Optional[str] = None) -> set[int]:
+    return {t for t, _ in ranked_times(machine)}
+
+
+def ranked_dist_values(machine: Optional[str] = None) -> list[int]:
+    return [d for d, _ in ranked_distances(machine)]
+
+
+def workout_machine(w: dict) -> str:
+    """Resolve the machine key for a workout dict.
+
+    Prefers the post-enrichment ``machine`` field, falls back to the raw API
+    ``type`` field, and finally to ``"rower"``.  Used by helpers that classify
+    a single workout against its machine's ranked event grid.
+    """
+    return _resolve_machine(w.get("machine") or w.get("type"))
 
 # ---------------------------------------------------------------------------
 # Quality-filter constants
@@ -224,13 +306,19 @@ def workout_cat_key(r: dict) -> Optional[tuple]:
 
     Workouts that have passed Stage-2 enrichment carry a ``cat_key`` field
     already; honor it so hot loops avoid re-classifying.
+
+    Classification uses the workout's own machine (``r["machine"]`` or
+    ``r["type"]``) so each workout is only matched against its machine's
+    ranked event grid — a 4k bikeerg row gets ``("dist", 4000)``, but a 4k
+    rower row (not a ranked rower event) gets None.
     """
     if "cat_key" in r:
         return r["cat_key"]
+    machine = workout_machine(r)
     dist, time = r["distance"], r["time"]
-    if dist in RANKED_DIST_SET:
+    if dist in ranked_dist_set(machine):
         return ("dist", dist)
-    if time in RANKED_TIME_SET:
+    if time in ranked_time_set(machine):
         return ("time", time)
     return None
 
@@ -252,35 +340,42 @@ def apply_best_only(results: list, by_season: bool = False) -> list:
     """
     Keep the best result per ranked category, sorted by category order.
 
+    Inputs are expected to be from a single machine (the caller already filters
+    by ``gstate.machine``); the machine is resolved from the first result to
+    determine event ordering.
+
     by_season=False (default) — lifetime best per category.
     by_season=True            — season best per (season, category).
     """
+    if not results:
+        return []
+    machine = workout_machine(results[0])
+    dist_order = {d: i for i, (d, _) in enumerate(ranked_distances(machine))}
+    time_order = {t: i for i, (t, _) in enumerate(ranked_times(machine))}
+
     best: dict = {}
     for r in results:
+        cat = r.get("cat_key") or workout_cat_key(r)
+        if cat is None:
+            continue
         season = r.get("season") if by_season else None
-        dist, time = r["distance"], r["time"]
-        if dist in RANKED_DIST_SET:
-            key = (season, "dist", dist) if by_season else r["cat_key"]
-            prev = best.get(key)
+        key = (season, cat[0], cat[1]) if by_season else cat
+        prev = best.get(key)
+        if cat[0] == "dist":
             if prev is None or (
                 r.get("time", float("inf")) < prev.get("time", float("inf"))
             ):
                 best[key] = r
-        elif time in RANKED_TIME_SET:
-            key = (season, "time", time) if by_season else r["cat_key"]
-            prev = best.get(key)
+        else:  # "time"
             if prev is None or (r["distance"] or 0) > (prev.get("distance") or 0):
                 best[key] = r
 
-    dist_order = {d: i for i, (d, _) in enumerate(RANKED_DISTANCES)}
-    time_order = {t: i for i, (t, _) in enumerate(RANKED_TIMES)}
-
     def _sort_key(r):
-        dist, time = r["distance"], r["time"]
+        cat = r["cat_key"] if r.get("cat_key") else workout_cat_key(r)
         season = r.get("season") if by_season else None
-        if dist in RANKED_DIST_SET:
-            return (0, dist_order.get(dist, 99)) + ((season,) if by_season else ())
-        return (1, time_order.get(time, 99)) + ((season,) if by_season else ())
+        if cat[0] == "dist":
+            return (0, dist_order.get(cat[1], 99)) + ((season,) if by_season else ())
+        return (1, time_order.get(cat[1], 99)) + ((season,) if by_season else ())
 
     return sorted(best.values(), key=_sort_key)
 
@@ -361,10 +456,11 @@ def compute_duration_s(workout: dict) -> Optional[float]:
     time = workout.get("time")
     if not time:
         return None
-    if dist in RANKED_DIST_SET:
+    machine = workout_machine(workout)
+    if dist in ranked_dist_set(machine):
         # Distance event — duration is derived from actual recorded time
         return time / 10.0
-    if time in RANKED_TIME_SET:
+    if time in ranked_time_set(machine):
         # Timed event — the event duration is the definition (e.g. 30 min = 18000 tenths)
         return time / 10.0
     return None
@@ -462,12 +558,17 @@ def loglog_predict_pace(slope: float, intercept: float, dist_m: float) -> float:
 
 
 def is_rankable_noninterval(r: dict) -> bool:
-    """True if the workout matches a ranked distance or time and is not an interval."""
+    """True if the workout matches a ranked distance or time and is not an interval.
+
+    Ranked-event membership is checked against the workout's own machine, so a
+    4k bikeerg counts but a 4k rower does not.
+    """
     if r["is_interval"]:
         return False
+    machine = workout_machine(r)
     dist = r["distance"]
     time = r["time"]
-    return dist in RANKED_DIST_SET or time in RANKED_TIME_SET
+    return dist in ranked_dist_set(machine) or time in ranked_time_set(machine)
 
 
 def seasons_from(results: list) -> list:

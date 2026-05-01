@@ -35,7 +35,7 @@ from typing import Optional
 
 from services.rowing_utils import (
     INTERVAL_WORKOUT_TYPES,
-    RANKED_DIST_SET,
+    ranked_dist_set,
     get_season,
 )
 
@@ -147,10 +147,11 @@ def _extract_base_pace(real_workouts_dict: dict) -> float:
     Falls back to Paul's Law projection from the nearest ranked distance
     when no 2k exists, and to _DEFAULT_BASE_PACE when no ranked data exists.
     """
+    rower_dist_set = ranked_dist_set("rower")
     best: dict[int, float] = {}
     for w in real_workouts_dict.values():
         d = w.get("distance", 0)
-        if d not in RANKED_DIST_SET:
+        if d not in rower_dist_set:
             continue
         p = w["pace"]
         if p is None:

@@ -44,8 +44,8 @@ from typing import Optional
 from scipy.optimize import brentq
 
 from services.rowing_utils import (
-    RANKED_DISTANCES,
-    RANKED_TIMES,
+    ranked_distances,
+    ranked_times,
     PACE_MIN,
     PACE_MAX,
     loglog_fit,
@@ -344,9 +344,7 @@ def rowinglevel_pace_at(
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-# Short display labels — derived from RANKED_DISTANCES so there is one source
-# of truth for event names.
-_DIST_LABELS: dict = {d: lbl for d, lbl in RANKED_DISTANCES}
+# Short display labels — resolved per machine via ranked_distances().
 
 
 def _fmt_pred(
@@ -459,6 +457,7 @@ def _compute_predictor_raws(
 
 def build_prediction_table_data(
     *,
+    machine: str = "rower",
     lifetime_best: dict,
     lifetime_best_anchor: dict,
     all_lifetime_best: dict,
@@ -472,8 +471,9 @@ def build_prediction_table_data(
     """
     Compute prediction-table rows plus per-model accuracy.
 
-    Always emits one row per canonical ranked event (all RANKED_DISTANCES then
-    all RANKED_TIMES), regardless of the event-filter selection in the chart UI.
+    Always emits one row per canonical ranked event for ``machine`` (every
+    distance, then every time), regardless of the event-filter selection in
+    the chart UI.
 
     ``lifetime_best`` / ``lifetime_best_anchor`` are the *filtered* bests (the
     same set used by the chart) and drive the prediction columns.
@@ -571,13 +571,14 @@ def build_prediction_table_data(
         }
 
     # ── Distance events ───────────────────────────────────────────────────────
-    for dist_m, label in RANKED_DISTANCES:
+    dist_labels = {d: lbl for d, lbl in ranked_distances(machine)}
+    for dist_m, _ in ranked_distances(machine):
         rows.append(
-            _build_row("dist", dist_m, _DIST_LABELS.get(dist_m, f"{dist_m:,}m"))
+            _build_row("dist", dist_m, dist_labels.get(dist_m, f"{dist_m:,}m"))
         )
 
     # ── Timed events ──────────────────────────────────────────────────────────
-    for time_tenths, label in RANKED_TIMES:
+    for time_tenths, label in ranked_times(machine):
         rows.append(_build_row("time", time_tenths, label))
 
     # ── Sort all rows by expected duration (mixes distance and timed events) ─────

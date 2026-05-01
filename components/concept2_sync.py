@@ -84,6 +84,24 @@ def _fmt_month_year(date_str: str) -> str:
         return date_str[:7]
 
 
+def _reconcile_machine_filter(ctx) -> str:
+    """Snap ``gstate.machine`` to a value present in ``ctx.all_machines``.
+
+    Default to ``"rower"`` when present; otherwise the first available machine.
+    Returns the resolved machine.  Idempotent — does nothing when the current
+    selection is already valid.
+    """
+    gstate = GlobalFilters()
+    available = list(ctx.all_machines or [])
+    if not available:
+        return gstate.machine  # no workouts yet — leave default
+    if gstate.machine in available:
+        return gstate.machine
+    new_machine = "rower" if "rower" in available else available[0]
+    gstate.machine = new_machine
+    return new_machine
+
+
 def get_all_workouts():
     result = sync_workouts()
     if result is None:
@@ -91,16 +109,15 @@ def get_all_workouts():
     workouts_dict, all_workouts = result
 
     # Apply global filters
+    machine = _reconcile_machine_filter(AppContext())
     gstate = GlobalFilters()
     excluded_seasons = gstate.excluded_seasons
-    machine = gstate.machine
 
     if excluded_seasons:
         all_workouts = [
             w for w in all_workouts if w["season"] not in set(excluded_seasons)
         ]
-    if machine != "All":
-        all_workouts = [w for w in all_workouts if w.get("type") == machine]
+    all_workouts = [w for w in all_workouts if w.get("type", "rower") == machine]
 
     return workouts_dict, all_workouts
 
@@ -384,10 +401,13 @@ def _maybe_push_on_sync(
 # ---------------------------------------------------------------------------
 
 
-def load_world_record_data(state, profile: dict):
+def load_world_record_data(state, profile: dict, machine: str = "rower"):
     """
     Manage the background task that fetches world-class CP data for the
-    user's (gender, age, weight) bucket.
+    user's (gender, age, weight) bucket on ``machine``.
+
+    Returns ``None`` immediately when the machine has no Concept2 WRs
+    (e.g. bikeerg).
 
     Caches result in ``state.wr_data`` and flips ``state.wr_fetch_done`` when
     the task completes.  Returns ``state.wr_data`` (``None`` until the fetch
@@ -399,6 +419,11 @@ def load_world_record_data(state, profile: dict):
     the y-bounds baked at the pre-fetch render would persist even after WR
     data arrived.
     """
+    from services.concept2_records import wr_machine_supported
+
+    if not wr_machine_supported(machine):
+        return None
+
     gender_raw = profile.get("gender", "")  # "Male" or "Female"
     if gender_raw not in ("Male", "Female"):
         return None
@@ -412,9 +437,9 @@ def load_world_record_data(state, profile: dict):
 
     age_cat = wr_age_category(age)
     wt_class = wr_weight_class_str(weight_kg, gender_api, age)
-    fetch_key = f"{gender_api}|{age_cat}|{wt_class}"
+    fetch_key = f"{machine}|{gender_api}|{age_cat}|{wt_class}"
 
-    # Reset when profile changes so the fetch task re-fires.
+    # Reset when profile or machine changes so the fetch task re-fires.
     if fetch_key != state.wr_fetch_key:
         state.wr_fetch_key = fetch_key
         state.wr_fetch_done = False
@@ -422,7 +447,7 @@ def load_world_record_data(state, profile: dict):
 
     wr_task = hd.task()
     if not wr_task.running and not wr_task.done:
-        wr_task.run(fetch_wr_data, gender_api, age, weight_kg)
+        wr_task.run(fetch_wr_data, gender_api, age, weight_kg, machine)
         print("STARTING WORLD RECORD CONCEPT2 FETCH")
     elif not wr_task.done:
         print("WORLD RECORD CONCEPT2 FETCH NOT YET DONE")

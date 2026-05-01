@@ -84,8 +84,8 @@ from datetime import date
 import hyperdiv as hd
 
 from services.rowing_utils import (
-    RANKED_DISTANCES,
-    RANKED_TIMES,
+    ranked_distances,
+    ranked_times,
     apply_best_only,
     apply_season_best_only,
     compute_duration_s,
@@ -108,9 +108,9 @@ from components.power_curve_chart_prediction_datasets import (
 )
 
 
-# Short display labels for ranked distances — derived from RANKED_DISTANCES so
-# there is one source of truth for event names.
-_DIST_LABELS: dict = {d: lbl for d, lbl in RANKED_DISTANCES}
+# Short display labels for ranked distances — resolved per machine.
+def _dist_labels(machine: str) -> dict:
+    return {d: lbl for d, lbl in ranked_distances(machine)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -118,11 +118,11 @@ _DIST_LABELS: dict = {d: lbl for d, lbl in RANKED_DISTANCES}
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def ol_event_line(etype, evalue, pace, dist):
+def ol_event_line(etype, evalue, pace, dist, machine: str = "rower"):
     """Format 'Event  time-or-dist' for the first overlay label line."""
     if etype == "dist":
         _t = fmt_split(round(pace * 10 * evalue / 500))
-        return f"{_DIST_LABELS.get(evalue, f'{evalue:,}m')}  {_t}"
+        return f"{_dist_labels(machine).get(evalue, f'{evalue:,}m')}  {_t}"
     else:
         return f"{evalue // 600}min  {dist:,}m"
 
@@ -135,6 +135,7 @@ def compute_timeline_snapshot(
     selected_dist_set: set | None = None,
     selected_time_set: set | None = None,
     cp_fit_cache: dict | None = None,
+    machine: str = "rower",
 ) -> dict:
     """
     Given the workouts visible at a timeline position, compute all derived model data.
@@ -204,6 +205,7 @@ def compute_timeline_snapshot(
 
     # ── Prediction table rows + accuracy ──────────────────────────────────────
     _pred = build_prediction_table_data(
+        machine=machine,
         lifetime_best=lb,
         lifetime_best_anchor=lb_anchor,
         all_lifetime_best=lb_all,
@@ -241,6 +243,7 @@ def build_sb_annotations(
     featured_workouts: list,
     sim_start: date,
     best_filter: str = "SBs",
+    machine: str = "rower",
 ) -> list:
     """
     Return annotation dicts for the timeline dots.
@@ -252,6 +255,7 @@ def build_sb_annotations(
     """
     lbl = "PB" if best_filter == "PBs" else "SB"
     show_season = best_filter != "PBs"
+    dist_labels = _dist_labels(machine)
 
     annotations = []
     for w in featured_workouts:
@@ -269,7 +273,7 @@ def build_sb_annotations(
         etype, evalue = cat
         if etype == "dist":
             time_tenths = round(pace * 10 * evalue / 500)
-            dist_label = _DIST_LABELS.get(evalue, f"{evalue:,}m")
+            dist_label = dist_labels.get(evalue, f"{evalue:,}m")
             label = f"{dist_label} {lbl} — {fmt_split(time_tenths)}"
         else:
             mins = evalue // 600
@@ -367,6 +371,7 @@ def build_keyframes(
     rl_predictions: dict,
     all_seasons: list,
     wr_data,
+    machine: str = "rower",
     fast_only: bool = False,
 ) -> tuple[dict, dict]:
     """
@@ -403,12 +408,12 @@ def build_keyframes(
     excluded_cats = set()
     selected_dist_set: set = set()
     selected_time_set: set = set()
-    for i, (dist, _) in enumerate(RANKED_DISTANCES):
+    for i, (dist, _) in enumerate(ranked_distances(machine)):
         if dist_enabled[i]:
             selected_dist_set.add(dist)
         else:
             excluded_cats.add(("dist", dist))
-    for i, (tenths, _) in enumerate(RANKED_TIMES):
+    for i, (tenths, _) in enumerate(ranked_times(machine)):
         if time_enabled[i]:
             selected_time_set.add(tenths)
         else:
@@ -473,7 +478,7 @@ def build_keyframes(
                 "y_pace": round(p, 4),
                 "y_watts": round(w["watts"], 1),
                 "dist_m": d,
-                "event_line": ol_event_line(etype, evalue, p, d),
+                "event_line": ol_event_line(etype, evalue, p, d, machine),
                 "date_label": dt.strftime("%b %d, %Y"),
                 "wtype": w.get("workout_type", ""),
                 "excluded": excluded,
@@ -554,6 +559,7 @@ def build_keyframes(
             rl_predictions=rl_predictions,
             selected_dist_set=selected_dist_set,
             selected_time_set=selected_time_set,
+            machine=machine,
         )
         lb_str = {f"{k[0]}:{k[1]}": v for k, v in _snap["lb"].items()}
         lb_anchor_str = {f"{k[0]}:{k[1]}": v for k, v in _snap["lb_anchor"].items()}
@@ -616,6 +622,7 @@ def build_keyframes(
             selected_dist_set=selected_dist_set,
             selected_time_set=selected_time_set,
             cp_fit_cache=cp_fit_cache,
+            machine=machine,
         )
 
         snapshots[day] = {
@@ -786,6 +793,7 @@ def manage_animation_bundle(
     all_seasons: list,
     wr_data,
     at_today: bool,
+    machine: str = "rower",
 ) -> str:
     """
     Manage the animation bundle lifecycle.
@@ -817,6 +825,7 @@ def manage_animation_bundle(
     _identity_key = hashlib.md5(
         json.dumps(
             [
+                machine,
                 state.chart_predictor,
                 state.best_filter,
                 sorted(list(excluded_seasons)),
@@ -888,6 +897,7 @@ def manage_animation_bundle(
         rl_predictions=rl_predictions,
         all_seasons=all_seasons,
         wr_data=wr_data,
+        machine=machine,
     )
 
     if _selection_key not in state.sim_full_selections and not at_today:

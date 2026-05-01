@@ -45,8 +45,8 @@ UI LAYOUT (inside power_curve_page)
 STATE VARIABLES  (declared at the top of power_curve_page())
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  dist_enabled       tuple[bool]   one flag per RANKED_DISTANCES entry (index-aligned)
-  time_enabled       tuple[bool]   one flag per RANKED_TIMES entry (index-aligned)
+  dist_enabled       tuple[bool]   one flag per ranked_distances(machine) entry (index-aligned)
+  time_enabled       tuple[bool]   one flag per ranked_times(machine) entry (index-aligned)
   best_filter        str           "All" | "PBs" | "SBs" — row filter for display/table
   chart_y_metric       str           "Pace" | "Watts"
   chart_x_metric       str           "distance" | "duration"
@@ -122,8 +122,8 @@ import hyperdiv as hd
 from services.rowinglevel import fetch_all_pb_predictions
 from services.rowing_utils import (
     apply_best_only,
-    RANKED_DISTANCES,
-    RANKED_TIMES,
+    ranked_distances,
+    ranked_times,
     compute_watts,
 )
 from components.concept2_sync import sync_workouts
@@ -131,7 +131,7 @@ from components.app_context import get_profile
 from services.rowing_utils import profile_complete
 from services.rowinglevel import fetch_rowinglevel
 
-from services.concept2_records import wr_category_label
+from services.concept2_records import wr_category_label, wr_machine_supported
 from components.power_curve_chart_plugin import PowerCurveChart
 from components.workout_table import WorkoutTable
 
@@ -319,7 +319,12 @@ def _chart_settings(state, profile, pauls_k_fit):
                         return f"{p.extended_description} Personalised to your K = {pauls_k_fit:.1f}s/doubling."
                     return p.extended_description
 
-                _PRED_OPTIONS = [(p.key, p.name, _pred_desc(p)) for p in PREDICTORS]
+                _section_machine = GlobalFilters().machine
+                _PRED_OPTIONS = [
+                    (p.key, p.name, _pred_desc(p))
+                    for p in PREDICTORS
+                    if not (p.key == "rowinglevel" and _section_machine != "rower")
+                ]
                 _pred_name = PREDICTORS_BY_KEY.get(
                     state.chart_predictor,
                     PREDICTORS_BY_KEY["none"],
@@ -497,6 +502,10 @@ def _wr_compare_section(state, profile: dict) -> None:
     Renders the 'Compare vs world record' toggle.
     Placed below the Settings Row 2 prediction box.
     """
+
+    # No WR data for the current machine (e.g. bikeerg) → nothing to render.
+    if not wr_machine_supported(GlobalFilters().machine):
+        return
 
     _loading = (
         state.chart_compare_wc and not state.wr_fetch_done and state.wr_fetch_key != ""
@@ -777,8 +786,11 @@ def _page_header(
                             state.overlay_bests = _dpc_rg.value
 
                 # ---- Events dropdown ----
+                _hdr_machine = GlobalFilters().machine
+                _hdr_dists = ranked_distances(_hdr_machine)
+                _hdr_times = ranked_times(_hdr_machine)
                 _n_ev_sel = sum(state.dist_enabled) + sum(state.time_enabled)
-                _n_ev_tot = len(RANKED_DISTANCES) + len(RANKED_TIMES)
+                _n_ev_tot = len(_hdr_dists) + len(_hdr_times)
                 _ev_lbl = "All Events" if _n_ev_sel == _n_ev_tot else "Some Events"
 
                 hd.text("for")
@@ -805,18 +817,18 @@ def _page_header(
                                 variant="text",
                             ).clicked:
                                 state.dist_enabled = tuple(
-                                    True for _ in RANKED_DISTANCES
+                                    True for _ in _hdr_dists
                                 )
-                                state.time_enabled = tuple(True for _ in RANKED_TIMES)
+                                state.time_enabled = tuple(True for _ in _hdr_times)
                             if hd.button(
                                 "Clear all", size="small", variant="text"
                             ).clicked:
                                 state.dist_enabled = tuple(
-                                    False for _ in RANKED_DISTANCES
+                                    False for _ in _hdr_dists
                                 )
-                                state.time_enabled = tuple(False for _ in RANKED_TIMES)
+                                state.time_enabled = tuple(False for _ in _hdr_times)
                         with hd.hbox(gap=0.5, wrap="wrap"):
-                            for i, (dist, label) in enumerate(RANKED_DISTANCES):
+                            for i, (dist, label) in enumerate(_hdr_dists):
                                 with hd.scope(f"dist_{dist} {state.dist_enabled}"):
                                     cb = hd.checkbox(
                                         label, checked=state.dist_enabled[i]
@@ -834,7 +846,7 @@ def _page_header(
                             padding_top=0.25,
                         )
                         with hd.hbox(gap=0.5, wrap="wrap"):
-                            for i, (tenths, label) in enumerate(RANKED_TIMES):
+                            for i, (tenths, label) in enumerate(_hdr_times):
                                 with hd.scope(f"time_{tenths} {state.time_enabled}"):
                                     cb = hd.checkbox(
                                         label, checked=state.time_enabled[i]
@@ -862,8 +874,14 @@ def _page_header(
 
 @hd.global_state
 class PowerCurveState(hd.BaseState):
-    dist_enabled = hd.Prop(hd.Any, tuple(True for _ in RANKED_DISTANCES))
-    time_enabled = hd.Prop(hd.Any, tuple(True for _ in RANKED_TIMES))
+    # ``dist_enabled`` / ``time_enabled`` are sized to the *currently selected*
+    # machine's ranked event tables.  Whenever the active machine changes,
+    # ``power_curve_page`` resets these tuples to "all on" for the new machine.
+    # ``_state_machine`` records which machine the current tuples belong to so
+    # the page can detect the change.
+    dist_enabled = hd.Prop(hd.Any, tuple(True for _ in ranked_distances("rower")))
+    time_enabled = hd.Prop(hd.Any, tuple(True for _ in ranked_times("rower")))
+    _state_machine = hd.Prop(hd.String, "rower")
     best_filter = hd.Prop(hd.String, "SBs")
     chart_log_x = hd.Prop(hd.Bool, True)
     chart_log_y = hd.Prop(hd.Bool, False)
@@ -934,6 +952,18 @@ def power_curve_page() -> None:
         hd.box(padding=2, min_height="80vh")
         return
 
+    # If the user just switched machines, the persisted dist_enabled / time_enabled
+    # tuples are sized for the previous machine's event grid.  Reset to "all on"
+    # for the new machine before any consumer reads them.
+    if state._state_machine != machine:
+        state.dist_enabled = tuple(True for _ in ranked_distances(machine))
+        state.time_enabled = tuple(True for _ in ranked_times(machine))
+        state._state_machine = machine
+        # If the user had RowingLevel selected and the new machine isn't rower,
+        # snap to a predictor that works there.
+        if state.chart_predictor == "rowinglevel" and machine != "rower":
+            state.chart_predictor = "average"
+
     # Build the workout view — one traversal through all 4 pipeline stages.
     # A single hash(filters) + workout count invalidates the whole pipeline,
     # replacing the 4 per-stage caches + 4 hand-rolled string keys that used
@@ -958,11 +988,13 @@ def power_curve_page() -> None:
     )
 
     # ── Filters (selected sets used for chart-level excluded-event logic) ─────
+    machine_dists = ranked_distances(machine)
+    machine_times = ranked_times(machine)
     selected_dists = {
-        dist for i, (dist, _) in enumerate(RANKED_DISTANCES) if state.dist_enabled[i]
+        dist for i, (dist, _) in enumerate(machine_dists) if state.dist_enabled[i]
     }
     selected_times = {
-        tenths for i, (tenths, _) in enumerate(RANKED_TIMES) if state.time_enabled[i]
+        tenths for i, (tenths, _) in enumerate(machine_times) if state.time_enabled[i]
     }
 
     # ── Simulation timeline ───────────────────────────────────────────────────
@@ -983,17 +1015,23 @@ def power_curve_page() -> None:
             featured_efforts,
             sim_start,
             best_filter=state.best_filter,
+            machine=machine,
         )
         state._annot_key = _annot_key
 
-    if at_today:
+    rl_supported = machine == "rower"
+    if at_today and rl_supported:
         rl_predictions = fetch_rowinglevel(
             state, profile, efforts_filtered_by_event_and_display
         )
     else:
         rl_predictions = {}
 
-    wr_data = load_world_record_data(state, profile) if state.chart_compare_wc else None
+    wr_data = (
+        load_world_record_data(state, profile, machine)
+        if state.chart_compare_wc and wr_machine_supported(machine)
+        else None
+    )
 
     # ── Axis bounds ───────────────────────────────────────────────────────────
     _bounds_key = (
@@ -1031,6 +1069,7 @@ def power_curve_page() -> None:
         all_seasons=all_seasons,
         wr_data=wr_data,
         at_today=at_today,
+        machine=machine,
     )
 
     # ── JS-prop builders: workouts + season_meta ─────────────────────────────
@@ -1055,7 +1094,7 @@ def power_curve_page() -> None:
     pauls_k = pauls_k_fit if pauls_k_fit is not None else 5.0
     accuracy = entry.get("accuracy", {})
 
-    rl_available = profile_complete(profile)
+    rl_available = profile_complete(profile) and rl_supported
 
     # ── Render ────────────────────────────────────────────────────────────────
     with hd.box(gap=5, align="center", padding=2, min_height="80vh"):
@@ -1080,7 +1119,9 @@ def power_curve_page() -> None:
                 is_dark=is_dark,
             )
 
-            if not rl_available:
+            # Only nag about an incomplete profile if RowingLevel is otherwise
+            # available on this machine (rower).
+            if not rl_available and rl_supported:
                 _rl_profile_notice()
 
         with hd.box(align="center"):
@@ -1099,6 +1140,7 @@ def power_curve_page() -> None:
                 accuracy,
                 rl_available=rl_available,
                 pauls_k=pauls_k,
+                machine=machine,
             )
 
         with hd.box(align="center"):

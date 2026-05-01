@@ -32,15 +32,23 @@ from services.reference_watts import (
     seed_reference_watts_index,
     serialize_index,
 )
+from services.global_state import GlobalFilters
 
-LS_KEY = "reference_watts_v1"
+_LS_KEY_PREFIX = "reference_watts_v1"
+
+
+def _ls_key(machine: str) -> str:
+    """Per-machine localStorage slot so switching machines preserves both indices."""
+    return f"{_LS_KEY_PREFIX}_{machine}"
 
 
 @hd.global_state
 class ReferenceWattsState(hd.BaseState):
-    ls_loaded = hd.Prop(hd.Bool, False)
-    seeded_hash = hd.Prop(hd.String, "")
-    persisted_hash = hd.Prop(hd.String, "")
+    # Per-machine bookkeeping so switching machines doesn't trample the other
+    # machine's loader state.  Each field maps machine → value.
+    ls_loaded_by_machine = hd.Prop(hd.Any, {})
+    seeded_hash_by_machine = hd.Prop(hd.Any, {})
+    persisted_hash_by_machine = hd.Prop(hd.Any, {})
     build_started = hd.Prop(hd.Bool, False)
     progress_i = hd.Prop(hd.Int, 0)
     progress_n = hd.Prop(hd.Int, 0)
@@ -53,14 +61,21 @@ def reference_watts_loader(all_workouts: list) -> bool:
     Returns True when the service-module cache is seeded with an index that
     matches the current workouts.  Returns False while loading / building,
     rendering a progress UI inline.
+
+    ``all_workouts`` must be from a single machine — callers route this
+    through ``get_all_workouts()`` which honors ``gstate.machine``.
     """
     loader_state = ReferenceWattsState()
+    machine = GlobalFilters().machine
 
     target_hash = input_hash(all_workouts)
+    ls_loaded = dict(loader_state.ls_loaded_by_machine or {})
+    seeded_by_machine = dict(loader_state.seeded_hash_by_machine or {})
+    persisted_by_machine = dict(loader_state.persisted_hash_by_machine or {})
 
-    # ── Step 1: one-time localStorage read ──────────────────────────────────
-    if not loader_state.ls_loaded:
-        ls = hd.local_storage.get_item(LS_KEY)
+    # ── Step 1: one-time localStorage read (per machine) ────────────────────
+    if not ls_loaded.get(machine):
+        ls = hd.local_storage.get_item(_ls_key(machine))
         if not ls.done:
             _progress_ui(loader_state, "Loading fitness baseline…")
             return False
@@ -70,14 +85,17 @@ def reference_watts_loader(all_workouts: list) -> bool:
                 index = deserialize_index(payload)
                 if index.get("input_hash") == target_hash:
                     seed_reference_watts_index(index)
-                    loader_state.seeded_hash = target_hash
-                    loader_state.persisted_hash = target_hash
+                    seeded_by_machine[machine] = target_hash
+                    persisted_by_machine[machine] = target_hash
             except Exception:
                 pass
-        loader_state.ls_loaded = True
+        ls_loaded[machine] = True
+        loader_state.ls_loaded_by_machine = ls_loaded
+        loader_state.seeded_hash_by_machine = seeded_by_machine
+        loader_state.persisted_hash_by_machine = persisted_by_machine
 
     # Fast path: the cached index matches the current workouts.
-    if loader_state.seeded_hash == target_hash:
+    if seeded_by_machine.get(machine) == target_hash:
         return True
 
     # ── Step 2: background build ────────────────────────────────────────────
@@ -111,13 +129,17 @@ def reference_watts_loader(all_workouts: list) -> bool:
         index = task.result
         # ``build_reference_watts_index`` already seeds the service cache;
         # just mark our loader state and persist.
-        loader_state.seeded_hash = index.get("input_hash", target_hash)
-        if loader_state.persisted_hash != loader_state.seeded_hash:
+        seeded_by_machine[machine] = index.get("input_hash", target_hash)
+        if persisted_by_machine.get(machine) != seeded_by_machine[machine]:
             try:
-                hd.local_storage.set_item(LS_KEY, json.dumps(serialize_index(index)))
-                loader_state.persisted_hash = loader_state.seeded_hash
+                hd.local_storage.set_item(
+                    _ls_key(machine), json.dumps(serialize_index(index))
+                )
+                persisted_by_machine[machine] = seeded_by_machine[machine]
             except Exception as exc:
                 print(f"[reference_watts] persist failed: {exc}")
+        loader_state.seeded_hash_by_machine = seeded_by_machine
+        loader_state.persisted_hash_by_machine = persisted_by_machine
         return True
 
     return False

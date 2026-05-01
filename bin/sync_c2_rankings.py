@@ -43,17 +43,17 @@ from services.concept2_rankings import (  # noqa: E402
     AGE_BANDS,
     CACHE_DIR,
     Category,
-    EVENT_IDS_DIST,
-    EVENT_IDS_TIME,
     GENDERS,
     WEIGHT_CLASSES_ADULT,
     all_past_seasons,
+    event_ids_dist,
+    event_ids_time,
     iter_all_categories,
     latest_complete_season,
     scrape_all,
     set_rate_limit,
 )
-from services.rowing_utils import RANKED_DISTANCES, RANKED_TIMES  # noqa: E402
+from services.rowing_utils import ranked_distances, ranked_times  # noqa: E402
 
 RATE_LIMIT = 3.0
 
@@ -64,24 +64,26 @@ RATE_LIMIT = 3.0
 
 def _event_label(cat: Category) -> str:
     """Human label like '2k' or '30min' for a Category."""
+    machine = cat.machine
     if cat.event_kind == "dist":
-        for d, label in RANKED_DISTANCES:
+        for d, label in ranked_distances(machine):
             if d == cat.event_value:
                 return label
         return f"{cat.event_value}m"
-    for t, label in RANKED_TIMES:
+    for t, label in ranked_times(machine):
         if t == cat.event_value:
             return label
     return f"{cat.event_value // 600} min"
 
 
-def _event_label_for_id(event_id: int) -> str:
+def _event_label_for_id(event_id: int, machine: str = "rower") -> str:
     """Human label for a raw URL event_id (used in event_discontinued messages)."""
-    for d, label in RANKED_DISTANCES:
+    for d, label in ranked_distances(machine):
         if d == event_id:
             return label
-    for t, label in RANKED_TIMES:
-        if EVENT_IDS_TIME.get(t) == event_id:
+    et = event_ids_time(machine)
+    for t, label in ranked_times(machine):
+        if et.get(t) == event_id:
             return label
     return str(event_id)
 
@@ -92,8 +94,17 @@ def _cat_label(cat: Category) -> str:
 
 
 def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    # Validate against the union of event ids across all supported machines so
+    # the CLI accepts any machine's events; the actual machine choice happens
+    # below via --machine.
     valid_event_ids = sorted(
-        set(EVENT_IDS_DIST.values()) | set(EVENT_IDS_TIME.values())
+        set()
+        .union(event_ids_dist("rower").values())
+        .union(event_ids_time("rower").values())
+        .union(event_ids_dist("skierg").values())
+        .union(event_ids_time("skierg").values())
+        .union(event_ids_dist("bikeerg").values())
+        .union(event_ids_time("bikeerg").values())
     )
     p = argparse.ArgumentParser(
         description="Scrape Concept2 public rankings into .c2_rankings/.",
@@ -163,6 +174,12 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         "--quiet",
         action="store_true",
         help="Suppress per-page status output; keep the final summary.",
+    )
+    p.add_argument(
+        "--machine",
+        choices=["rower", "skierg", "bikeerg"],
+        default="rower",
+        help="Concept2 machine to scrape rankings for.",
     )
     return p.parse_args(argv)
 
@@ -425,17 +442,20 @@ def main(argv: Optional[list[str]] = None) -> int:
             age_bands=age_bands,
             weights=weights,
             genders=genders,
+            machine=args.machine,
         )
     )
 
     # ── Banner ─────────────────────────────────────────────────────────────
     existing_cats, existing_files = _count_existing_pages(cats)
-    print("Concept2 Rankings Sync")
+    print(f"Concept2 Rankings Sync ({args.machine})")
     season_range = (
         f"{min(seasons)}..{max(seasons)} ({len(seasons)})" if seasons else "—"
     )
     event_count = (
-        len(event_ids) if event_ids else (len(EVENT_IDS_DIST) + len(EVENT_IDS_TIME))
+        len(event_ids)
+        if event_ids
+        else (len(event_ids_dist(args.machine)) + len(event_ids_time(args.machine)))
     )
     weight_count = len(weights) if weights else len(WEIGHT_CLASSES_ADULT)
     print(
@@ -483,6 +503,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         max_pages=args.max_pages,
         abort_check=_abort_check,
         on_progress=printer.handle,
+        machine=args.machine,
     )
     printer.print_final_summary(totals)
     return 2 if totals.get("failures") else (1 if totals.get("aborted") else 0)

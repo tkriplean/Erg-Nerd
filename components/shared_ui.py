@@ -121,7 +121,6 @@ def global_filter_ui() -> None:
                     expand_icon_style=hd.style(margin_left="8px", font_size="x-small"),
                 )
                 with machine_sel:
-                    hd.option("All Machines", value="All")
                     for mt in machine_types:
                         with hd.scope(mt):
                             hd.option(machine_label(mt), value=mt)

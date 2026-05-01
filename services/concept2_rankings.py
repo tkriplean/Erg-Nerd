@@ -61,7 +61,7 @@ from urllib.parse import urlencode
 import httpx
 from bs4 import BeautifulSoup
 
-from services.rowing_utils import RANKED_DISTANCES, RANKED_TIMES, compute_watts
+from services.rowing_utils import ranked_distances, ranked_times, compute_watts
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -102,17 +102,37 @@ GENDERS: list[str] = ["M", "F"]
 WEIGHT_CLASSES_ADULT: list[str] = ["H", "L"]
 YOUTH_BANDS: frozenset[str] = frozenset({"0-12", "13-18"})
 
-# Canonical event table: (kind, tenths_or_meters, url_id)
+# Canonical event table: (kind, tenths_or_meters, url_id) — resolved per machine.
 # * Distance events — url_id is the distance in meters (same as the event value).
 # * Time events — url_id is the duration in minutes (verified against the live
 #   site with ``curl .../rower/30?age=40-49&weight=H&gender=M``).
-EVENT_IDS_DIST: dict[int, int] = {d: d for d, _ in RANKED_DISTANCES}
-EVENT_IDS_TIME: dict[int, int] = {
-    600: 1,  # 1 min
-    2400: 4,  # 4 min
-    18000: 30,  # 30 min
-    36000: 60,  # 60 min
+_EVENT_IDS_TIME_BY_MACHINE: dict[str, dict[int, int]] = {
+    "rower": {
+        600: 1,  # 1 min
+        2400: 4,  # 4 min
+        18000: 30,  # 30 min
+        36000: 60,  # 60 min
+    },
+    "skierg": {
+        600: 1,
+        2400: 4,
+        18000: 30,
+        36000: 60,
+    },
+    "bikeerg": {
+        600: 1,
+        18000: 30,
+        36000: 60,
+    },
 }
+
+
+def event_ids_dist(machine: str = "rower") -> dict[int, int]:
+    return {d: d for d, _ in ranked_distances(machine)}
+
+
+def event_ids_time(machine: str = "rower") -> dict[int, int]:
+    return _EVENT_IDS_TIME_BY_MACHINE.get(machine, _EVENT_IDS_TIME_BY_MACHINE["rower"])
 
 USER_AGENT = (
     "Erg Nerd rankings sync (personal use; https://github.com/tkriplean/Erg-Nerd)"
@@ -133,11 +153,12 @@ class Category:
 
     season: int
     event_kind: str  # "dist" | "time"
-    event_value: int  # meters (dist) or tenths (time) — matches RANKED_*
+    event_value: int  # meters (dist) or tenths (time) — matches the per-machine ranked tables
     event_id: int  # the value used in the URL path
     age_band: str
     weight: Optional[str]  # "H" | "L" | None
     gender: str  # "M" | "F"
+    machine: str = "rower"  # "rower" | "skierg" | "bikeerg"
 
 
 # ---------------------------------------------------------------------------
@@ -166,13 +187,17 @@ def all_past_seasons(today: Optional[date] = None) -> list[int]:
 # ---------------------------------------------------------------------------
 
 
-def _event_list() -> list[tuple[str, int, int]]:
-    """All 13 ranked events as (kind, event_value, url_id) tuples, distances first."""
+def _event_list(machine: str = "rower") -> list[tuple[str, int, int]]:
+    """All ranked events for ``machine`` as (kind, event_value, url_id) tuples,
+    distances first.
+    """
+    eid_dist = event_ids_dist(machine)
+    eid_time = event_ids_time(machine)
     out: list[tuple[str, int, int]] = []
-    for d, _ in RANKED_DISTANCES:
-        out.append(("dist", d, EVENT_IDS_DIST[d]))
-    for t, _ in RANKED_TIMES:
-        out.append(("time", t, EVENT_IDS_TIME[t]))
+    for d, _ in ranked_distances(machine):
+        out.append(("dist", d, eid_dist[d]))
+    for t, _ in ranked_times(machine):
+        out.append(("time", t, eid_time[t]))
     return out
 
 
@@ -185,6 +210,7 @@ def _combos_for(
     weight_list: list[str],
     gender_list: list[str],
     explicit_weights: bool,
+    machine: str = "rower",
 ) -> list[Category]:
     """Return all Category objects for one (event, season) pair.
 
@@ -197,11 +223,17 @@ def _combos_for(
             if explicit_weights:
                 continue
             for gender in gender_list:
-                out.append(Category(season, kind, ev_value, ev_id, age, None, gender))
+                out.append(
+                    Category(season, kind, ev_value, ev_id, age, None, gender, machine)
+                )
             continue
         for weight in weight_list:
             for gender in gender_list:
-                out.append(Category(season, kind, ev_value, ev_id, age, weight, gender))
+                out.append(
+                    Category(
+                        season, kind, ev_value, ev_id, age, weight, gender, machine
+                    )
+                )
     return out
 
 
@@ -229,6 +261,7 @@ def iter_all_categories(
     weights: Optional[list[str]] = None,
     genders: Optional[list[str]] = None,
     today: Optional[date] = None,
+    machine: str = "rower",
 ) -> Iterator[Category]:
     """Yield every Category matching the (optional) filter kwargs.
 
@@ -243,7 +276,7 @@ def iter_all_categories(
     )
     events = [
         (k, v, u)
-        for (k, v, u) in _event_list()
+        for (k, v, u) in _event_list(machine)
         if (event_ids is None or u in event_ids)
     ]
     age_list = age_bands if age_bands is not None else AGE_BANDS
@@ -262,6 +295,7 @@ def iter_all_categories(
                 weight_list,
                 gender_list,
                 explicit_weights,
+                machine,
             ):
                 yield cat
 
@@ -277,19 +311,22 @@ def build_url(cat: Category, page: int) -> str:
     if cat.weight is not None:
         params.append(("weight", cat.weight))
     params.append(("gender", cat.gender))
-    params.append(("rower", "rower"))
+    # Concept2's URL convention duplicates the machine slug as a query param.
+    params.append((cat.machine, cat.machine))
     params.append(("page", str(page)))
-    return f"{BASE_URL}/{cat.season}/rower/{cat.event_id}?{urlencode(params)}"
+    return f"{BASE_URL}/{cat.season}/{cat.machine}/{cat.event_id}?{urlencode(params)}"
 
 
 def page_filename(cat: Category, page: int) -> Path:
     """Return the on-disk JSON path for a (category, page) tuple.
 
     Filename mirrors the URL query string so ``ls .c2_rankings/ | sort`` groups
-    pages by category naturally.
+    pages by category naturally.  For machine="rower" the resulting filename
+    matches the historical rower-only naming (``2025_rower_2000_age=...``), so
+    pre-existing rower files keep working without migration.
     """
     bits = [
-        f"{cat.season}_rower_{cat.event_id}",
+        f"{cat.season}_{cat.machine}_{cat.event_id}",
         f"age={cat.age_band}",
     ]
     if cat.weight is not None:
@@ -752,6 +789,7 @@ def scrape_all(
     abort_check: AbortCheck = lambda: False,
     on_progress: Optional[ProgressCB] = None,
     today: Optional[date] = None,
+    machine: str = "rower",
 ) -> dict:
     """Scrape all matching categories, iterating event-outer / season-descending.
 
@@ -773,7 +811,9 @@ def scrape_all(
         seasons if seasons is not None else all_past_seasons(today), reverse=True
     )
     events_filtered = [
-        (k, v, u) for (k, v, u) in _event_list() if event_ids is None or u in event_ids
+        (k, v, u)
+        for (k, v, u) in _event_list(machine)
+        if event_ids is None or u in event_ids
     ]
     age_list = age_bands if age_bands is not None else AGE_BANDS
     gender_list = genders if genders is not None else GENDERS
@@ -821,6 +861,7 @@ def scrape_all(
                 weight_list,
                 gender_list,
                 explicit_weights,
+                machine,
             )
 
             for cat in combos:

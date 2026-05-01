@@ -5,10 +5,10 @@ Exported:
     FilterSpec         — frozen dataclass of the data-identity inputs.  Changing
                          any field invalidates the workout filtering pipeline.
                          Used as the cache key for ``build_workout_view``.
-                             machine                 "All" | "RowErg" | ...
+                             machine                 "rower" | "skierg" | "bikeerg"
                              excluded_seasons        tuple[str, ...]
-                             dist_enabled            tuple[bool, ...]   (RANKED_DISTANCES)
-                             time_enabled            tuple[bool, ...]   (RANKED_TIMES)
+                             dist_enabled            tuple[bool, ...]   (ranked_distances(machine))
+                             time_enabled            tuple[bool, ...]   (ranked_times(machine))
                              best_filter             "All" | "PBs" | "SBs"
 
     WorkoutView        — frozen dataclass grouping the 4 pipeline stages plus
@@ -29,8 +29,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from services.rowing_utils import (
-    RANKED_DISTANCES,
-    RANKED_TIMES,
+    ranked_distances,
+    ranked_times,
     apply_best_only,
     apply_quality_filters,
     apply_season_best_only,
@@ -53,8 +53,8 @@ class FilterSpec:
 
     machine: str
     excluded_seasons: tuple  # tuple[str, ...]
-    dist_enabled: tuple  # tuple[bool, ...], index-aligned with RANKED_DISTANCES
-    time_enabled: tuple  # tuple[bool, ...], index-aligned with RANKED_TIMES
+    dist_enabled: tuple  # tuple[bool, ...], index-aligned with ranked_distances(machine)
+    time_enabled: tuple  # tuple[bool, ...], index-aligned with ranked_times(machine)
     best_filter: str  # "All" | "PBs" | "SBs"
 
 
@@ -102,7 +102,7 @@ def build_workout_view(raw_workouts: list, filters: FilterSpec) -> WorkoutView:
     quality: list = [
         w
         for w in raw_workouts
-        if (filters.machine == "All" or w.get("type") == filters.machine)
+        if w.get("type", "rower") == filters.machine
         and is_rankable_noninterval(w)
         and w["season"] not in excl
     ]
@@ -110,11 +110,13 @@ def build_workout_view(raw_workouts: list, filters: FilterSpec) -> WorkoutView:
     all_seasons = tuple(seasons_from(quality))
 
     # Stage 2 — filter by selected distance/time events.
+    machine_dists = ranked_distances(filters.machine)
+    machine_times = ranked_times(filters.machine)
     selected_dists = {
-        dist for i, (dist, _) in enumerate(RANKED_DISTANCES) if filters.dist_enabled[i]
+        dist for i, (dist, _) in enumerate(machine_dists) if filters.dist_enabled[i]
     }
     selected_times = {
-        tenths for i, (tenths, _) in enumerate(RANKED_TIMES) if filters.time_enabled[i]
+        tenths for i, (tenths, _) in enumerate(machine_times) if filters.time_enabled[i]
     }
     by_event: list = [
         w

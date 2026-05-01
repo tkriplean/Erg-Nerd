@@ -43,10 +43,10 @@ from __future__ import annotations
 import hyperdiv as hd
 
 from services.rowing_utils import (
-    RANKED_DISTANCES,
-    RANKED_TIMES,
-    RANKED_DIST_SET,
-    RANKED_TIME_SET,
+    ranked_distances,
+    ranked_times,
+    ranked_dist_set,
+    ranked_time_set,
     age_from_dob,
     age_on_date,
     apply_best_only,
@@ -63,7 +63,9 @@ from services.concept2_records import (
     age_category,
     weight_class_str,
     get_records_for_age,
+    wr_machine_supported,
 )
+from services.global_state import GlobalFilters
 from services.concept2_rankings import (
     filter_matched_rankings,
     age_group_matched_rankings,
@@ -100,22 +102,59 @@ _FOCUS_LABELS = {
     "world_record": "World Record",
 }
 
-# Ordered list used by the chart x-axis (left → right).
-_EVENT_ORDER: list[tuple[str, int, str]] = [
-    ("dist", 100, "100m"),
-    ("time", 600, "1 min"),
-    ("dist", 500, "500m"),
-    ("dist", 1000, "1k"),
-    ("time", 2400, "4 min"),
-    ("dist", 2000, "2k"),
-    ("dist", 5000, "5k"),
-    ("dist", 6000, "6k"),
-    ("time", 18000, "30 min"),
-    ("dist", 10000, "10k"),
-    ("time", 36000, "60 min"),
-    ("dist", 21097, "½ Marathon"),
-    ("dist", 42195, "Marathon"),
-]
+# Ordered list used by the chart x-axis (left → right) — interleaved by typical
+# event duration so adjacent points sit close in power-duration space.
+_EVENT_ORDER_BY_MACHINE: dict[str, list[tuple[str, int, str]]] = {
+    "rower": [
+        ("dist", 100, "100m"),
+        ("time", 600, "1 min"),
+        ("dist", 500, "500m"),
+        ("dist", 1000, "1k"),
+        ("time", 2400, "4 min"),
+        ("dist", 2000, "2k"),
+        ("dist", 5000, "5k"),
+        ("dist", 6000, "6k"),
+        ("time", 18000, "30 min"),
+        ("dist", 10000, "10k"),
+        ("time", 36000, "60 min"),
+        ("dist", 21097, "½ Marathon"),
+        ("dist", 42195, "Marathon"),
+        ("dist", 100000, "100k"),
+    ],
+    "skierg": [
+        ("dist", 100, "100m"),
+        ("time", 600, "1 min"),
+        ("dist", 500, "500m"),
+        ("dist", 1000, "1k"),
+        ("time", 2400, "4 min"),
+        ("dist", 2000, "2k"),
+        ("dist", 5000, "5k"),
+        ("dist", 6000, "6k"),
+        ("time", 18000, "30 min"),
+        ("dist", 10000, "10k"),
+        ("time", 36000, "60 min"),
+        ("dist", 21097, "½ Marathon"),
+        ("dist", 42195, "Marathon"),
+        ("dist", 100000, "100k"),
+    ],
+    "bikeerg": [
+        ("dist", 200, "200m"),
+        ("time", 600, "1 min"),
+        ("dist", 500, "500m"),
+        ("dist", 1000, "1k"),
+        ("dist", 4000, "4k"),
+        ("dist", 10000, "10k"),
+        ("time", 18000, "30 min"),
+        ("dist", 20000, "20k"),
+        ("time", 36000, "60 min"),
+        ("dist", 40000, "40k"),
+        ("dist", 100000, "100k"),
+    ],
+}
+
+
+def _event_order(machine: str) -> list[tuple[str, int, str]]:
+    return _EVENT_ORDER_BY_MACHINE.get(machine, _EVENT_ORDER_BY_MACHINE["rower"])
 
 
 def _event_key(etype: str, evalue: int) -> str:
@@ -180,34 +219,35 @@ def _rankings_weight_class(wr_class: str | None) -> str | None:
 _NAME_AGG_CACHE: dict = {}
 
 
-def _load_name_counts() -> dict:
-    """Return {name: total_entries_across_all_events}. Cached process-wide."""
-    if "counts" in _NAME_AGG_CACHE:
-        return _NAME_AGG_CACHE["counts"]
+def _load_name_counts(machine: str) -> dict:
+    """Return {name: total_entries_across_all_events} for ``machine``. Cached process-wide."""
+    cache_key = ("counts", machine)
+    if cache_key in _NAME_AGG_CACHE:
+        return _NAME_AGG_CACHE[cache_key]
     counts: dict = {}
-    for et, ev, _ in _EVENT_ORDER:
+    for et, ev, _ in _event_order(machine):
         try:
-            for e in iter_event_entries(et, ev):
+            for e in iter_event_entries(et, ev, machine=machine):
                 n = e.get("name")
                 if n:
                     counts[n] = counts.get(n, 0) + 1
         except Exception:
             pass
-    _NAME_AGG_CACHE["counts"] = counts
+    _NAME_AGG_CACHE[cache_key] = counts
     return counts
 
 
-def _load_name_event_sets(required: frozenset) -> dict:
+def _load_name_event_sets(required: frozenset, machine: str) -> dict:
     """Return {name: frozenset((kind, value))} for names appearing in the
-    supplied required events. Cached per required-set."""
-    key = ("events", tuple(sorted(required)))
+    supplied required events on ``machine``. Cached per required-set."""
+    key = ("events", machine, tuple(sorted(required)))
     if key in _NAME_AGG_CACHE:
         return _NAME_AGG_CACHE[key]
     tmp: dict[str, set] = {}
     for et, ev in required:
         seen: set = set()
         try:
-            for e in iter_event_entries(et, ev):
+            for e in iter_event_entries(et, ev, machine=machine):
                 n = e.get("name")
                 if not n or n in seen:
                     continue
@@ -224,7 +264,7 @@ def _load_name_event_sets(required: frozenset) -> dict:
     return frozen
 
 
-def _build_modifiers(state) -> RankingModifiers | None:
+def _build_modifiers(state, machine: str) -> RankingModifiers | None:
     """Construct a RankingModifiers from UI state, or None if all defaults."""
     must_have_raw = tuple(state.modifier_must_have_events or ())
     exclude_unv = bool(state.modifier_exclude_unverified)
@@ -245,11 +285,11 @@ def _build_modifiers(state) -> RankingModifiers | None:
                 continue
         must_have = frozenset(parsed)
         if must_have:
-            name_event_sets = _load_name_event_sets(must_have)
+            name_event_sets = _load_name_event_sets(must_have, machine)
 
     name_counts = None
     if min_perf > 1:
-        name_counts = _load_name_counts()
+        name_counts = _load_name_counts(machine)
 
     return RankingModifiers(
         must_have_event_kinds=must_have,
@@ -276,6 +316,7 @@ def _build_rows(
     *,
     profile: dict,
     state,
+    machine: str,
 ) -> list[dict]:
     """Compute one enriched row dict per qualifying performance.
 
@@ -287,7 +328,7 @@ def _build_rows(
     dob = profile.get("dob", "")
 
     indices_cache: dict[tuple, list] = {}
-    modifiers = _build_modifiers(state)
+    modifiers = _build_modifiers(state, machine)
 
     # Determine how wide an age window each row's slice load needs to cover.
     # ``c2_age_matched`` widens the load by ``k_age_match`` so adjacent age
@@ -334,6 +375,7 @@ def _build_rows(
                             target_age=age,
                             k=load_k,
                             weight=w_class,
+                            machine=machine,
                         )
                         or []
                     )
@@ -351,7 +393,7 @@ def _build_rows(
             "workout": w,
             "event_kind": etype,
             "event_value": evalue,
-            "event_label": _event_label(etype, evalue),
+            "event_label": _event_label(etype, evalue, machine),
             "event_key": ev_key,
             "date_label": d.strftime("%b %d, %Y") if d.toordinal() > 1 else "",
             "date_iso": w["date"],
@@ -415,7 +457,7 @@ def _build_rows(
             )
 
         if state.ranking_focus == "world_record":
-            wr = get_records_for_age(gender_api, age, weight_kg)
+            wr = get_records_for_age(gender_api, age, weight_kg, machine)
             rec = wr.get((etype, evalue))
             if rec is not None:
                 # WR metadata dict; ``result`` is seconds (dist) or meters (time).
@@ -453,17 +495,17 @@ def _build_rows(
     return rows
 
 
-def _event_label(etype: str, evalue: int) -> str:
-    for et, ev, lbl in _EVENT_ORDER:
+def _event_label(etype: str, evalue: int, machine: str) -> str:
+    for et, ev, lbl in _event_order(machine):
         if et == etype and ev == evalue:
             return lbl
     return f"{etype}:{evalue}"
 
 
-def _build_series(rows: list[dict], state) -> tuple[list, list]:
+def _build_series(rows: list[dict], state, machine: str) -> tuple[list, list]:
     """Return (event_order_prop, series_prop) for the RankChart."""
     event_order = [
-        {"key": _event_key(et, ev), "label": lbl} for et, ev, lbl in _EVENT_ORDER
+        {"key": _event_key(et, ev), "label": lbl} for et, ev, lbl in _event_order(machine)
     ]
 
     if state.ranking_focus == "world_record":
@@ -610,6 +652,7 @@ def rank_page() -> None:
         return
 
     workouts_dict, sorted_workouts = sync
+    machine = GlobalFilters().machine
 
     if not profile_complete(profile):
         with hd.box(align="center", padding=4, gap=1):
@@ -631,14 +674,27 @@ def rank_page() -> None:
         modal_row=None,
     )
 
+    # Snap focus away from options unsupported on the current machine.
+    if not wr_machine_supported(machine):
+        if state.ranking_focus in ("c2_age_matched", "c2_age_group", "world_record"):
+            state.ranking_focus = "c2_age_matched"  # placeholder; UI gates further below
+
+    focus_labels = dict(_FOCUS_LABELS)
+    if not wr_machine_supported(machine):
+        # Bikeerg has no Concept2 rankings or world records — strip all C2-driven
+        # focuses so the user doesn't see options that produce empty data.
+        focus_labels.pop("c2_age_matched", None)
+        focus_labels.pop("c2_age_group", None)
+        focus_labels.pop("world_record", None)
+
     qualifying = _qualifying_performances(
         sorted_workouts,
         best_filter=state.include_filter,
     )
-    rows = _build_rows(qualifying, profile=profile, state=state)
+    rows = _build_rows(qualifying, profile=profile, state=state, machine=machine)
     _annotate_display_metadata(rows, is_dark=hd.theme().is_dark)
 
-    event_order_prop, series_prop = _build_series(rows, state)
+    event_order_prop, series_prop = _build_series(rows, state, machine)
 
     with hd.box(align="center", gap=2, padding=2, min_height="80vh"):
         # ── Heading ─────────────────────────────────────────────────────────
@@ -654,13 +710,14 @@ def rank_page() -> None:
                         field="include_filter",
                     )
                     hd.text("vs.")
-                    header_dropdown(
-                        state,
-                        key="focus_dd",
-                        labels=_FOCUS_LABELS,
-                        current_value=state.ranking_focus,
-                        field="ranking_focus",
-                    )
+                    if focus_labels:
+                        header_dropdown(
+                            state,
+                            key="focus_dd",
+                            labels=focus_labels,
+                            current_value=state.ranking_focus,
+                            field="ranking_focus",
+                        )
             global_filter_ui()
 
         # ── Chart ──────────────────────────────────────────────────────────
@@ -707,13 +764,14 @@ def rank_page() -> None:
 
         # ── Esoteric filters (c2_* focus only) ─────────────────────────────
         if state.ranking_focus in ("c2_age_matched", "c2_age_group"):
-            _render_filters_dropdown(state)
+            _render_filters_dropdown(state, machine)
 
         # ── Data table ──────────────────────────────────────────────────────
-        _render_table(rows, state)
+        _render_table(rows, state, machine)
 
 
-_EVENT_ORDER_IDX = {_event_key(et, ev): i for i, (et, ev, _) in enumerate(_EVENT_ORDER)}
+def _event_order_idx(machine: str) -> dict:
+    return {_event_key(et, ev): i for i, (et, ev, _) in enumerate(_event_order(machine))}
 
 
 def _annotate_display_metadata(rows: list[dict], *, is_dark: bool) -> None:
@@ -774,14 +832,14 @@ def _annotate_display_metadata(rows: list[dict], *, is_dark: bool) -> None:
             r["_dist_uri"] = None
 
 
-def _columns_for(focus: str) -> list:
+def _columns_for(focus: str, machine: str) -> list:
     """Return the ordered list of column entries for the given focus mode.
 
     Each entry is a dict consumed by `WorkoutTable`'s registry-resolution.
-    The `rank_event` column carries the page's `_EVENT_ORDER_IDX` as opt
-    so it can sort events into chart order.
+    The `rank_event` column carries the per-machine event-order map so it can
+    sort events into chart order.
     """
-    event_col = {"key": "rank_event", "event_order": _EVENT_ORDER_IDX}
+    event_col = {"key": "rank_event", "event_order": _event_order_idx(machine)}
 
     if focus == "world_record":
         return [
@@ -832,10 +890,10 @@ def _rank_dialog_title(r: dict) -> str:
     return " · ".join(title_parts)
 
 
-def _render_table(rows: list[dict], state) -> None:
+def _render_table(rows: list[dict], state, machine: str) -> None:
     if not rows:
         return
-    columns = _columns_for(state.ranking_focus)
+    columns = _columns_for(state.ranking_focus, machine)
 
     # Build an id-keyed lookup so the modal can recover ``pool`` (and the
     # other heavy fields) without serializing them into every row shipped
@@ -929,7 +987,7 @@ def _render_c2_comparison_explainer(state) -> None:
             )
 
 
-def _render_filters_dropdown(state) -> None:
+def _render_filters_dropdown(state, machine: str = "rower") -> None:
     """Render the additional-filters dropdown.
 
     Controls ``modifier_must_have_events`` (event checklist), ``modifier_exclude_unverified``
@@ -1000,7 +1058,7 @@ def _render_filters_dropdown(state) -> None:
                     )
                     with hd.box(gap=0.25, padding_left=0.5):
                         current = set(state.modifier_must_have_events or ())
-                        for et, ev, lbl in _EVENT_ORDER:
+                        for et, ev, lbl in _event_order(machine):
                             key = _event_key(et, ev)
                             with hd.scope(f"mh_{key}"):
                                 cb = hd.checkbox(lbl, checked=key in current)
