@@ -16,7 +16,8 @@ UI LAYOUT
   Loading bar:  "Fetching stroke data… N / M"  (while fetching)
   Race canvas:  RaceChart plugin (auto-sized: 26px header + 44px × N lanes)
   Sort toggle:  Sort lanes by [Date | Result]  (below race canvas)
-  Results table (all qualifying workouts; include_filter ignored)
+  Results table (workouts matching include_filter)
+  Pace-vs-date scatter (same workouts as the race chart + table)
 
 Season and machine filtering are applied globally via app.py params.
 
@@ -739,12 +740,11 @@ def race_page() -> None:
                         )
 
             # ── Pace-vs-date scatter ──────────────────────────────────────────
-            # Long-arc view: every qualifying effort for the event (the
-            # include_filter is intentionally ignored here — the scatter is
-            # for spotting trends across all efforts, not just the bests).
-            if all_event_workouts and len(all_event_workouts) >= 1:
+            # Tracks the same effort set as the race chart and results table —
+            # respects the include_filter so the three surfaces always agree.
+            if racing_workouts and len(racing_workouts) >= 1:
                 _scatter_cfg = build_race_scatter_config(
-                    all_event_workouts,
+                    racing_workouts,
                     metric=state.scatter_metric,
                     is_dark=is_dark,
                     pb_id=pb_id,
