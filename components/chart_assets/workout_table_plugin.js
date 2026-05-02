@@ -145,7 +145,8 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     .tt-body.quality { min-width: 0; max-width: 24rem; gap: 0.3rem; }
     .tt-body .row { display: flex; align-items: center; gap: 0.4rem; }
     .tt-body .row img { width: 0.6rem; height: 0.6rem; display: block; }
-    .tt-body .row .pct { font-size: var(--sl-font-size-x-small); font-weight: bold; min-width: 2.4rem; }
+    .tt-body .row .zname { font-size: var(--sl-font-size-x-small); flex: 1; }
+    .tt-body .row .pct { font-size: var(--sl-font-size-x-small); font-weight: bold; min-width: 2.4rem; text-align: right; }
     .tt-body .row .meters { font-size: var(--sl-font-size-x-small); color: var(--sl-color-neutral-500); }
     .tt-title { font-size: var(--sl-font-size-small); font-weight: bold; }
     .tt-headline { font-size: var(--sl-font-size-x-small); }
@@ -267,12 +268,11 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     spm:               (r) => r.stroke_rate ? String(r.stroke_rate) : "—",
     hr:                (r) => fmtHr(r.heart_rate),
     season:            (r) => r.season || "",
-    structure:         (r) => (r.is_interval && r.reps && r.structure_key)
-                                ? `${r.reps} x ${r.structure_key}` : "",
+    structure:         (r) => r.is_interval ? (r.intervals_label || "") : "",
     reps:              (r) => r.reps ? String(r.reps) : "—",
     work_pace:         (r) => r.work_pace ? fmtSplit(r.work_pace) : "—",
     work_spm:          (r) => r.work_spm ? Math.round(r.work_spm).toString() : "—",
-    workout_structure: (r) => r.is_interval ? (r.structure_key || "") : "",
+    workout_structure: (r) => r.is_interval ? (r.intervals_label || "") : "",
     similarity:        (r) => r._similarity != null ? r._similarity.toFixed(0) : "—",
     rank_event:        (r) => r.event_label || "",
     rank_date:         (r) => r.date_label || "",
@@ -301,8 +301,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     spm:               (r) => r.stroke_rate || 0,
     hr:                (r) => (r.heart_rate && r.heart_rate.average) || 0,
     season:            (r) => r.date || "",
-    structure:         (r) => (r.is_interval && r.reps && r.structure_key)
-                                ? `${r.reps} x ${r.structure_key}` : "",
+    structure:         (r) => r.is_interval ? (r.structure_key || "") : "",
     reps:              (r) => r.reps || 0,
     work_pace:         (r) => r.work_pace || POS_INF,
     work_spm:          (r) => r.work_spm || 0,
@@ -483,6 +482,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
 
     const skip = new Set(opts.skip_indices || [0]);
     const swatches = opts.swatch_uris || [];
+    const zoneNames = opts.zone_names || [];
     const fmtMeters = (m) => {
       const v = Math.round(m);
       if (v >= 1000) {
@@ -503,17 +503,22 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
         if (pct < 0.005) continue;
         items.push({
           uri: swatches[idx],
+          name: zoneNames[idx] || "",
           pctText: Math.round(pct * 100) + "%",
           metersText: fmtMeters(meters),
         });
       }
       const body = el("div", { class: "tt-body" });
       for (const it of items) {
-        body.appendChild(el("div", { class: "row" }, [
+        const row = el("div", { class: "row" }, [
           el("img", { src: it.uri }),
-          el("span", { class: "pct" }, it.pctText),
-          el("span", { class: "meters" }, it.metersText),
-        ]));
+        ]);
+        if (it.name) {
+          row.appendChild(el("span", { class: "zname" }, it.name));
+        }
+        row.appendChild(el("span", { class: "pct" }, it.pctText));
+        row.appendChild(el("span", { class: "meters" }, it.metersText));
+        body.appendChild(row);
       }
       return body;
     };

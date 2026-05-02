@@ -1209,10 +1209,7 @@ def workout_page(session_id: int) -> None:
     # ── Title ────────────────────────────────────────────────────────────────
 
     if is_interval:
-        reps = workout["reps"]
-        title = workout["structure_key"]
-        if reps:
-            title = f"{reps} x {title}"
+        title = workout.get("intervals_label") or workout["structure_key"]
     else:
         title = fmt_distance_label(workout)
 
@@ -1436,10 +1433,10 @@ def workout_page(session_id: int) -> None:
                     "stack_active": state.stack,
                 }
                 if is_interval_workout:
-                    # Similar sessions are mostly intervals — show reps + structure
+                    # Similar sessions are mostly intervals — show the interval
+                    # structure (which already encodes the rep count when present).
                     cols = [
                         "date",
-                        "reps",
                         "workout_structure",
                         "distance",
                         "time",
