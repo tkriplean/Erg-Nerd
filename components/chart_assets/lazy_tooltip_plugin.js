@@ -55,9 +55,17 @@ window.hyperdiv.registerPlugin("LazyTooltip", (ctx) => {
     .tt-body.quality, .tt-body.info { min-width: 0; max-width: 24rem; gap: 0.3rem; }
     .row { display: flex; align-items: center; gap: 0.4rem; }
     .row img { width: 0.6rem; height: 0.6rem; display: block; }
+    .row .zname {
+      font-size: var(--sl-font-size-x-small, 0.75rem);
+      flex: 1;
+    }
     .row .pct {
       font-size: var(--sl-font-size-x-small, 0.75rem);
       font-weight: bold;
+    }
+    .row .meters {
+      font-size: var(--sl-font-size-x-small, 0.75rem);
+      color: var(--sl-color-neutral-500);
     }
     .tt-title { font-size: var(--sl-font-size-small, 0.875rem); font-weight: bold; }
     .tt-headline { font-size: var(--sl-font-size-x-small, 0.75rem); }
@@ -121,11 +129,23 @@ window.hyperdiv.registerPlugin("LazyTooltip", (ctx) => {
         row.className = "row";
         const img = document.createElement("img");
         img.src = it.swatch_uri;
+        row.appendChild(img);
+        if (it.name) {
+          const nm = document.createElement("span");
+          nm.className = "zname";
+          nm.textContent = it.name;
+          row.appendChild(nm);
+        }
         const pct = document.createElement("span");
         pct.className = "pct";
         pct.textContent = it.pct_text;
-        row.appendChild(img);
         row.appendChild(pct);
+        if (it.meters_text) {
+          const m = document.createElement("span");
+          m.className = "meters";
+          m.textContent = it.meters_text;
+          row.appendChild(m);
+        }
         body.appendChild(row);
       }
     } else if (cfg.kind === "quality") {
