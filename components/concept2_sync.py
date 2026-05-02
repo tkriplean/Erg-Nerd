@@ -592,7 +592,14 @@ def strokes_batch(workouts: list) -> dict:
     Public: synchronous disk reads; uncached workouts go in ``uncached_count``
     and are absent from ``by_id`` so the caller can exclude them.
     """
-    batch_state = hd.state(batch_key="", queue=(), total=0, done=0, by_id_snapshot={})
+    batch_state = hd.state(
+        batch_key="",
+        queue=(),
+        total=0,
+        done=0,
+        by_id_snapshot={},
+        last_fetched_id=None,
+    )
 
     ctx = AppContext()
     ids = tuple(w["id"] for w in workouts if w["id"] and w.get("stroke_data", False))
@@ -652,12 +659,20 @@ def strokes_batch(workouts: list) -> dict:
     public_enabled = _public_enabled()
 
     if batch_state.queue and ctx.client is not None:
+        # ``task`` is a single hd.task() shared across the whole queue — once
+        # ``done`` it stays done until ``clear()``ed.  The result must be
+        # tracked alongside its source id so a render that observes
+        # ``task.done`` after the queue has advanced doesn't replay the prior
+        # fetch's strokes against the new head.  ``last_fetched_id`` records
+        # the id we kicked off; consume the result only when it matches the
+        # current head, then ``clear()`` the task so the next head can fire.
         next_id = batch_state.queue[0]
         task = hd.task()
         if not task.running and not task.done:
             print("STILL FETCHING STROKE CACHE")
+            batch_state.last_fetched_id = next_id
             task.run(lambda nid=next_id: ctx.client.get_strokes(int(ctx.user_id), nid))
-        if task.done:
+        if task.done and batch_state.last_fetched_id == next_id:
             print("STROKE CACHE FETCHED")
             if task.error:
                 print(f"[strokes_batch] error on {next_id}: {task.error}")
@@ -673,6 +688,9 @@ def strokes_batch(workouts: list) -> dict:
                 cache_dict[str(next_id)] = strokes
                 batch_state.queue = batch_state.queue[1:]
                 batch_state.done += 1
+            # Reset the task so the next queue head can dispatch its own fetch.
+            task.clear()
+            batch_state.last_fetched_id = None
 
     by_id = {str(wid): cache_dict[str(wid)] for wid in ids if str(wid) in cache_dict}
     # Snapshot so the next render can serve the same view while the IDB

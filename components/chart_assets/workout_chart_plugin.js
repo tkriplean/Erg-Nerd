@@ -224,7 +224,12 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
           animation: false,
           responsive: true,
           maintainAspectRatio: false,
-          interaction: { mode: "index", intersect: false },
+          // Use mode "x" (not "index") so the tooltip and crosshair pick the
+          // points whose x-VALUE matches the hover, not the same array index
+          // across datasets.  Compared workouts have different sample counts,
+          // so "index" mode aligns by position and misreports the time on the
+          // non-primary series.
+          interaction: { mode: "x", intersect: false },
           plugins: {
             legend: {
               display: true,

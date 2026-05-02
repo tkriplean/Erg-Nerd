@@ -838,6 +838,10 @@ def manage_animation_bundle(
                 state.wr_fetch_key,
                 # (hash(FilterSpec), workout_count) — workout pipeline identity.
                 list(state._view_key),
+                # Per-event enable flags drive which PBs anchor the prediction
+                # models, so toggling them must invalidate the cached bundles.
+                list(state.dist_enabled),
+                list(state.time_enabled),
             ],
             sort_keys=True,
         ).encode()
@@ -904,6 +908,7 @@ def manage_animation_bundle(
         # Scope by (identity, selection) so a still-running task for a prior
         # selection under the same identity doesn't swallow this selection's
         # build.
+
         _bt = hd.task()
         if not _bt.running and not _bt.done:
             print("STARTING ANIMATION BUNDLE TASK")

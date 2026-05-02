@@ -204,10 +204,14 @@ def _hr_bar(hrm: list) -> str:
     """Render the HR bar using classified meters only (bins 0–5); drop
     bin 6 so 'no HR' doesn't dilute the colour signal.  ``bin_bar_svg``
     takes a 7-element list and skips index 0 internally, so we pad with a
-    zero in the 'No HR' slot."""
+    zero in the 'No HR' slot.  Pass ``HR_ZONE_COLORS`` so the bar uses the
+    HR palette rather than the default power-zone palette — without this the
+    cell bar's colours disagreed with the legend swatches and the tooltip."""
+    from services.heartrate_utils import HR_ZONE_COLORS
+
     hr_for_bar = list(hrm)
     hr_for_bar[6] = 0
-    return bin_bar_svg(hr_for_bar)
+    return bin_bar_svg(hr_for_bar, colors=list(HR_ZONE_COLORS))
 
 
 def attach_spread_and_quality(

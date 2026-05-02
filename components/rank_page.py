@@ -84,7 +84,7 @@ from components.app_context import get_profile
 from components.app_context import your
 from components.rank_chart_plugin import RankChart
 from components.rank_distribution import distribution_svg
-from components.rank_ranking_modal import render_rankings_modal
+from components.rank_ranking_modal import render_rankings_modal, rank_dialog_title
 from components.shared_ui import global_filter_ui, header_dropdown
 from components.workout_table import WorkoutTable
 
@@ -505,7 +505,8 @@ def _event_label(etype: str, evalue: int, machine: str) -> str:
 def _build_series(rows: list[dict], state, machine: str) -> tuple[list, list]:
     """Return (event_order_prop, series_prop) for the RankChart."""
     event_order = [
-        {"key": _event_key(et, ev), "label": lbl} for et, ev, lbl in _event_order(machine)
+        {"key": _event_key(et, ev), "label": lbl}
+        for et, ev, lbl in _event_order(machine)
     ]
 
     if state.ranking_focus == "world_record":
@@ -677,7 +678,9 @@ def rank_page() -> None:
     # Snap focus away from options unsupported on the current machine.
     if not wr_machine_supported(machine):
         if state.ranking_focus in ("c2_age_matched", "c2_age_group", "world_record"):
-            state.ranking_focus = "c2_age_matched"  # placeholder; UI gates further below
+            state.ranking_focus = (
+                "c2_age_matched"  # placeholder; UI gates further below
+            )
 
     focus_labels = dict(_FOCUS_LABELS)
     if not wr_machine_supported(machine):
@@ -771,7 +774,9 @@ def rank_page() -> None:
 
 
 def _event_order_idx(machine: str) -> dict:
-    return {_event_key(et, ev): i for i, (et, ev, _) in enumerate(_event_order(machine))}
+    return {
+        _event_key(et, ev): i for i, (et, ev, _) in enumerate(_event_order(machine))
+    }
 
 
 def _annotate_display_metadata(rows: list[dict], *, is_dark: bool) -> None:
@@ -881,15 +886,6 @@ def _columns_for(focus: str, machine: str) -> list:
     ]
 
 
-def _rank_dialog_title(r: dict) -> str:
-    title_parts = [r["event_label"], f"Age {r['age']}"]
-    if r["date_label"]:
-        title_parts.append(r["date_label"])
-    wc = r["weight_class"]
-    title_parts.append(f"{r['gender']} {wc}" if wc else r["gender"])
-    return " · ".join(title_parts)
-
-
 def _render_table(rows: list[dict], state, machine: str) -> None:
     if not rows:
         return
@@ -900,8 +896,7 @@ def _render_table(rows: list[dict], state, machine: str) -> None:
     # to the JS plugin — that's the rank-page perf killer.
     rows_by_id = {r["id"]: r for r in rows}
     display_rows = [
-        {k: v for k, v in r.items() if k not in _HEAVY_ROW_FIELDS}
-        for r in rows
+        {k: v for k, v in r.items() if k not in _HEAVY_ROW_FIELDS} for r in rows
     ]
 
     def _on_rank_click(payload):
@@ -919,7 +914,7 @@ def _render_table(rows: list[dict], state, machine: str) -> None:
     # Page-level rankings modal — opens when a row's Rank cell is clicked.
     r = state.modal_row
     dlg = hd.dialog(
-        _rank_dialog_title(r) if r is not None else "",
+        rank_dialog_title(r) if r is not None else "",
         panel_style=hd.style(width="1000px", max_width="95vw"),
     )
     # Detect a user-initiated close BEFORE deciding to (re)open: setting

@@ -145,7 +145,8 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     .tt-body.quality { min-width: 0; max-width: 24rem; gap: 0.3rem; }
     .tt-body .row { display: flex; align-items: center; gap: 0.4rem; }
     .tt-body .row img { width: 0.6rem; height: 0.6rem; display: block; }
-    .tt-body .row .pct { font-size: var(--sl-font-size-x-small); font-weight: bold; }
+    .tt-body .row .pct { font-size: var(--sl-font-size-x-small); font-weight: bold; min-width: 2.4rem; }
+    .tt-body .row .meters { font-size: var(--sl-font-size-x-small); color: var(--sl-color-neutral-500); }
     .tt-title { font-size: var(--sl-font-size-small); font-weight: bold; }
     .tt-headline { font-size: var(--sl-font-size-x-small); }
     .tt-label { font-size: var(--sl-font-size-x-small); color: var(--sl-color-neutral-500); }
@@ -355,7 +356,14 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       return text(v);
     },
 
-    link(r) {
+    link(r, col) {
+      // Suppress the "view" link for the row that matches the column's
+      // current_id option — used by the "all workouts done on this day"
+      // table on the workout page so the page doesn't link back to itself.
+      const cur = col && col.opts && col.opts.current_id;
+      if (cur != null && String(cur) === String(r.id)) {
+        return document.createDocumentFragment();
+      }
       return el("a", { class: "link", href: `/session/${r.id}` }, "view");
     },
 
@@ -475,6 +483,14 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
 
     const skip = new Set(opts.skip_indices || [0]);
     const swatches = opts.swatch_uris || [];
+    const fmtMeters = (m) => {
+      const v = Math.round(m);
+      if (v >= 1000) {
+        const k = v / 1000;
+        return (Number.isInteger(k) ? k : k.toFixed(1)) + "k";
+      }
+      return v + "m";
+    };
     const buildBody = () => {
       const total = binMeters.reduce(
         (acc, m, idx) => skip.has(idx) ? acc : acc + (m > 0 ? m : 0), 0);
@@ -485,13 +501,18 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
         if (meters <= 0) continue;
         const pct = total > 0 ? meters / total : 0;
         if (pct < 0.005) continue;
-        items.push({ uri: swatches[idx], pctText: Math.round(pct * 100) + "%" });
+        items.push({
+          uri: swatches[idx],
+          pctText: Math.round(pct * 100) + "%",
+          metersText: fmtMeters(meters),
+        });
       }
       const body = el("div", { class: "tt-body" });
       for (const it of items) {
         body.appendChild(el("div", { class: "row" }, [
           el("img", { src: it.uri }),
           el("span", { class: "pct" }, it.pctText),
+          el("span", { class: "meters" }, it.metersText),
         ]));
       }
       return body;

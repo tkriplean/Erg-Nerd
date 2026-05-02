@@ -280,6 +280,36 @@ def build_interval_lines(r: dict, compact: bool = False) -> list[str]:
                 ]
             return [f"{n_reps} × ({inner_str})"]
 
+    # ── Step 2.5: uniform multi-interval blocks ──────────────────────────────
+    # ``_detect_super_block`` only collapses repetitions of an inner *block
+    # sequence* (≥ 2 inner blocks).  A single multi-interval block repeated N
+    # times — e.g. ``3 × (9'+6') / 4'r`` — slips past it because the inner
+    # length would be 1, and step 3a only handles single-interval blocks.
+    # Detect that case here so it doesn't degrade to a per-block list with the
+    # wrong rep count attached upstream.
+    if len(blocks) >= 2 and all(len(b) > 1 for b in blocks):
+        sig0 = _block_sig_ignore_last_rest(blocks[0])
+        if all(_block_sig_ignore_last_rest(b) == sig0 for b in blocks):
+            non_final_rests = [b[-1].get("rest_time") or 0 for b in blocks[:-1]]
+            if non_final_rests and len(set(non_final_rests)) == 1:
+                outer_rest = non_final_rests[0]
+                rep_block = blocks[0]
+                if iv_type == "distance":
+                    inner_str = "+".join(
+                        f"{iv.get('distance') or 0:,}m" for iv in rep_block
+                    )
+                else:
+                    inner_str = "+".join(
+                        _ft(iv.get("time") or 0) for iv in rep_block
+                    )
+                n_reps = len(blocks)
+                if outer_rest > 0:
+                    return [
+                        f"{n_reps} × ({inner_str})  /  "
+                        f"{_ft(outer_rest)}{_rest_suffix}"
+                    ]
+                return [f"{n_reps} × ({inner_str})"]
+
     # ── Step 3a: all single-interval blocks ──────────────────────────────────
     if all(len(b) == 1 for b in blocks):
         single_lines = _format_blocks(blocks, iv_type, _ft, _rest_suffix)
@@ -528,6 +558,15 @@ def get_rep_count(r: dict) -> int:
     if super_pat is not None:
         n_reps, _, _ = super_pat
         return n_reps
+
+    # Mirror Step 2.5 in build_interval_lines: a single multi-interval block
+    # repeated N times reports N reps, not N×M.
+    if len(blocks) >= 2 and all(len(b) > 1 for b in blocks):
+        sig0 = _block_sig_ignore_last_rest(blocks[0])
+        if all(_block_sig_ignore_last_rest(b) == sig0 for b in blocks):
+            non_final_rests = [b[-1].get("rest_time") or 0 for b in blocks[:-1]]
+            if non_final_rests and len(set(non_final_rests)) == 1:
+                return len(blocks)
 
     work_ivs = [iv for iv in intervals if (iv.get("type") or "").lower() != "rest"]
     return len(work_ivs) or len(intervals)

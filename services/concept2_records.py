@@ -413,6 +413,108 @@ def _deserialize_records(raw: dict) -> dict:
     return out
 
 
+def ensure_raw_records_cached(machine: str) -> list[dict] | None:
+    """Return the cached raw WR payload for ``machine``, fetching it if
+    missing or stale.  Returns ``None`` when the machine has no WRs available
+    or the API is unreachable and no cached payload exists.
+
+    Used by the leaderboard-index rebuild to seed the WR cap before walking
+    the rankings cache.
+    """
+    if not wr_machine_supported(machine):
+        return None
+    raw_key = f"_raw_{machine}"
+    cache = _load_cache()
+    now = time.time()
+    raw_entry = cache.get(raw_key, {})
+    if now - raw_entry.get("_ts", 0) < _CACHE_TTL and "data" in raw_entry:
+        return raw_entry["data"]
+    try:
+        raw = _fetch_raw_records_from_api(machine)
+    except Exception:
+        return raw_entry.get("data")  # may be stale; better than nothing
+    cache[raw_key] = {"_ts": now, "data": raw}
+    _save_cache(cache)
+    return raw
+
+
+def _ranking_age_band_to_wr_age_cats(age_band: str) -> list[str]:
+    """Map a rankings ``age_band`` (e.g. ``"30-39"``, ``"0-12"``, ``"13-18"``)
+    to the WR API's ``age_category`` strings.
+
+    Rankings collapses youth into ``0-12`` and ``13-18`` while WR splits youth
+    into ``"12 and Under"`` / ``13-14`` / ``15-16`` / ``17-18``.  Adult bands
+    (``19-29`` and up) match 1:1.
+    """
+    if age_band == "0-12":
+        return ["12 and Under"]
+    if age_band == "13-18":
+        return ["13-14", "15-16", "17-18"]
+    return [age_band]
+
+
+def _result_to_watts(event_kind: str, event_value: int, result: float) -> float | None:
+    """Convert a WR ``result`` (seconds for dist events, metres for time
+    events) to watts via ``compute_watts``.  Returns ``None`` for non-finite
+    or non-positive values.
+    """
+    if result is None or result <= 0:
+        return None
+    if event_kind == "dist":
+        t_sec = float(result)
+        dist_m = float(event_value)
+    else:
+        t_sec = event_value / 10.0
+        dist_m = float(result)
+    if t_sec <= 0 or dist_m <= 0:
+        return None
+    pace = t_sec / (dist_m / 500.0)
+    w = compute_watts(pace)
+    if w is None or not math.isfinite(w) or w <= 0:
+        return None
+    return float(w)
+
+
+def wr_watts_for_slice(
+    raw: list[dict] | None,
+    machine: str,
+    event_kind: str,
+    event_value: int,
+    gender: str,
+    age_band: str,
+    weight_sentinel: str,
+) -> float | None:
+    """Return the WR watts cap for a leaderboard slice, or ``None`` when no
+    matching WR exists.
+
+    ``weight_sentinel`` follows the index convention: ``"H"`` (heavyweight),
+    ``"L"`` (lightweight), or ``"X"`` (youth — no weight split).  For youth
+    rankings bands that span multiple WR sub-bands, the loosest (highest watts)
+    WR across those sub-bands is used so we don't filter legitimate entries.
+    """
+    if raw is None or not wr_machine_supported(machine):
+        return None
+    wr_wt: str | None
+    if weight_sentinel == "H":
+        wr_wt = "Hwt"
+    elif weight_sentinel == "L":
+        wr_wt = "Lwt"
+    else:
+        wr_wt = None  # youth → no weight class
+    best_w: float | None = None
+    for age_cat in _ranking_age_band_to_wr_age_cats(age_band):
+        recs = _filter_records(raw, gender, age_cat, wr_wt, machine)
+        rec = recs.get((event_kind, event_value))
+        if not rec:
+            continue
+        w = _result_to_watts(event_kind, event_value, rec.get("result"))
+        if w is None:
+            continue
+        if best_w is None or w > best_w:
+            best_w = w
+    return best_w
+
+
 def get_records_for_age(
     gender: str, age: int, weight_kg: float, machine: str = "rower"
 ) -> dict:

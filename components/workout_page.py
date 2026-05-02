@@ -1486,3 +1486,39 @@ def workout_page(session_id: int) -> None:
                     default_sort_asc=False,
                     on_event={"compare_toggle": _on_compare_toggle},
                 )
+
+        # ── All workouts done on this day ────────────────────────────────
+        same_day = [w for w in all_workouts if w.get("day") == workout.get("day")]
+        if len(same_day) > 1:
+            try:
+                attach_spread_and_quality(same_day, all_workouts, max_hr)
+            except Exception:
+                pass
+            with hd.box(align="center", padding_top=2):
+                hd.h2(
+                    "All workouts on this day",
+                    font_weight="semibold",
+                    font_size="x-large",
+                    font_color="neutral-800",
+                )
+                day_cols = [
+                    "date",
+                    "type",
+                    "structure",
+                    "distance",
+                    "time",
+                    "pace",
+                    "watts",
+                    "spm",
+                    "hr",
+                    "quality",
+                    {"key": "link", "current_id": str(workout["id"])},
+                ]
+                WorkoutTable(
+                    same_day,
+                    day_cols,
+                    default_sort_col="date",
+                    default_sort_asc=True,
+                    paginate=False,
+                    highlight=lambda r: str(r.get("id")) == str(workout["id"]),
+                )

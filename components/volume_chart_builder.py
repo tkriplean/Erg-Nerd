@@ -161,6 +161,7 @@ def build_volume_chart_config(
     bin_names: Optional[list] = None,
     bin_colors: Optional[list] = None,
     draw_order: Optional[list] = None,
+    value_mode: str = "meters",
 ) -> dict:
     """
     Build a Chart.js stacked bar chart config dict for the volume view.
@@ -182,6 +183,11 @@ def build_volume_chart_config(
     draw_order:
         List of bin indices controlling bottom→top stack order.
         Defaults to [6, 5, 4, 3, 2, 1, 0].
+    value_mode:
+        ``"meters"`` (default) plots raw meters; ``"percent"`` normalises each
+        period's bins so they sum to 100, with the y-axis labelled "% of period".
+        The raw meter totals are still attached to each datapoint as ``raw_m``
+        so the JS tooltip can show both numbers.
 
     Returns
     -------
@@ -219,16 +225,32 @@ def build_volume_chart_config(
     # ── Datasets ─────────────────────────────────────────────────────────────
     # Chart.js stacks datasets in array order: first → bottom, last → top.
     color_dark_or_light = 0 if is_dark else 1
+    is_percent = value_mode == "percent"
+
+    # Per-period totals across all bins (for percent normalisation; also used
+    # by the JS tooltip when value_mode=="percent" so it can show both numbers).
+    period_totals = [
+        sum(raw_data[k]["bins"]) for k in keys
+    ]
+
     datasets = []
     for bin_i in _draw_order:
-        bin_data = [raw_data[k]["bins"][bin_i] for k in keys]
-        if sum(bin_data) < 1.0:
+        bin_meters = [raw_data[k]["bins"][bin_i] for k in keys]
+        if sum(bin_meters) < 1.0:
             continue
+        if is_percent:
+            data = [
+                round(m / total * 100.0, 2) if total > 0 else 0.0
+                for m, total in zip(bin_meters, period_totals)
+            ]
+        else:
+            data = [round(m) for m in bin_meters]
         color = _bin_colors[bin_i][color_dark_or_light]
         datasets.append(
             {
                 "label": _bin_names[bin_i],
-                "data": [round(v) for v in bin_data],
+                "data": data,
+                "raw_m": [round(m) for m in bin_meters],
                 "backgroundColor": color,
                 "borderColor": "rgba(0,0,0,0.12)",
                 "borderWidth": 0.5,
@@ -272,12 +294,19 @@ def build_volume_chart_config(
                     "ticks": {"color": tick_color},
                     "title": {
                         "display": True,
-                        "text": "Meters",
+                        "text": "% of period" if is_percent else "Meters",
                         "color": title_color,
                         "font": {"size": 12},
                     },
+                    **(
+                        {"max": 100, "suggestedMax": 100}
+                        if is_percent
+                        else {}
+                    ),
                 },
             },
+            "value_mode": value_mode,
+            "period_totals": [round(t) for t in period_totals],
             "plugins": {
                 "legend": {
                     "display": True,

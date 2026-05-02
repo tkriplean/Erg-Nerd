@@ -47,6 +47,14 @@ case-insensitively and whose watts are within 5% of the race entry is treated
 as the same athlete; the cluster is collapsed to its best performance and
 the rest are dropped. Each removal is printed to stdout.
 
+Per-slice integrity cap: after dedup, each slice's entries are compared
+against the corresponding world record (loaded from the WR cache via
+``services/concept2_records``).  Any entry whose computed watts exceed the
+slice WR by more than :data:`WR_INTEGRITY_TOLERANCE` (default 5%) is dropped
+as a clearly-bogus outlier.  WR data is fetched up front per machine; when no
+WR is available for a slice (e.g. bikeerg, or slices the WR API doesn't
+publish) the cap is skipped and every entry is kept.
+
 Public API:
 
   * ``load_event_slices(event_kind, event_value, *, gender, target_age, k,
@@ -79,12 +87,25 @@ from services.concept2_rankings import (
     rankings_age_band,
     read_page1_payload,
 )
+from services.concept2_records import (
+    ensure_raw_records_cached,
+    wr_machine_supported,
+    wr_watts_for_slice,
+)
 from services.rowing_utils import ranked_distances, ranked_times
 
 INDEX_DIR = Path(".c2_rankings_index")
 SCHEMA_VERSION = 2
 WEIGHT_NONE_SENTINEL = "X"
 DEDUP_WATTS_TOLERANCE = 0.05
+
+# Leaderboard integrity: drop entries whose computed watts exceed the WR for
+# their (machine, gender, age_band, weight) slice by more than this fraction.
+# Concept2 rankings carry a long tail of obviously bogus outliers (see, e.g.,
+# the few entries that beat heavyweight WRs by 30%); 5% leaves enough headroom
+# for legitimate post-WR performances within a season while clipping the
+# clearly-impossible ones.
+WR_INTEGRITY_TOLERANCE = 0.05
 
 
 def _slice_path(
@@ -226,17 +247,17 @@ def _dedup_race_collisions(
                 kept = entries[best]
                 d_w = watts_cache[i]
                 k_w = watts_cache[best]
-                print(
-                    f"[c2_rankings_index dedup] {event_kind}{event_value} "
-                    f"season={season} {slice_label} drop "
-                    f"name={dropped.get('name')!r} verified={dropped.get('verified')} "
-                    f"value_tenths={dropped.get('value_tenths')} "
-                    f"watts={d_w:.1f} -- kept "
-                    f"name={kept.get('name')!r} verified={kept.get('verified')} "
-                    f"value_tenths={kept.get('value_tenths')} "
-                    f"watts={k_w:.1f}",
-                    flush=True,
-                )
+                # print(
+                #     f"[c2_rankings_index dedup] {event_kind}{event_value} "
+                #     f"season={season} {slice_label} drop "
+                #     f"name={dropped.get('name')!r} verified={dropped.get('verified')} "
+                #     f"value_tenths={dropped.get('value_tenths')} "
+                #     f"watts={d_w:.1f} -- kept "
+                #     f"name={kept.get('name')!r} verified={kept.get('verified')} "
+                #     f"value_tenths={kept.get('value_tenths')} "
+                #     f"watts={k_w:.1f}",
+                #     flush=True,
+                # )
 
     return [e for i, e in enumerate(entries) if i not in removed]
 
@@ -280,12 +301,65 @@ def _invalidate_slice_cache(
             del _SLICE_CACHE[p]
 
 
+def _filter_above_wr(
+    entries: list[dict],
+    event_kind: str,
+    event_value: int,
+    machine: str,
+    gender: str,
+    age_band: str,
+    weight_sentinel: str,
+    wr_raw: list[dict] | None,
+) -> list[dict]:
+    """Drop entries whose computed watts exceed the slice's WR by more than
+    :data:`WR_INTEGRITY_TOLERANCE`.  Returns the kept entries.  When the WR is
+    unavailable for the slice, every entry is kept.  Each removal is printed
+    to stdout so a rebuild leaves an audit trail.
+    """
+    wr_w = wr_watts_for_slice(
+        wr_raw, machine, event_kind, event_value, gender, age_band, weight_sentinel
+    )
+    if wr_w is None:
+        return entries
+    cap = wr_w * (1.0 + WR_INTEGRITY_TOLERANCE)
+    slice_label = f"{gender}/{age_band}/{weight_sentinel}"
+    kept: list[dict] = []
+    for e in entries:
+        w = entry_watts(e, event_kind, event_value)
+        if w is not None and w > cap:
+            print(
+                f"[c2_rankings_index integrity] {event_kind}{event_value} "
+                f"{machine} {slice_label} season={e.get('season')} drop "
+                f"name={e.get('name')!r} verified={e.get('verified')} "
+                f"value_tenths={e.get('value_tenths')} watts={w:.1f} "
+                f"(WR={wr_w:.1f}, cap={cap:.1f})",
+                flush=True,
+            )
+            continue
+        kept.append(e)
+    return kept
+
+
 def rebuild_event_index(
     event_kind: str, event_value: int, machine: str = "rower"
 ) -> None:
-    """Walk the scraper cache and rewrite every slice file for the event."""
+    """Walk the scraper cache and rewrite every slice file for the event.
+
+    World records for ``machine`` are loaded up front so each slice can be
+    integrity-filtered against its WR cap before being written to disk.
+    """
     _invalidate_slice_cache(event_kind, event_value, machine)
     url_id = _url_id_for(event_kind, event_value, machine)
+
+    wr_raw = (
+        ensure_raw_records_cached(machine) if wr_machine_supported(machine) else None
+    )
+    if wr_machine_supported(machine) and wr_raw is None:
+        print(
+            f"[c2_rankings_index integrity] {machine}: WR data unavailable; "
+            f"integrity cap will be skipped for {event_kind}{event_value}",
+            flush=True,
+        )
 
     buckets: dict[tuple[str, str, str], list[dict]] = {}
     for cat in iter_all_categories(event_ids=[url_id], machine=machine):
@@ -310,6 +384,16 @@ def rebuild_event_index(
     for (gender, age_band, weight_sentinel), entries in buckets.items():
         slice_label = f"{gender}/{age_band}/{weight_sentinel}"
         deduped = _dedup_race_collisions(entries, event_kind, event_value, slice_label)
+        cleaned = _filter_above_wr(
+            deduped,
+            event_kind,
+            event_value,
+            machine,
+            gender,
+            age_band,
+            weight_sentinel,
+            wr_raw,
+        )
         out = {
             "schema_version": SCHEMA_VERSION,
             "built_at": built_at,
@@ -319,7 +403,7 @@ def rebuild_event_index(
             "gender": gender,
             "age_band": age_band,
             "weight": weight_sentinel,
-            "entries": deduped,
+            "entries": cleaned,
         }
         _atomic_write_json(
             _slice_path(
