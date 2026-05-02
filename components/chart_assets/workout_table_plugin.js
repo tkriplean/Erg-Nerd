@@ -369,11 +369,12 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     structure_filter(r, col) {
       const sk = r.structure_key || "";
       if (!sk) return text("");
+      const label = r.intervals_label || sk;
       const active = (col.opts && col.opts.active_key) === sk;
       const btn = el("button", {
         class: "struct-btn" + (active ? " active" : ""),
         onClick: () => emit("structure_click", { structure_key: sk }),
-      }, sk);
+      }, label);
       return btn;
     },
 

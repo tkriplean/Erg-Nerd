@@ -61,13 +61,16 @@ a short note points to the Profile page.  The Quality legend always renders
 Table
 -----
 WorkoutTable (CSS Grid) configured with the interval-specific column keys
-from `components.workout_table.COLUMN_REGISTRY`.  The Structure column is
-the interactive `structure_filter` variant — clicking a cell emits
-`structure_click`, which toggles `state.structure_filter`.
+from `components.workout_table.COLUMN_REGISTRY`.  The Intervals column is
+the interactive `structure_filter` variant — its button shows the full
+`intervals_label` (e.g. "10×1'/1'") and clicking emits `structure_click`
+with the rep-stripped `structure_key` (e.g. "1'/1'"), which toggles
+`state.structure_filter` so the table narrows to all sessions sharing
+that interval shape regardless of rep count.
 Sortable headers (▲/▼), default sort: date descending.
 
-Columns: Date · Reps · Structure (rep-stripped) · Stimulus ·
-         Power Spread (score + bar) · HR Spread (score + bar) ·
+Columns: Date · Intervals (clickable, filters by rep-stripped key) ·
+         Stimulus · Power Spread (score + bar) · HR Spread (score + bar) ·
          Quality (Low/Medium/High/Ultra pill) ·
          Work dist · Avg Split · Time · SPM · ↗
 
@@ -93,9 +96,10 @@ scalar is bucketed **Low** (<0.5) / **Medium** (<0.75) / **High** (≥0.75).
 Workouts whose reference-watts index is missing anchors show "—"; sort is
 by raw score so ordering is continuous within each bucket.
 
-Structure filter: clicking any Structure cell sets a filter restricting
-the table to workouts with that same structure key.  Clicking the same
-cell again, or the ×-chip above the table, clears it.
+Structure filter: clicking any Intervals cell sets a filter restricting
+the table to workouts with that same rep-stripped structure key (so
+"10×1'/1'" matches every "1'/1'" session).  Clicking the same cell
+again, or the ×-chip above the table, clears it.
 """
 
 from __future__ import annotations
@@ -969,7 +973,11 @@ def intervals_page() -> None:
 
     interval_columns = [
         "date",
-        "workout_structure",
+        {
+            "key": "structure_filter",
+            "header": "Intervals",
+            "active_key": state.structure_filter,
+        },
         "stimulus",
         "power_spread",
         "hr_spread",
