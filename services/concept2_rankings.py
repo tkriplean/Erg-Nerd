@@ -6,25 +6,39 @@ public HTML pages at ``https://log.concept2.com/rankings/{year}/rower/{event_id}
 This module is pure Python (no HyperDiv) and is intended to be driven by the
 CLI in ``bin/sync_c2_rankings.py``.
 
-Cache layout — one JSON per fetched HTML page, plain directory at repo root:
+Cache layout — one JSON per (season × event × age_band × weight × gender)
+output category, plain directory at repo root:
 
     .c2_rankings/
       2025_rower_2000_age=40-49_weight=H_gender=M_page_1.json
-      2025_rower_2000_age=40-49_weight=H_gender=M_page_2.json
+      2025_rower_2000_age=50-54_weight=H_gender=M_page_1.json
       ...
       2025_rower_2000_age=0-12_gender=M_page_1.json          # youth (no weight)
 
-Progress state is the file system itself: if a page file exists, that page is
-considered done; re-running the script skips it. A crash loses at most one
-in-flight page. No manifest, no in-progress map.
+Fetch strategy — adult queries omit the ``age`` URL parameter entirely; one
+HTTP fetch per (season × event × weight × gender) returns every adult age
+band in a single paginated stream.  After all pages are fetched, the entries
+are partitioned by ``rankings_age_band(entry['age'])`` and one consolidated
+``page_1.json`` is written per output age band.  Each per-age file therefore
+holds the full ranking slice for that band and carries ``is_last_page=True``;
+multi-page pagination is internal to the fetch and not surfaced in the cache.
+Youth bands (0-12 and 13-18) keep the ``age`` parameter because Concept2 does
+not weight-split youth categories — each youth fetch produces a single output
+file with the same shape.
+
+Progress state is the file system itself: if a category's ``page_1.json``
+exists, that category is considered done; re-running the script skips it.
+Mid-fetch crashes lose at most one fetch group's progress (re-fetched on the
+next run).
 
 Scraping strategy — ``scrape_all`` iterates with events as the outer loop and
-seasons descending (newest → oldest) as the inner loop. After all age / weight
-/ gender combos for a given (event, season) have been scraped or confirmed
-cached, the module checks whether every combo for that season was empty (i.e.
-the event did not exist that year). If so, the event is discontinued for that
-season and all earlier ones. This avoids fetching years of blank pages for
-events that were only added to the rankings recently (e.g. 100m).
+seasons descending (newest → oldest) as the inner loop. After every fetch
+group (each producing one or more output categories) for a given (event,
+season) has resolved, the module checks whether every output category for
+that season was empty (i.e. the event did not exist that year). If so, the
+event is discontinued for that season and all earlier ones. This avoids
+fetching years of blank pages for events that were only added to the rankings
+recently (e.g. 100m).
 
 Per-entry schema kept lean (position, name, age, country, value_tenths,
 verified). Location and club are on the rendered HTML but omitted from the
@@ -134,6 +148,7 @@ def event_ids_dist(machine: str = "rower") -> dict[int, int]:
 def event_ids_time(machine: str = "rower") -> dict[int, int]:
     return _EVENT_IDS_TIME_BY_MACHINE.get(machine, _EVENT_IDS_TIME_BY_MACHINE["rower"])
 
+
 USER_AGENT = (
     "Erg Nerd rankings sync (personal use; https://github.com/tkriplean/Erg-Nerd)"
 )
@@ -145,8 +160,9 @@ USER_AGENT = (
 
 @dataclass(slots=True, frozen=True)
 class Category:
-    """One (season × event × age × weight × gender) bucket to scrape.
+    """One (season × event × age × weight × gender) output bucket.
 
+    Each Category corresponds to exactly one ``page_1.json`` in the cache.
     ``weight`` is ``None`` for youth bands (0-12 / 13-18) which Concept2
     presents as a single-weight bucket.
     """
@@ -159,6 +175,26 @@ class Category:
     weight: Optional[str]  # "H" | "L" | None
     gender: str  # "M" | "F"
     machine: str = "rower"  # "rower" | "skierg" | "bikeerg"
+
+
+@dataclass(slots=True, frozen=True)
+class FetchTarget:
+    """Internal: one HTTP fetch group, possibly producing many output Categories.
+
+    Adult targets carry ``weight`` and ``age_band=None`` — the URL omits the
+    age parameter and yields entries spanning every adult age band.  Youth
+    targets carry ``age_band`` (one of ``YOUTH_BANDS``) and ``weight=None`` —
+    one URL per youth band, matching Concept2's youth-page structure.
+    """
+
+    season: int
+    event_kind: str
+    event_value: int
+    event_id: int
+    age_band: Optional[str]  # set for youth, None for adults
+    weight: Optional[str]  # set for adults, None for youth
+    gender: str
+    machine: str
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +273,76 @@ def _combos_for(
     return out
 
 
+def _targets_for(
+    ev_id: int,
+    kind: str,
+    ev_value: int,
+    season: int,
+    weight_list: list[str],
+    gender_list: list[str],
+    include_youth: bool,
+    machine: str = "rower",
+) -> list[FetchTarget]:
+    """Return all FetchTarget objects for one (event, season) pair.
+
+    Adults: one target per (weight × gender), no age — a single URL covers
+    every adult age band.  Youth: one target per (youth_band × gender),
+    weight=None.
+    """
+    out: list[FetchTarget] = []
+    for weight in weight_list:
+        for gender in gender_list:
+            out.append(
+                FetchTarget(
+                    season, kind, ev_value, ev_id, None, weight, gender, machine
+                )
+            )
+    if include_youth:
+        for age_band in sorted(YOUTH_BANDS):
+            for gender in gender_list:
+                out.append(
+                    FetchTarget(
+                        season, kind, ev_value, ev_id, age_band, None, gender, machine
+                    )
+                )
+    return out
+
+
+def output_categories_for(target: FetchTarget) -> list[Category]:
+    """Return the output Categories produced by one fetch target.
+
+    Adult target → one Category per adult age band (14 in total).
+    Youth target → one Category for the target's youth band.
+    """
+    if target.age_band is not None:
+        return [
+            Category(
+                target.season,
+                target.event_kind,
+                target.event_value,
+                target.event_id,
+                target.age_band,
+                None,
+                target.gender,
+                target.machine,
+            )
+        ]
+    return [
+        Category(
+            target.season,
+            target.event_kind,
+            target.event_value,
+            target.event_id,
+            ab,
+            target.weight,
+            target.gender,
+            target.machine,
+        )
+        for ab in AGE_BANDS
+        if ab not in YOUTH_BANDS
+    ]
+
+
 def read_page1_payload(cat: Category) -> Optional[dict]:
     """Read and return the parsed JSON payload of page 1 for a category.
 
@@ -253,6 +359,49 @@ def read_page1_payload(cat: Category) -> Optional[dict]:
         return None
 
 
+def iter_fetch_targets(
+    *,
+    seasons: Optional[list[int]] = None,
+    event_ids: Optional[list[int]] = None,
+    weights: Optional[list[str]] = None,
+    genders: Optional[list[str]] = None,
+    today: Optional[date] = None,
+    machine: str = "rower",
+) -> Iterator[FetchTarget]:
+    """Yield every fetch target matching the (optional) filter kwargs.
+
+    Ordering: season (newest first) → event → weight → gender, with youth
+    targets appended after adult targets per (event, season).  Passing an
+    explicit ``weights`` list suppresses youth targets.
+    """
+    season_list = sorted(
+        seasons if seasons is not None else all_past_seasons(today),
+        reverse=True,
+    )
+    events = [
+        (k, v, u)
+        for (k, v, u) in _event_list(machine)
+        if (event_ids is None or u in event_ids)
+    ]
+    gender_list = genders if genders is not None else GENDERS
+    weight_list = weights if weights is not None else WEIGHT_CLASSES_ADULT
+    include_youth = weights is None
+
+    for season in season_list:
+        for kind, ev_value, ev_id in events:
+            for target in _targets_for(
+                ev_id,
+                kind,
+                ev_value,
+                season,
+                weight_list,
+                gender_list,
+                include_youth,
+                machine,
+            ):
+                yield target
+
+
 def iter_all_categories(
     *,
     seasons: Optional[list[int]] = None,
@@ -263,11 +412,12 @@ def iter_all_categories(
     today: Optional[date] = None,
     machine: str = "rower",
 ) -> Iterator[Category]:
-    """Yield every Category matching the (optional) filter kwargs.
+    """Yield every output Category matching the (optional) filter kwargs.
 
     Ordering: season (newest first) → event → age band → weight → gender.
-    Intended for query / read-side use; ``scrape_all`` uses a different
-    event-outer ordering with early per-event cutoff.
+    Intended for query / read-side use (e.g. the index builder enumerating
+    output files); ``scrape_all`` iterates ``FetchTarget`` objects internally
+    with a different event-outer ordering and per-event early cutoff.
     Empty/None filter lists mean "include all".
     """
     season_list = sorted(
@@ -305,16 +455,21 @@ def iter_all_categories(
 # ---------------------------------------------------------------------------
 
 
-def build_url(cat: Category, page: int) -> str:
-    """Construct the rankings page URL for a (category, page) pair."""
-    params = [("age", cat.age_band)]
-    if cat.weight is not None:
-        params.append(("weight", cat.weight))
-    params.append(("gender", cat.gender))
+def build_fetch_url(target: FetchTarget, page: int) -> str:
+    """Construct the actual rankings HTTP URL for a fetch target.
+
+    Adult targets omit the ``age`` parameter; youth targets keep it.
+    """
+    params: list[tuple[str, str]] = []
+    if target.age_band is not None:
+        params.append(("age", target.age_band))
+    if target.weight is not None:
+        params.append(("weight", target.weight))
+    params.append(("gender", target.gender))
     # Concept2's URL convention duplicates the machine slug as a query param.
-    params.append((cat.machine, cat.machine))
+    params.append((target.machine, target.machine))
     params.append(("page", str(page)))
-    return f"{BASE_URL}/{cat.season}/{cat.machine}/{cat.event_id}?{urlencode(params)}"
+    return f"{BASE_URL}/{target.season}/{target.machine}/{target.event_id}?{urlencode(params)}"
 
 
 def page_filename(cat: Category, page: int) -> Path:
@@ -634,6 +789,7 @@ def _write_page_file(cat: Category, page: int, url: str, parsed: dict) -> Path:
         "entries": parsed.get("entries", []),
     }
     path = page_filename(cat, page)
+    print(path)
     _atomic_write_json(path, payload)
     return path
 
@@ -654,69 +810,68 @@ ProgressCB = Callable[[dict], None]
 AbortCheck = Callable[[], bool]
 
 
-def _read_is_last(path: Path) -> Optional[bool]:
-    """Return the stored ``is_last_page`` flag for an existing page file, or None."""
-    try:
-        data = json.loads(path.read_text())
-    except Exception:
-        return None
-    return bool(data.get("is_last_page", False))
-
-
-def scrape_category(
-    cat: Category,
+def scrape_fetch_target(
+    target: FetchTarget,
     *,
     force: bool = False,
     max_pages: Optional[int] = None,
     abort_check: AbortCheck = lambda: False,
     on_progress: Optional[ProgressCB] = None,
 ) -> dict:
-    """Scrape one category, writing one JSON per page. Resumable.
+    """Fetch one URL group through pagination and write one consolidated
+    ``page_1.json`` per output Category.
 
-    * Starts at page 1. If ``page_N.json`` exists (and not ``force``), reads
-      its ``is_last_page`` to decide whether to continue.
-    * Stops after the first page with ``is_last_page = true`` or when an
-      empty/404 page indicates the category has no entries.
+    All HTTP pages of the target's URL are fetched and accumulated in memory,
+    then partitioned into output Categories by ``rankings_age_band(age)``
+    (adults) or assigned in full to the single youth Category (youth targets).
+    Resumability: if every output category's ``page_1.json`` already exists
+    (and not ``force``), the fetch is skipped entirely.
     """
     _ensure_cache_dir()
-    pages_written = 0
-    pages_skipped = 0
-    failures = 0
-    reached_end = False
+    output_cats = output_categories_for(target)
 
     def _emit(kind: str, **kw) -> None:
         if on_progress is not None:
-            on_progress({"kind": kind, "category": cat, **kw})
+            on_progress({"kind": kind, "target": target, **kw})
 
-    _emit("category_start")
+    # Skip if every output file already exists and is complete. Old-format
+    # multi-page per-age-band caches are converted to the consolidated layout
+    # by ``bin/migrate_c2_rankings.py``; any remaining ``is_last_page=False``
+    # file is a genuinely interrupted fetch and gets re-run here.
+    if not force and all(
+        (p := read_page1_payload(c)) is not None and p.get("is_last_page", False)
+        for c in output_cats
+    ):
+        _emit("target_skipped", n_outputs=len(output_cats))
+        return {
+            "pages_written": 0,
+            "pages_skipped": len(output_cats),
+            "failures": 0,
+            "reached_end": True,
+            "aborted": False,
+        }
+
+    pages_fetched = 0
+    failures = 0
+    all_entries: list[dict] = []
+    reached_end = False
 
     page = 1
     while True:
         if abort_check():
             _emit("aborted")
             return {
-                "pages_written": pages_written,
-                "pages_skipped": pages_skipped,
+                "pages_written": 0,
+                "pages_skipped": 0,
                 "failures": failures,
-                "reached_end": reached_end,
+                "reached_end": False,
                 "aborted": True,
             }
         if max_pages is not None and page > max_pages:
-            _emit("category_capped", page=page - 1)
+            _emit("target_capped", page=page - 1)
             break
 
-        path = page_filename(cat, page)
-        if path.exists() and not force:
-            is_last = _read_is_last(path)
-            pages_skipped += 1
-            _emit("page_skipped", page=page, is_last=is_last)
-            if is_last:
-                reached_end = True
-                break
-            page += 1
-            continue
-
-        url = build_url(cat, page)
+        url = build_fetch_url(target, page)
         _emit("page_start", page=page, url=url)
         try:
             html = _fetch_html(url)
@@ -724,24 +879,36 @@ def scrape_category(
             failures += 1
             _log_failure(url, exc)
             _emit("page_failed", page=page, url=url, error=str(exc))
-            # On 404, treat as empty category and stop (Concept2 404s
-            # bucketings that don't exist, e.g. some age+event combos).
             if exc.status == 404:
+                # Treat as empty target — write empty output files below.
                 reached_end = True
                 break
-            # Other fatal error — stop this category; script continues.
-            break
+            # Hard failure mid-fetch — abandon this target without writing
+            # partial outputs, so a future run can re-fetch cleanly.
+            return {
+                "pages_written": 0,
+                "pages_skipped": 0,
+                "failures": failures,
+                "reached_end": False,
+                "aborted": False,
+            }
 
         try:
-            parsed = parse_rankings_page(html, cat.event_kind)
-        except Exception as exc:  # noqa: BLE001 — defensive
+            parsed = parse_rankings_page(html, target.event_kind)
+        except Exception as exc:  # noqa: BLE001
             failures += 1
             _log_failure(url, exc)
             _emit("page_failed", page=page, url=url, error=f"parse error: {exc}")
-            break
+            return {
+                "pages_written": 0,
+                "pages_skipped": 0,
+                "failures": failures,
+                "reached_end": False,
+                "aborted": False,
+            }
 
-        _write_page_file(cat, page, url, parsed)
-        pages_written += 1
+        pages_fetched += 1
+        all_entries.extend(parsed.get("entries") or [])
         _emit(
             "page_done",
             page=page,
@@ -752,25 +919,52 @@ def scrape_category(
             empty=parsed.get("empty", False),
         )
 
-        if parsed.get("empty") or parsed.get("is_last_page"):
+        if parsed.get("empty"):
+            reached_end = True
+            break
+        if parsed.get("is_last_page", True):
             reached_end = True
             break
         if not parsed.get("entries"):
-            # Defensive: non-empty page with no parsable rows — bail to avoid loop.
+            # Defensive: non-empty marker with no parsable rows.
             reached_end = True
             break
         page += 1
 
+    # Bucket entries into output Categories and write one file each.
+    representative_url = build_fetch_url(target, 1)
+    if target.age_band is not None:
+        # Youth: single output, all entries.
+        buckets: dict[str, list[dict]] = {target.age_band: list(all_entries)}
+    else:
+        buckets = {c.age_band: [] for c in output_cats}
+        for entry in all_entries:
+            ab = rankings_age_band(int(entry.get("age") or 0))
+            if ab in buckets:
+                buckets[ab].append(entry)
+
+    pages_written = 0
+    for cat in output_cats:
+        entries = buckets.get(cat.age_band, [])
+        parsed_for_cat = {
+            "entries": entries,
+            "total_count": len(entries),
+            "is_last_page": True,
+            "empty": not entries,
+        }
+        _write_page_file(cat, 1, representative_url, parsed_for_cat)
+        pages_written += 1
+
     _emit(
-        "category_done",
+        "target_done",
+        pages_fetched=pages_fetched,
         pages_written=pages_written,
-        pages_skipped=pages_skipped,
         failures=failures,
         reached_end=reached_end,
     )
     return {
         "pages_written": pages_written,
-        "pages_skipped": pages_skipped,
+        "pages_skipped": 0,
         "failures": failures,
         "reached_end": reached_end,
         "aborted": False,
@@ -781,7 +975,6 @@ def scrape_all(
     *,
     seasons: Optional[list[int]] = None,
     event_ids: Optional[list[int]] = None,
-    age_bands: Optional[list[str]] = None,
     weights: Optional[list[str]] = None,
     genders: Optional[list[str]] = None,
     force: bool = False,
@@ -791,20 +984,19 @@ def scrape_all(
     today: Optional[date] = None,
     machine: str = "rower",
 ) -> dict:
-    """Scrape all matching categories, iterating event-outer / season-descending.
+    """Scrape every matching fetch target, iterating event-outer / season-descending.
 
-    Iteration order: for each event (oldest-to-newest season is NOT used),
-    seasons are walked newest → oldest. After all (age × weight × gender)
-    combos for a given (event, season) are resolved, the function checks
-    whether every combo confirmed empty (i.e. the event had no participants
-    that year). If so, scraping stops for that event — there is no point
-    fetching even older seasons.
+    Iteration order: for each event, seasons are walked newest → oldest.
+    After every fetch target for a (event, season) is resolved, the function
+    checks whether every output Category for that season is confirmed empty.
+    If so, scraping stops for that event — there is no point fetching older
+    seasons.
 
-    A combo counts as "confirmed empty" only when its ``page_1.json`` exists
-    *and* has ``"empty": true``. A missing file (fetch error) is treated as
-    inconclusive, preventing premature cutoff.
+    A category counts as "confirmed empty" only when its ``page_1.json``
+    exists *and* has ``"empty": true``. Missing files (fetch error) are
+    inconclusive and prevent premature cutoff.
 
-    Returns a totals dict with keys: categories_total, categories_done,
+    Returns a totals dict with keys: targets_total, targets_done,
     pages_written, pages_skipped, failures, events_discontinued, aborted.
     """
     season_list = sorted(
@@ -815,74 +1007,69 @@ def scrape_all(
         for (k, v, u) in _event_list(machine)
         if event_ids is None or u in event_ids
     ]
-    age_list = age_bands if age_bands is not None else AGE_BANDS
     gender_list = genders if genders is not None else GENDERS
     weight_list = weights if weights is not None else WEIGHT_CLASSES_ADULT
-    explicit_weights = weights is not None
+    include_youth = weights is None
 
-    # Upper-bound on category count (early cutoff will reduce the actual count).
-    n_combos_per_season = sum(
-        (len(gender_list) if age in YOUTH_BANDS and not explicit_weights else 0)
-        + (len(weight_list) * len(gender_list) if age not in YOUTH_BANDS else 0)
-        for age in age_list
+    n_youth = len(YOUTH_BANDS) if include_youth else 0
+    n_targets_per_season = len(weight_list) * len(gender_list) + n_youth * len(
+        gender_list
     )
-    max_cats = len(events_filtered) * len(season_list) * n_combos_per_season
+    max_targets = len(events_filtered) * len(season_list) * n_targets_per_season
 
     if on_progress is not None:
-        on_progress({"kind": "run_start", "total_categories_max": max_cats})
+        on_progress({"kind": "run_start", "total_targets_max": max_targets})
 
     totals: dict = {
-        "categories_total": max_cats,
-        "categories_done": 0,
+        "targets_total": max_targets,
+        "targets_done": 0,
         "pages_written": 0,
         "pages_skipped": 0,
         "failures": 0,
         "events_discontinued": 0,
         "aborted": False,
     }
-    cat_index = 0
+    target_index = 0
 
     for kind, ev_value, ev_id in events_filtered:
         for season in season_list:
             if abort_check():
                 totals["aborted"] = True
                 if on_progress is not None:
-                    on_progress({"kind": "run_aborted", "completed": cat_index})
-                if on_progress is not None:
+                    on_progress({"kind": "run_aborted", "completed": target_index})
                     on_progress({"kind": "run_done", "totals": totals})
                 return totals
 
-            combos = _combos_for(
+            targets = _targets_for(
                 ev_id,
                 kind,
                 ev_value,
                 season,
-                age_list,
                 weight_list,
                 gender_list,
-                explicit_weights,
+                include_youth,
                 machine,
             )
 
-            for cat in combos:
-                cat_index += 1
+            for target in targets:
+                target_index += 1
                 if on_progress is not None:
                     on_progress(
                         {
-                            "kind": "category_index",
-                            "index": cat_index,
-                            "total": max_cats,
-                            "category": cat,
+                            "kind": "target_index",
+                            "index": target_index,
+                            "total": max_targets,
+                            "target": target,
                         }
                     )
-                result = scrape_category(
-                    cat,
+                result = scrape_fetch_target(
+                    target,
                     force=force,
                     max_pages=max_pages,
                     abort_check=abort_check,
                     on_progress=on_progress,
                 )
-                totals["categories_done"] += 1
+                totals["targets_done"] += 1
                 totals["pages_written"] += result["pages_written"]
                 totals["pages_skipped"] += result["pages_skipped"]
                 totals["failures"] += result["failures"]
@@ -892,19 +1079,17 @@ def scrape_all(
                         on_progress({"kind": "run_done", "totals": totals})
                     return totals
 
-            # ── Early-cutoff check ────────────────────────────────────────
-            # Inspect page-1 files for every combo in this (event, season).
-            # Only discontinue if ALL combos have confirmed-empty page-1 files.
-            # A missing file means we couldn't determine emptiness — be conservative.
-            all_confirmed_empty = bool(combos)  # True unless combos is somehow empty
-            for cat in combos:
+            # Early-cutoff: every output Category for this (event, season)
+            # must have a confirmed-empty page_1.json before we discontinue.
+            output_cats = [c for t in targets for c in output_categories_for(t)]
+            all_confirmed_empty = bool(output_cats)
+            for cat in output_cats:
                 payload = read_page1_payload(cat)
                 if payload is None or not payload.get("empty", False):
                     all_confirmed_empty = False
                     break
 
             if all_confirmed_empty:
-                ev_label = f"ev_id={ev_id}"
                 if on_progress is not None:
                     on_progress(
                         {
