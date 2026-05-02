@@ -49,11 +49,46 @@ the rest are dropped. Each removal is printed to stdout.
 
 Per-slice integrity cap: after dedup, each slice's entries are compared
 against the corresponding world record (loaded from the WR cache via
-``services/concept2_records``).  Any entry whose computed watts exceed the
-slice WR by more than :data:`WR_INTEGRITY_TOLERANCE` (default 5%) is dropped
-as a clearly-bogus outlier.  WR data is fetched up front per machine; when no
-WR is available for a slice (e.g. bikeerg, or slices the WR API doesn't
-publish) the cap is skipped and every entry is kept.
+``services/concept2_records``).  Disposition rules, in priority order:
+
+  * **Banned athlete** — if the athlete has *any* unverified entry
+    (``verified ∉ {"Y", "R"}``) anywhere on the machine that exceeds the
+    relevant slice WR by ≥ :data:`WR_BAN_TOLERANCE_UNVERIFIED` (20%),
+    every other *unverified* row of theirs across all events / slices is
+    dropped — even rows below WR.  Their verified-yes and race rows are
+    not poisoned by association and continue through the rest of the
+    pipeline.
+  * ``verified == "R"`` (race results, entered by officials) — always
+    kept, regardless of how far over WR.
+  * Athletes who hold *any* Concept2 World record on the machine are
+    whitelisted; all of their rankings entries pass through unfiltered
+    (the published WR sometimes lags actual best paces, and known top
+    athletes' other rows are unlikely to be cheats).
+  * Athletes with at least one race entry (``verified == "R"``) anywhere
+    on the machine are also whitelisted; an official has confirmed the
+    name at a real event, so the rest of their ranking rows are trusted
+    out of the WR caps.
+  * **Lone unverified over WR** — unverified entries that exceed the
+    slice WR are dropped when the athlete has only ≤ 1 ranked piece
+    total on the machine.  A solo unverified row above WR is overwhelmingly
+    bogus.
+  * ``verified == "Y"`` — kept iff watts ≤ WR × (1 +
+    :data:`WR_INTEGRITY_TOLERANCE_VERIFIED`) (10%).
+  * Anything else (``"N"`` / ``"?"``) — kept iff watts ≤ WR × (1 +
+    :data:`WR_INTEGRITY_TOLERANCE_UNVERIFIED`) (5%).
+
+Every entry that triggers any of these rules (over-WR or banned-below-WR)
+is printed with a color indicating its disposition: green for whitelisted
+(kept regardless), yellow for verified-within-threshold, orange for
+unverified-within-threshold, red for any DROP-* (DROP-BANNED,
+DROP-LONE-UNVERIFIED, DROP-VERIFIED, DROP-UNVERIFIED).  For every
+non-whitelist disposition the athlete's full ranked-pieces history across
+all events for the machine is printed alongside as additional context for
+tuning the integrity policy (legitimate athletes typically have many
+rankings rows across events near WR pace; bogus entries usually come
+from athletes with one or two rows).  WR data is fetched up front per
+machine; when no WR is available for a slice (e.g. bikeerg, or slices the
+WR API doesn't publish) the cap is skipped and every entry is kept.
 
 Public API:
 
@@ -89,6 +124,7 @@ from services.concept2_rankings import (
 )
 from services.concept2_records import (
     ensure_raw_records_cached,
+    wr_holder_names,
     wr_machine_supported,
     wr_watts_for_slice,
 )
@@ -99,13 +135,37 @@ SCHEMA_VERSION = 2
 WEIGHT_NONE_SENTINEL = "X"
 DEDUP_WATTS_TOLERANCE = 0.05
 
-# Leaderboard integrity: drop entries whose computed watts exceed the WR for
-# their (machine, gender, age_band, weight) slice by more than this fraction.
-# Concept2 rankings carry a long tail of obviously bogus outliers (see, e.g.,
-# the few entries that beat heavyweight WRs by 30%); 5% leaves enough headroom
-# for legitimate post-WR performances within a season while clipping the
-# clearly-impossible ones.
-WR_INTEGRITY_TOLERANCE = 0.05
+# Leaderboard integrity thresholds — fraction of WR watts an entry may exceed
+# before it is treated as a bogus outlier and dropped.  ``verified == "Y"``
+# gets the looser cap (verified-yes has evidence behind it).  Race results
+# (``verified == "R"``) bypass the cap entirely — race entries are submitted
+# by officials.  Unverified entries (and unknowns) get the tighter cap to
+# clip the long tail of clearly-impossible rows.  Athletes who hold any
+# Concept2 WR on the machine are also whitelisted out of all caps (see
+# :func:`wr_holder_names`).
+WR_INTEGRITY_TOLERANCE_VERIFIED = 0.10
+WR_INTEGRITY_TOLERANCE_UNVERIFIED = 0.05
+
+# Athlete-ban threshold: any unverified entry exceeding the slice WR by this
+# fraction is treated as strong evidence that *all* of that athlete's
+# unverified rows are unreliable (cheating, a logging glitch, or
+# impersonation); the filter drops every other unverified row from the same
+# name across all events / slices on the machine.  Verified-yes and race
+# rows are unaffected — those came in through trusted channels.
+WR_BAN_TOLERANCE_UNVERIFIED = 0.20
+
+# How many of the athlete's pct-of-WR values to inline when we print their
+# history alongside a DROP candidate.  Capped so the log line doesn't blow
+# up for elite athletes with hundreds of rankings rows.
+_ATHLETE_HISTORY_TOP_N = 10
+
+# ANSI color codes for the per-entry integrity log lines.  Orange uses a
+# 256-color escape since the 16-color palette has no distinct orange.
+_C_RED = "\033[31m"
+_C_ORANGE = "\033[38;5;208m"
+_C_YELLOW = "\033[33m"
+_C_GREEN = "\033[32m"
+_C_RESET = "\033[0m"
 
 
 def _slice_path(
@@ -301,6 +361,116 @@ def _invalidate_slice_cache(
             del _SLICE_CACHE[p]
 
 
+_ATHLETE_PROFILE_CACHE: dict[
+    str, tuple[dict[str, list[float]], set[str], set[str]]
+] = {}
+
+
+def _athlete_profile_for_machine(
+    machine: str, wr_raw: list[dict] | None
+) -> tuple[dict[str, list[float]], set[str], set[str]]:
+    """Walk the rankings cache once for ``machine`` and return:
+
+    * ``history`` — casefolded_name → list[pct_of_wr] across every event /
+      season / slice the athlete appears in.  Used to gauge how improbable
+      a candidate-for-drop's other rankings rows look (legitimate athletes
+      typically have many rows near WR pace; bogus entries usually come
+      from athletes with one or two).
+    * ``banned`` — casefolded names of athletes flagged by
+      :data:`WR_BAN_TOLERANCE_UNVERIFIED`: anyone with at least one
+      *unverified* entry (``verified ∉ {"Y", "R"}``) exceeding the slice
+      WR by ≥ 20%.  Such an entry is taken as strong evidence the
+      athlete's unverified rankings rows are bogus, and downstream the
+      filter drops every other unverified row from the same name across
+      the machine.  Verified-yes and race rows are unaffected.
+    * ``race_athletes`` — casefolded names of athletes with at least one
+      race entry (``verified == "R"``) anywhere on the machine.  Race
+      entries are submitted by officials, so the name has been confirmed
+      by a human at a real event; downstream the filter whitelists every
+      other rankings row from the same name out of the WR-cap checks (the
+      ban still applies to their unverified rows — official confirmation
+      of identity doesn't vouch for self-submitted unverified results).
+
+    Slices whose WR is unavailable contribute nothing to ``history`` or
+    ``banned`` (no pct to compute), but ``race_athletes`` is collected
+    independently of WR availability.  Built lazily and cached per-machine
+    on the module, so the per-event :func:`rebuild_event_index` calls in
+    :func:`rebuild_all_indices` share the work.
+    """
+    if machine in _ATHLETE_PROFILE_CACHE:
+        return _ATHLETE_PROFILE_CACHE[machine]
+
+    history: dict[str, list[float]] = {}
+    banned: set[str] = set()
+    race_athletes: set[str] = set()
+    events: list[tuple[str, int]] = []
+    events.extend(("dist", d) for d, _ in ranked_distances(machine))
+    events.extend(("time", t) for t, _ in ranked_times(machine))
+
+    for event_kind, event_value in events:
+        try:
+            url_id = _url_id_for(event_kind, event_value, machine)
+        except KeyError:
+            continue
+        for cat in iter_all_categories(event_ids=[url_id], machine=machine):
+            if cat.event_kind != event_kind or cat.event_value != event_value:
+                continue
+            payload = read_page1_payload(cat)
+            if payload is None or payload.get("empty"):
+                continue
+            wr_w = wr_watts_for_slice(
+                wr_raw,
+                machine,
+                event_kind,
+                event_value,
+                cat.gender,
+                cat.age_band,
+                _weight_sentinel(cat.weight),
+            )
+            ban_threshold = (
+                wr_w * (1.0 + WR_BAN_TOLERANCE_UNVERIFIED)
+                if wr_w and wr_w > 0
+                else None
+            )
+            for e in _walk_category_pages(cat):
+                name_key = (e.get("name") or "").strip().casefold()
+                if not name_key:
+                    continue
+                if e.get("verified") == "R":
+                    race_athletes.add(name_key)
+                if wr_w is None or wr_w <= 0:
+                    continue
+                w = entry_watts(e, event_kind, event_value)
+                if w is None or w <= 0:
+                    continue
+                history.setdefault(name_key, []).append(w / wr_w)
+                if (
+                    ban_threshold is not None
+                    and e.get("verified") not in ("Y", "R")
+                    and w > ban_threshold
+                ):
+                    banned.add(name_key)
+
+    _ATHLETE_PROFILE_CACHE[machine] = (history, banned, race_athletes)
+    return history, banned, race_athletes
+
+
+def _format_athlete_history(pcts: list[float]) -> str:
+    """Render an athlete's pct-of-WR list for the integrity log."""
+    n = len(pcts)
+    if n == 0:
+        return "athlete history: 0 ranked pieces"
+    sorted_pcts = sorted(pcts, reverse=True)
+    shown = sorted_pcts[:_ATHLETE_HISTORY_TOP_N]
+    pct_str = ", ".join(f"{p * 100:.1f}%" for p in shown)
+    label = (
+        f"top {_ATHLETE_HISTORY_TOP_N} of {n}"
+        if n > _ATHLETE_HISTORY_TOP_N
+        else f"all {n}"
+    )
+    return f"athlete history: {n} ranked pieces; pct-of-WR ({label}): {pct_str}"
+
+
 def _filter_above_wr(
     entries: list[dict],
     event_kind: str,
@@ -310,33 +480,109 @@ def _filter_above_wr(
     age_band: str,
     weight_sentinel: str,
     wr_raw: list[dict] | None,
+    wr_holders: set[str],
+    athlete_history: dict[str, list[float]],
+    banned_athletes: set[str],
+    race_athletes: set[str],
 ) -> list[dict]:
-    """Drop entries whose computed watts exceed the slice's WR by more than
-    :data:`WR_INTEGRITY_TOLERANCE`.  Returns the kept entries.  When the WR is
-    unavailable for the slice, every entry is kept.  Each removal is printed
-    to stdout so a rebuild leaves an audit trail.
+    """Apply the WR integrity cap, the whitelists, and the ban / lone-piece
+    rules to one slice.
+
+    Disposition priority (first match wins):
+
+    * **red / DROP-BANNED** — name is in ``banned_athletes`` *and* this row
+      is unverified (``verified ∉ {"Y", "R"}``); the row is dropped, even
+      if it sits below WR.  Athletes land in ``banned_athletes`` via
+      :data:`WR_BAN_TOLERANCE_UNVERIFIED` (any unverified entry of theirs
+      anywhere on the machine exceeds WR by ≥ 20%).  Their verified and
+      race rows flow through the rest of this pipeline normally.
+    * **green / WHITELIST-RACE** — ``verified == "R"``; race results are
+      submitted by officials, so they're trusted regardless of how far over
+      WR they appear.
+    * **green / WHITELIST-WR** — name is in ``wr_holders``; kept on the
+      theory that a real WR holder's other rankings rows are legitimate.
+    * **green / WHITELIST-RACER** — name is in ``race_athletes``; kept
+      because the athlete has at least one race entry (officially logged)
+      somewhere on the machine, so the name has been confirmed by humans
+      at a real event.
+    * **red / DROP-LONE-UNVERIFIED** — unverified, over WR, and the athlete
+      has ≤ 1 ranked piece total on the machine.  Lone unverified rows
+      above WR are almost always bogus.
+    * **yellow / KEEP-VERIFIED** — ``verified == "Y"`` and watts within
+      +10% of WR.
+    * **red / DROP-VERIFIED** — verified but exceeds the +10% cap.
+    * **orange / KEEP-UNVERIFIED** — unverified and watts within +5% of WR.
+    * **red / DROP-UNVERIFIED** — unverified and exceeds the +5% cap.
+
+    For non-whitelist dispositions (KEEP-* and DROP-*) the athlete's full
+    pct-of-WR history is printed alongside as a tuning signal.  Entries
+    silently kept (below WR, not banned) produce no log line.
     """
     wr_w = wr_watts_for_slice(
         wr_raw, machine, event_kind, event_value, gender, age_band, weight_sentinel
     )
     if wr_w is None:
         return entries
-    cap = wr_w * (1.0 + WR_INTEGRITY_TOLERANCE)
+    cap_verified = wr_w * (1.0 + WR_INTEGRITY_TOLERANCE_VERIFIED)
+    cap_unverified = wr_w * (1.0 + WR_INTEGRITY_TOLERANCE_UNVERIFIED)
     slice_label = f"{gender}/{age_band}/{weight_sentinel}"
     kept: list[dict] = []
     for e in entries:
+        name_key = (e.get("name") or "").strip().casefold()
         w = entry_watts(e, event_kind, event_value)
-        if w is not None and w > cap:
-            print(
-                f"[c2_rankings_index integrity] {event_kind}{event_value} "
-                f"{machine} {slice_label} season={e.get('season')} drop "
-                f"name={e.get('name')!r} verified={e.get('verified')} "
-                f"value_tenths={e.get('value_tenths')} watts={w:.1f} "
-                f"(WR={wr_w:.1f}, cap={cap:.1f})",
-                flush=True,
-            )
+        verified = e.get("verified")
+        is_unverified = verified not in ("Y", "R")
+        # Ban only attaches to a banned athlete's unverified rows; their race
+        # and verified-yes rows still flow through the regular pipeline.
+        ban_applies = (
+            is_unverified and bool(name_key) and name_key in banned_athletes
+        )
+
+        # Below WR (or unmeasurable) and ban doesn't apply: keep silently.
+        if not ban_applies and (w is None or w <= wr_w):
+            kept.append(e)
             continue
-        kept.append(e)
+
+        history = athlete_history.get(name_key, []) if name_key else []
+
+        if ban_applies:
+            color, disposition, keep = _C_RED, "DROP-BANNED", False
+        elif verified == "R":
+            color, disposition, keep = _C_GREEN, "WHITELIST-RACE", True
+        elif name_key and name_key in wr_holders:
+            color, disposition, keep = _C_GREEN, "WHITELIST-WR", True
+        elif name_key and name_key in race_athletes:
+            color, disposition, keep = _C_GREEN, "WHITELIST-RACER", True
+        elif is_unverified and len(history) <= 1:
+            color, disposition, keep = _C_RED, "DROP-LONE-UNVERIFIED", False
+        elif verified == "Y":
+            if w <= cap_verified:
+                color, disposition, keep = _C_YELLOW, "KEEP-VERIFIED", True
+            else:
+                color, disposition, keep = _C_RED, "DROP-VERIFIED", False
+        else:
+            if w <= cap_unverified:
+                color, disposition, keep = _C_ORANGE, "KEEP-UNVERIFIED", True
+            else:
+                color, disposition, keep = _C_RED, "DROP-UNVERIFIED", False
+
+        if w is not None:
+            pct_over = (w - wr_w) / wr_w * 100.0
+            watts_part = f"watts={w:.1f} WR={wr_w:.1f} ({pct_over:+.1f}%)"
+        else:
+            watts_part = f"watts=None WR={wr_w:.1f}"
+
+        line = (
+            f"{color}[c2_rankings_index integrity] {event_kind}{event_value} "
+            f"{machine} {slice_label} season={e.get('season')} {disposition} "
+            f"name={e.get('name')!r} verified={verified} "
+            f"value_tenths={e.get('value_tenths')} {watts_part}{_C_RESET}"
+        )
+        if disposition.startswith(("KEEP-", "DROP-")):
+            line += f"\n    {_format_athlete_history(history)}"
+        print(line, flush=True)
+        if keep:
+            kept.append(e)
     return kept
 
 
@@ -360,6 +606,10 @@ def rebuild_event_index(
             f"integrity cap will be skipped for {event_kind}{event_value}",
             flush=True,
         )
+    wr_holders = wr_holder_names(wr_raw, machine)
+    athlete_history, banned_athletes, race_athletes = _athlete_profile_for_machine(
+        machine, wr_raw
+    )
 
     buckets: dict[tuple[str, str, str], list[dict]] = {}
     for cat in iter_all_categories(event_ids=[url_id], machine=machine):
@@ -393,6 +643,10 @@ def rebuild_event_index(
             age_band,
             weight_sentinel,
             wr_raw,
+            wr_holders,
+            athlete_history,
+            banned_athletes,
+            race_athletes,
         )
         out = {
             "schema_version": SCHEMA_VERSION,

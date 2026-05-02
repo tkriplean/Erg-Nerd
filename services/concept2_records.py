@@ -413,6 +413,34 @@ def _deserialize_records(raw: dict) -> dict:
     return out
 
 
+def wr_holder_names(raw: list[dict] | None, machine: str) -> set[str]:
+    """Return casefolded names of every athlete who holds a Concept2 World
+    record on ``machine`` (any event / age band / weight class).
+
+    Used by the leaderboard index as a whitelist for the integrity cap: an
+    athlete with a real WR on file is allowed to keep their other rankings
+    entries even when the entry's watts exceed the slice WR by more than the
+    integrity threshold (the published WR sometimes lags the actual best
+    pace, and known top athletes are unlikely to be cheating their own
+    rankings rows).
+    """
+    if raw is None or not wr_machine_supported(machine):
+        return set()
+    record_type = _RECORD_TYPE_BY_MACHINE[machine]
+    names: set[str] = set()
+    for r in raw:
+        if r.get("type") != record_type:
+            continue
+        if r.get("class") != "World":
+            continue
+        if r.get("adaptive") is not None:
+            continue
+        name = (r.get("name") or "").strip().casefold()
+        if name:
+            names.add(name)
+    return names
+
+
 def ensure_raw_records_cached(machine: str) -> list[dict] | None:
     """Return the cached raw WR payload for ``machine``, fetching it if
     missing or stale.  Returns ``None`` when the machine has no WRs available
