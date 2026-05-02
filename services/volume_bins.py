@@ -397,14 +397,18 @@ def bin_bar_svg(
     width: int = 160,
     height: int = 8,
     is_dark: bool = False,
+    colors: Optional[list] = None,
 ) -> str:
     """
     Return a ``data:image/svg+xml;base64,…`` URI for a stacked horizontal
-    bar showing work-meter fraction in each power zone (bin 0 / Rest excluded).
+    bar showing work-meter fraction in each zone (bin 0 / Rest excluded).
 
-    colors are taken from ``BIN_COLORS`` (dark or light variant).
+    Colors default to ``BIN_COLORS`` (power zones).  HR-spread bars must pass
+    ``HR_ZONE_COLORS`` so the rendered bar matches the legend swatches and the
+    tooltip — otherwise the two surfaces disagree on what colour each zone is.
     Segments smaller than 2 % of work total are omitted to avoid hairlines.
     """
+    palette = colors if colors is not None else BIN_COLORS
     work = _bin_meters[1:]  # bins 1-6 only (skip Rest)
     total = sum(work)
 
@@ -420,7 +424,7 @@ def bin_bar_svg(
             w = round(f * width)
             if w <= 0:
                 continue
-            color = BIN_COLORS[i + 1][0 if is_dark else 1]
+            color = palette[i + 1][0 if is_dark else 1]
             rects.append(
                 f'<rect x="{x}" y="0" width="{w}" height="{height}"'
                 f' fill="{color}"/>'

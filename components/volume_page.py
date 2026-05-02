@@ -455,9 +455,11 @@ def _volume_section(
     state = hd.state(
         view="monthly",
         zone_mode="power_spread",  # "power_spread" | "hr" | "quality"
+        value_mode="meters",  # "meters" | "percent"
     )
     view = state.view
     zone_mode = state.zone_mode  # captured before any mid-render mutations
+    value_mode = state.value_mode
 
     with hd.box(gap=1, align="center"):
         with hd.box(gap=0.2, align="center"):
@@ -484,6 +486,7 @@ def _volume_section(
                 bin_names=HR_ZONE_NAMES,
                 bin_colors=HR_ZONE_COLORS,
                 draw_order=HR_ZONE_DRAW_ORDER,
+                value_mode=value_mode,
             )
             rows = get_period_rows(
                 aggregated,
@@ -526,6 +529,7 @@ def _volume_section(
                 bin_names=QUALITY_BIN_NAMES,
                 bin_colors=_QUALITY_BIN_COLORS,
                 draw_order=_QUALITY_DRAW_ORDER,
+                value_mode=value_mode,
             )
             rows = _quality_period_rows(aggregated, view)
         else:
@@ -547,6 +551,7 @@ def _volume_section(
                 view=view,
                 scope="all_time",
                 today=date.today(),
+                value_mode=value_mode,
             )
             rows = get_period_rows(aggregated, view, "all_time", today=date.today())
 
@@ -564,6 +569,16 @@ def _volume_section(
 
         # ── Controls row ─────────────────────────────────────────────────────────
         with hd.hbox(gap=3, align="center", padding=(0, 0, 1, 0), wrap="wrap"):
+            # Y-axis units (meters vs % of period)
+            with hd.radio_buttons(
+                value=state.value_mode,
+                font_size="small",
+            ) as val_rg:
+                hd.radio_button("Meters", value="meters")
+                hd.radio_button("%", value="percent")
+            if val_rg.changed:
+                state.value_mode = val_rg.value
+
             # View radio group (Weekly / Monthly / Seasonal)
             with hd.radio_buttons(
                 value=state.view,
