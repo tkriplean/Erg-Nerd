@@ -62,6 +62,7 @@ from services.interval_utils import (
     avg_workpace_tenths,
     get_rep_count,
     interval_structure_key,
+    interval_structure_label,
 )
 from services.reference_watts import input_hash
 from services.rowing_utils import (
@@ -136,6 +137,7 @@ def enrich_for_storage(w: dict) -> dict:
     if w["is_interval"]:
         w["reps"] = get_rep_count(w)
         w["structure_key"] = interval_structure_key(w, compact=True)
+        w["intervals_label"] = interval_structure_label(w, compact=True)
         w["work_pace"] = avg_workpace_tenths(w)
         w["work_spm"] = avg_work_spm(w)
 
