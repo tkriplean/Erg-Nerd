@@ -666,7 +666,7 @@ def rank_page() -> None:
         return
 
     state = hd.state(
-        include_filter="SBs",
+        include_filter="PBs",
         ranking_focus="c2_age_matched",
         k_age_match=0,
         modifier_must_have_events=(),
