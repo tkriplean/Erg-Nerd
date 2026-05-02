@@ -289,7 +289,9 @@ def _slow_end_cap(
     if work_bands:
         for b in work_bands:
             lo, hi = b["xMin"], b["xMax"]
-            in_band = [p["y"] for p in points if lo <= p["x"] <= hi]
+            in_band = [
+                p["y"] for p in points if p["y"] is not None and lo <= p["x"] <= hi
+            ]
             if in_band:
                 avgs.append(sum(in_band) / len(in_band))
     else:
@@ -300,9 +302,9 @@ def _slow_end_cap(
             avgs.append(compute_watts(pace_s) if show_watts else pace_s)
 
     for cs in compare_series or []:
-        pts = cs.get("pace_points") or []
-        if pts:
-            avgs.append(sum(p["y"] for p in pts) / len(pts))
+        ys = [p["y"] for p in (cs.get("pace_points") or []) if p["y"] is not None]
+        if ys:
+            avgs.append(sum(ys) / len(ys))
 
     if not avgs:
         return None
@@ -572,6 +574,44 @@ def _points_from_strokes(strokes: list, *, show_watts: bool) -> tuple:
     return pace_pts, spm_pts, hr_pts, has_hr
 
 
+def _rest_spans_from_intervals(intervals: Optional[list]) -> list:
+    """Return [(xMin, xMax), ...] for rest periods given an interval list.
+
+    Mirrors the elapsed-time accounting in build_interval_rows_and_bands so
+    spans line up with the rest bands annotated on the chart.
+    """
+    if not intervals:
+        return []
+    spans: list = []
+    elapsed_s = 0.0
+    for iv in intervals:
+        dur_t = iv.get("time") or 0
+        if dur_t <= 0:
+            continue
+        elapsed_s += dur_t / 10.0
+        rest_t = iv.get("rest_time") or 0
+        if rest_t > 0:
+            rest_dur_s = rest_t / 10.0
+            spans.append((round(elapsed_s, 2), round(elapsed_s + rest_dur_s, 2)))
+            elapsed_s += rest_dur_s
+    return spans
+
+
+def _apply_rest_gaps(points: list, rest_spans: list) -> list:
+    """Drop points falling inside rest spans and insert ``y: None`` gap
+    markers at each rest boundary so Chart.js (with ``spanGaps: false``)
+    breaks the line through the rest interval rather than connecting the
+    last work stroke to the first stroke after.
+    """
+    if not rest_spans or not points:
+        return points
+    kept = [
+        p for p in points if not any(lo <= p["x"] <= hi for lo, hi in rest_spans)
+    ]
+    nulls = [{"x": lo, "y": None} for lo, _ in rest_spans]
+    return sorted(kept + nulls, key=lambda p: p["x"])
+
+
 def build_compare_series(
     compared_ids: tuple,
     compare_results: dict,
@@ -613,6 +653,10 @@ def build_compare_series(
         pace_pts, spm_pts, hr_pts, has_hr = _points_from_strokes(
             stitched, show_watts=show_watts
         )
+        rest_spans = _rest_spans_from_intervals(intervals)
+        if rest_spans:
+            pace_pts = _apply_rest_gaps(pace_pts, rest_spans)
+            spm_pts = _apply_rest_gaps(spm_pts, rest_spans)
         if labels is not None and cid in labels:
             label = labels[cid]
         else:
@@ -710,6 +754,14 @@ def build_stroke_chart_config(
         strokes, show_watts=show_watts
     )
 
+    # Gap pace/SPM lines through rest periods so the chart doesn't drop a
+    # dramatic line during inactive rests.  HR is left intact since recovery
+    # HR carries useful information.
+    rest_spans = _rest_spans_from_intervals(intervals)
+    if rest_spans:
+        pace_pts = _apply_rest_gaps(pace_pts, rest_spans)
+        spm_pts = _apply_rest_gaps(spm_pts, rest_spans)
+
     has_compares = bool(compare_series)
     if primary_label is not None:
         primary_series_label = primary_label
@@ -742,6 +794,7 @@ def build_stroke_chart_config(
                 "pointRadius": 0,
                 "tension": 0.15,
                 "order": 1,
+                "spanGaps": False,
             }
         )
 
@@ -757,6 +810,7 @@ def build_stroke_chart_config(
                 "pointRadius": 0,
                 "tension": 0.1,
                 "order": 2,
+                "spanGaps": False,
             }
         )
 
@@ -794,6 +848,7 @@ def build_stroke_chart_config(
                         "tension": 0.15,
                         "order": 1,
                         "isCompare": True,
+                        "spanGaps": False,
                     }
                 )
             if show_spm and cs.get("spm_points"):
@@ -809,6 +864,7 @@ def build_stroke_chart_config(
                         "tension": 0.1,
                         "order": 2,
                         "isCompare": True,
+                        "spanGaps": False,
                     }
                 )
             if show_hr and cs.get("has_hr") and cs.get("hr_points"):
@@ -850,26 +906,39 @@ def build_stroke_chart_config(
         y_pace = [
             p["y"]
             for p in pace_pts
-            if any(lo <= p["x"] <= hi for lo, hi in work_ranges)
+            if p["y"] is not None
+            and any(lo <= p["x"] <= hi for lo, hi in work_ranges)
         ]
         y_spm = [
-            p["y"] for p in spm_pts if any(lo <= p["x"] <= hi for lo, hi in work_ranges)
+            p["y"]
+            for p in spm_pts
+            if p["y"] is not None
+            and any(lo <= p["x"] <= hi for lo, hi in work_ranges)
         ]
         y_hr = [
-            p["y"] for p in hr_pts if any(lo <= p["x"] <= hi for lo, hi in work_ranges)
+            p["y"]
+            for p in hr_pts
+            if p["y"] is not None
+            and any(lo <= p["x"] <= hi for lo, hi in work_ranges)
         ]
     else:
-        y_pace = [p["y"] for p in pace_pts]
-        y_spm = [p["y"] for p in spm_pts]
-        y_hr = [p["y"] for p in hr_pts]
+        y_pace = [p["y"] for p in pace_pts if p["y"] is not None]
+        y_spm = [p["y"] for p in spm_pts if p["y"] is not None]
+        y_hr = [p["y"] for p in hr_pts if p["y"] is not None]
 
     # Extend y ranges so compared-workout lines aren't clipped.
     if has_compares:
         for cs in compare_series:
-            y_pace.extend(p["y"] for p in (cs.get("pace_points") or []))
-            y_spm.extend(p["y"] for p in (cs.get("spm_points") or []))
+            y_pace.extend(
+                p["y"] for p in (cs.get("pace_points") or []) if p["y"] is not None
+            )
+            y_spm.extend(
+                p["y"] for p in (cs.get("spm_points") or []) if p["y"] is not None
+            )
             if cs.get("has_hr"):
-                y_hr.extend(p["y"] for p in (cs.get("hr_points") or []))
+                y_hr.extend(
+                    p["y"] for p in (cs.get("hr_points") or []) if p["y"] is not None
+                )
 
     pace_y_min_full, pace_y_max_full = _pad(
         *((min(y_pace), max(y_pace)) if y_pace else (None, None))
