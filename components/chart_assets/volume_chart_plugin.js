@@ -6,9 +6,11 @@
  *   config  — full Chart.js config dict (type, data, options)
  *
  * JS-injected behaviour:
- *   - Y-axis ticks formatted as meters ("10.5k", "500m", …)
- *   - Tooltip shows each non-zero bin + footer total, both as meters
+ *   - Y-axis ticks formatted as meters ("10.5k", "500m", …) or "%"
+ *   - Tooltip shows each non-zero bin + footer total, in the active unit
  */
+
+
 
 window.hyperdiv.registerPlugin("VolumeChart", (ctx) => {
   // ── Shadow DOM setup ────────────────────────────────────────────────────
@@ -53,8 +55,7 @@ window.hyperdiv.registerPlugin("VolumeChart", (ctx) => {
     }
 
     // Custom tooltip: index mode (shows all datasets for a bar on hover).
-    // In percent mode the displayed value is %; we fish the raw meters out of
-    // the dataset's parallel `raw_m` array so the tooltip can show both.
+    // In percent mode values display as % only; in meters mode as meters.
     opts.plugins = opts.plugins || {};
     opts.plugins.tooltip = {
       mode: "index",
@@ -68,21 +69,17 @@ window.hyperdiv.registerPlugin("VolumeChart", (ctx) => {
           const val = context.raw || 0;
           if (val === 0) return null;
           if (isPercent) {
-            const meters = (ds.raw_m && ds.raw_m[context.dataIndex]) || 0;
-            return `${ds.label}:  ${val.toFixed(1)}%  (${fmtMeters(meters)})`;
+            return `${ds.label}:  ${val.toFixed(1)}%`;
           }
           return `${ds.label}:  ${fmtMeters(val)}`;
         },
         footer(items) {
           if (!items.length) return "";
-          if (isPercent) {
-            const idx = items[0].dataIndex;
-            const total = periodTotals[idx] || 0;
-            if (!total) return "";
-            return `Total:  ${fmtMeters(total)}`;
-          }
           const total = items.reduce((s, it) => s + (it.raw || 0), 0);
           if (!total) return "";
+          if (isPercent) {
+            return `Total:  ${total.toFixed(1)}%`;
+          }
           return `Total:  ${fmtMeters(total)}`;
         },
       },
