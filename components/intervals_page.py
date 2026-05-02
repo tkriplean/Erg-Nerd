@@ -969,8 +969,7 @@ def intervals_page() -> None:
 
     interval_columns = [
         "date",
-        "reps",
-        {"key": "structure_filter", "active_key": state.structure_filter},
+        "workout_structure",
         "stimulus",
         "power_spread",
         "hr_spread",

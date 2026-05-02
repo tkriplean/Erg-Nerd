@@ -521,52 +521,25 @@ def interval_structure_key(r: dict, compact: bool = False) -> str:
 def get_rep_count(r: dict) -> int:
     """Return the user-facing rep count for an interval workout.
 
-    For block-structured workouts (e.g. 3 × (5 × 20"/10"r) / 4'r), returns the
-    OUTER rep count (3), not the total flattened interval count (15). For flat
-    workouts, returns the number of work intervals.
+    The rep count is "how many times through the enumerated interval block we
+    go".  For repeated patterns the leading "N × " in the structure label is
+    the answer; for fully-enumerated variable ladders (no repeating pattern),
+    the count is 1 and the label has no leading "N × ".
+
+    Examples:
+      "3 × 2'  /  1'r"                      → 3   (constant interval)
+      "3 × (9'+6')  /  4'r"                 → 3   (single multi-interval block)
+      "3 × (5 × 20\"/10\"r)  /  4'r"        → 3   (super-block)
+      "5'/2'  –  1'/1'  –  5'/2'  – ..."    → 1   (variable, fully enumerated)
     """
     raw = (r.get("workout") or {}).get("intervals") or []
     if not raw:
         return 0
-
-    # Mirror the rest-folding from build_interval_lines so we partition the
-    # same way super-block detection sees it.
-    intervals: list[dict] = []
-    for iv in raw:
-        t = (iv.get("type") or "").lower()
-        if t == "rest" and intervals:
-            prev = dict(intervals[-1])
-            added = (iv.get("time") or 0) + (iv.get("rest_time") or 0)
-            prev["rest_time"] = (prev.get("rest_time") or 0) + added
-            intervals[-1] = prev
-            continue
-        intervals.append(iv)
-    if not intervals:
-        return 0
-
-    blocks: list[list[dict]] = []
-    current: list[dict] = []
-    for iv in intervals:
-        current.append(iv)
-        if (iv.get("rest_time") or 0) > 0:
-            blocks.append(current)
-            current = []
-    if current:
-        blocks.append(current)
-
-    super_pat = _detect_super_block(blocks)
-    if super_pat is not None:
-        n_reps, _, _ = super_pat
-        return n_reps
-
-    # Mirror Step 2.5 in build_interval_lines: a single multi-interval block
-    # repeated N times reports N reps, not N×M.
-    if len(blocks) >= 2 and all(len(b) > 1 for b in blocks):
-        sig0 = _block_sig_ignore_last_rest(blocks[0])
-        if all(_block_sig_ignore_last_rest(b) == sig0 for b in blocks):
-            non_final_rests = [b[-1].get("rest_time") or 0 for b in blocks[:-1]]
-            if non_final_rests and len(set(non_final_rests)) == 1:
-                return len(blocks)
-
-    work_ivs = [iv for iv in intervals if (iv.get("type") or "").lower() != "rest"]
-    return len(work_ivs) or len(intervals)
+    label = interval_structure_label(r, compact=True)
+    head, sep, _ = label.partition(" × ")
+    if sep:
+        try:
+            return int(head)
+        except ValueError:
+            pass
+    return 1

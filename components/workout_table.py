@@ -73,9 +73,10 @@ from dataclasses import dataclass
 
 import hyperdiv as hd
 
-from services.volume_bins import BIN_COLORS, swatch_svg
-from services.heartrate_utils import HR_ZONE_COLORS
+from services.volume_bins import BIN_COLORS, BIN_NAMES, swatch_svg
+from services.heartrate_utils import HR_ZONE_COLORS, HR_ZONE_NAMES
 from services.workout_quality import QUALITY_STYLE
+from services.formatters import fmt_distance
 
 
 _HERE = os.path.dirname(__file__)
@@ -133,12 +134,12 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
     "hr":                ColumnDef("hr", "HR", "8rem", format="hr"),
     "season":            ColumnDef("season", "Season", "6rem", format="season"),
     "link":              ColumnDef("link", "", "2.5rem", renderer="link", sortable=False),
-    "structure":         ColumnDef("structure", "Structure", "9rem", format="structure", align="start"),
+    "structure":         ColumnDef("structure", "Intervals", "minmax(8rem,1fr)", format="structure", align="start"),
     "reps":              ColumnDef("reps", "Reps", "4rem", format="reps"),
     "work_pace":         ColumnDef("work_pace", "Avg Split", "7rem", format="work_pace", default_asc=True),
     "work_spm":          ColumnDef("work_spm", "SPM", "4rem", format="work_spm"),
     "stimulus":          ColumnDef("stimulus", "Stimulus", "10rem", renderer="stimulus", sortable=False),
-    "workout_structure": ColumnDef("workout_structure", "Workout", "minmax(8rem,1fr)", format="workout_structure"),
+    "workout_structure": ColumnDef("workout_structure", "Intervals", "minmax(8rem,1fr)", format="workout_structure", align="start"),
     "similarity":        ColumnDef("similarity", "Similarity", "6rem", format="similarity"),
     "power_spread":      ColumnDef("power_spread", "Power Spread", "8rem", renderer="power_spread"),
     "hr_spread":         ColumnDef("hr_spread", "HR Spread", "8rem", renderer="hr_spread"),
@@ -223,7 +224,9 @@ def render_spread_cell(
         items.append(
             {
                 "swatch_uri": swatch_svg(color_str, size=10, radius=2),
+                "name": zone_names[idx],
                 "pct_text": f"{pct:.0%}",
+                "meters_text": fmt_distance(int(round(meters))),
             }
         )
 
@@ -333,6 +336,7 @@ def _enrich_opts(key: str, opts: dict) -> dict:
         return {
             **opts,
             "swatch_uris": _theme_swatches(BIN_COLORS, hd.theme().is_dark),
+            "zone_names": list(BIN_NAMES),
             "skip_indices": [0],
             "bar_w": _SPREAD_BAR_WIDTH,
             "bar_h": _SPREAD_BAR_HEIGHT,
@@ -341,6 +345,7 @@ def _enrich_opts(key: str, opts: dict) -> dict:
         return {
             **opts,
             "swatch_uris": _theme_swatches(HR_ZONE_COLORS, hd.theme().is_dark),
+            "zone_names": list(HR_ZONE_NAMES),
             "skip_indices": [0, 6],
             "bar_w": _SPREAD_BAR_WIDTH,
             "bar_h": _SPREAD_BAR_HEIGHT,
