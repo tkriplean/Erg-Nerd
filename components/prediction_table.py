@@ -247,7 +247,6 @@ def draw_header_cell(col_label, col_tip, background_color):
                 )
 
 
-@hd.cached
 def draw_prediction_cell(
     col_key,
     col_label,
