@@ -386,7 +386,7 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
         animation: false,
         responsive: true,
         maintainAspectRatio: false,
-        interaction: { mode: "index", intersect: false },
+        interaction: { mode: "x", intersect: false },
         plugins: {
           legend: cfg.showLegend
             ? {
