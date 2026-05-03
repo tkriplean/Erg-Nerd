@@ -23,12 +23,27 @@ Pipeline
         • Collect window PBs in [marker − 365d, marker].
         • Predictor cascade:
               ≥ 5 PBs with duration ratio ≥ 10 + R² ≥ 0.90 → CP fit (direct watts)
+                 — but only used at events whose implied duration falls
+                 within ±1 octave of the actual PB duration range.  Outside
+                 that span the 4-parameter fit is unconstrained and produces
+                 above-WR watts at e.g. 100m when no sub-1min PB anchors it.
               ≥ 4 PBs → Paul's Law regression (`compute_pauls_constant`)
               ≥ 1 PB → Paul's Law default k = 5.0 anchored to that PB
               else    → skip marker
+          For Paul's Law, predictions are *averaged across all anchors* (not
+          projected only from the fastest PB).  Single-anchor extrapolation
+          carries a sprint-bias when projecting from a longer PB to a shorter
+          event; averaging dilutes that bias and matches the predictor used
+          in :mod:`services.predictions`.
         • Where an actual PB exists in the window for an event, final watts =
-          mean(predicted_watts, pb_watts).  A new PB is reflected without
-          discarding the predictor's cross-event coherence.
+          PB if PB > prediction (a real performance above the curve is
+          adopted outright — you can't accidentally overperform), else
+          mean(predicted_watts, pb_watts) (a sub-prediction PB may be a
+          sub-maximal day; blend to keep cross-event coherence).
+        • Final monotonicity pass: walk events in duration order and cap each
+          longer event at the running minimum.  Blending a sub-prediction PB
+          can pull a merged value below adjacent-event predictions; this
+          ensures the reference curve respects power-duration ordering.
     CP fits are cached by the sorted tuple of PB workout ids so adjacent
     markers sharing the same PB set reuse the same fit.
 
@@ -109,8 +124,9 @@ def _all_events(machine: str) -> list:
 def _all_cat_keys(machine: str) -> list:
     return [ck for ck, _, _ in _all_events(machine)]
 
+
 WINDOW_DAYS = 365
-INDEX_VERSION = 1
+INDEX_VERSION = 4
 PAULS_DEFAULT_K = 5.0
 
 
@@ -128,7 +144,9 @@ _HASH_MEMO: dict = {"id": None, "len": -1, "first_id": None, "hash": ""}
 
 
 def input_hash(all_workouts: list) -> str:
-    """Stable sha1 over the identity tuples of `all_workouts`.
+    """Stable sha1 over the identity tuples of `all_workouts`, scoped by
+    INDEX_VERSION so a code-driven version bump also invalidates the
+    module-level ``_INDEX_CACHE`` (not only localStorage).
 
     Two workout lists with the same sorted set of (date, type, distance, time)
     tuples hash identically, so the loader can detect when localStorage is
@@ -153,6 +171,7 @@ def input_hash(all_workouts: list) -> str:
         for w in all_workouts
     )
     h = hashlib.sha1()
+    h.update(f"v{INDEX_VERSION}|".encode("utf-8"))
     for t in ids:
         h.update(repr(t).encode("utf-8"))
     digest = h.hexdigest()
@@ -393,11 +412,36 @@ def _compute_marker_refs(
     source_tag: dict = {}
 
     if cp_params is not None:
+        # Bound CP extrapolation by the duration range of the actual PBs.
+        # The 4-parameter CP model is poorly constrained outside its anchor
+        # data: with no sub-1min PB, the fast-twitch component runs free and
+        # produces above-WR watts at 100m.  Allow ±1 octave of slack so the
+        # smooth model still covers events just outside the PB span, but no
+        # further — Paul's Law fills in the extremes via the fallback below.
+        pb_durations = [p["duration_s"] for p in pb_list if p.get("duration_s")]
+        if pb_durations:
+            t_lo = min(pb_durations) / 2.0
+            t_hi = max(pb_durations) * 2.0
+        else:
+            t_lo, t_hi = None, None
+
         for ck, dist_m, dur_s in all_events:
             w = _cp_watts_at_event(cp_params, dist_m, dur_s)
-            if w is not None:
-                predicted[ck] = w
-                source_tag[ck] = "cp"
+            if w is None:
+                continue
+            # Derive the event's implied duration so we can gate the CP
+            # prediction against the PB-range bound.
+            if dur_s is not None:
+                event_dur = dur_s
+            elif w > 0:
+                pace = 500.0 * (2.80 / w) ** (1.0 / 3.0)
+                event_dur = pace * dist_m / 500.0
+            else:
+                continue
+            if t_lo is not None and not (t_lo <= event_dur <= t_hi):
+                continue  # outside PB range — let Paul's Law fill in
+            predicted[ck] = w
+            source_tag[ck] = "cp"
 
     # Fall back through Paul's Law where CP didn't cover (or wasn't fit).
     if len(predicted) < len(all_cat_keys):
@@ -411,46 +455,62 @@ def _compute_marker_refs(
                 # Time event: anchor distance = pace × duration / 500
                 lb_anchor[ck] = p["pace"] and (500.0 * p["duration_s"] / p["pace"])
 
-        k = None
-        if len(pbs) >= 4:
-            k = compute_pauls_constant(lb, lb_anchor)
+        k = compute_pauls_constant(lb, lb_anchor) if len(pbs) >= 4 else None
         if k is None:
             k = PAULS_DEFAULT_K
+        pauls_source = "pauls" if len(pbs) >= 4 else "pauls_default"
 
-        # Anchor: fastest (pace-lowest) PB.
-        anchor = min(pb_list, key=lambda p: p["pace"])
-        anchor_pace = anchor["pace"]
-        anchor_dist = lb_anchor.get(anchor["cat_key"])
-        if not anchor_dist:
-            anchor_dist = anchor.get("distance") or (
-                500.0 * anchor["duration_s"] / anchor_pace
-            )
+        # Build (anchor_pace, anchor_dist) for every PB so we can average
+        # Paul's-Law projections across all anchors rather than projecting
+        # only from the fastest one.  Single-anchor extrapolation from the
+        # fastest PB systematically over-predicts at events shorter than
+        # that anchor (the sprint bias of e.g. projecting 500m → 100m).
+        # Averaging across anchors dilutes that bias and tracks actual
+        # short-distance performance better.  Mirrors the "Paul's Law
+        # (average)" predictor in :mod:`services.predictions`.
+        anchors: list[tuple[float, float]] = []
+        for p in pb_list:
+            a_pace = p["pace"]
+            a_dist = lb_anchor.get(p["cat_key"])
+            if not a_dist:
+                a_dist = p.get("distance") or (
+                    500.0 * p["duration_s"] / a_pace if a_pace else None
+                )
+            if a_pace and a_dist:
+                anchors.append((a_pace, a_dist))
 
-        pauls_source = (
-            "pauls"
-            if len(pbs) >= 4 and k != PAULS_DEFAULT_K
-            else ("pauls" if len(pbs) >= 4 else "pauls_default")
-        )
         for ck, dist_m, dur_s in all_events:
             if ck in predicted:
                 continue
-            w = _pauls_watts_at_event(anchor_pace, anchor_dist, dist_m, dur_s, k)
-            if w is not None:
-                predicted[ck] = w
+            watts_list = [
+                w
+                for w in (
+                    _pauls_watts_at_event(a_pace, a_dist, dist_m, dur_s, k)
+                    for a_pace, a_dist in anchors
+                )
+                if w is not None
+            ]
+            if watts_list:
+                predicted[ck] = sum(watts_list) / len(watts_list)
                 source_tag[ck] = pauls_source
 
-    # Merge in actual PB watts — mean of prediction and PB.  If there's only a
-    # PB and no prediction, use the PB alone.
+    # Merge in actual PB watts.  Performance is asymmetric evidence: a real PB
+    # *above* the prediction means the rower beat the model — adopt the PB
+    # outright.  A PB *below* the prediction may reflect a sub-maximal day
+    # (didn't go all-out, just trained at race pace, etc.), so blend with the
+    # prediction to keep cross-event coherence.
     final_watts: dict = {}
     final_source: dict = {}
     for ck in all_cat_keys:
         pb = pbs.get(ck)
         pred_w = predicted.get(ck)
         if pb is not None and pred_w is not None:
-            final_watts[ck] = (pb["watts"] + pred_w) / 2.0
-            final_source[ck] = (
-                "pb" if pb["watts"] >= pred_w else source_tag.get(ck, "pb")
-            )
+            if pb["watts"] > pred_w:
+                final_watts[ck] = pb["watts"]
+                final_source[ck] = "pb"
+            else:
+                final_watts[ck] = (pb["watts"] + pred_w) / 2.0
+                final_source[ck] = source_tag.get(ck, "pb")
         elif pb is not None:
             final_watts[ck] = pb["watts"]
             final_source[ck] = "pb"
@@ -461,6 +521,30 @@ def _compute_marker_refs(
 
     if not final_watts:
         return None
+
+    # Enforce monotonic non-increase of watts vs duration.  Predictions are
+    # monotonic by construction, but blending a sub-prediction PB with the
+    # prediction can pull a merged value below adjacent-event predictions
+    # (e.g. a slow 5k blended to ~250W when the neighbouring 6k prediction
+    # is 270W).  Walk events in duration order and cap each longer event at
+    # the running minimum so the curve respects the power-duration ordering.
+    def _event_duration_s(ck: tuple, watts: float) -> float:
+        if ck[0] == "time":
+            return ck[1] / 10.0
+        if watts <= 0:
+            return float("inf")
+        pace = 500.0 * (2.80 / watts) ** (1.0 / 3.0)
+        return pace * ck[1] / 500.0
+
+    cks_in_dur_order = sorted(
+        final_watts.keys(),
+        key=lambda c: _event_duration_s(c, final_watts[c]),
+    )
+    prev_w: Optional[float] = None
+    for ck in cks_in_dur_order:
+        if prev_w is not None and final_watts[ck] > prev_w:
+            final_watts[ck] = prev_w
+        prev_w = final_watts[ck]
 
     return {
         "date": marker,

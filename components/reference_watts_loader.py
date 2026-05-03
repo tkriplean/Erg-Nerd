@@ -31,15 +31,16 @@ from services.reference_watts import (
     input_hash,
     seed_reference_watts_index,
     serialize_index,
+    INDEX_VERSION,
 )
 from services.global_state import GlobalFilters
 
-_LS_KEY_PREFIX = "reference_watts_v1"
+_LS_KEY_PREFIX = "reference_watts"
 
 
 def _ls_key(machine: str) -> str:
     """Per-machine localStorage slot so switching machines preserves both indices."""
-    return f"{_LS_KEY_PREFIX}_{machine}"
+    return f"{_LS_KEY_PREFIX}_v{INDEX_VERSION}_{machine}"
 
 
 @hd.global_state
