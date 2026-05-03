@@ -489,8 +489,13 @@ def compute_pauls_constant(
     pairs:  K = Σ(x·y) / Σ(x²)  where  x = log₂(d_target/d_anchor)
     and  y = pace_target − pace_anchor.
 
-    Returns K rounded to 1 decimal place and clamped to [0.5, 15.0], or None
-    if fewer than 2 PBs are available.
+    Returns K rounded to 1 decimal place and clamped to [2.0, 8.0], or None
+    if fewer than 2 PBs are available.  The clamp range bounds K to
+    physiologically realistic values: real rowers cluster around 4–7, with the
+    population default at 5.0.  Values outside [2.0, 8.0] are essentially
+    always artifacts of sparse / sprinter-or-endurance-skewed PB sets, where
+    a small number of PBs lets a two-point fit drive K to extremes that
+    extrapolate above-WR watts at short distances.
     """
     cats = [
         (pace, lifetime_best_anchor[cat])
@@ -512,7 +517,7 @@ def compute_pauls_constant(
     if sx2 < 1e-10:
         return None
     k = sxy / sx2
-    return round(max(0.5, min(15.0, k)), 1)
+    return round(max(2.0, min(8.0, k)), 1)
 
 
 def loglog_fit(lifetime_best: dict, lifetime_best_anchor: dict) -> Optional[tuple]:
