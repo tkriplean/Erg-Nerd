@@ -466,19 +466,6 @@ def step_ms(all_ms: list, window_size: str) -> int:
 
 
 def workouts_page() -> None:
-    """Top-level component for the Workouts page."""
-    result = get_all_workouts()
-
-    if not result:
-        with hd.box(padding=4, align="center"):
-            hd.text("No workouts found.", font_color="neutral-500")
-        return
-
-    # ── Pace-vs-date scatter + windowed workouts table ────────────────────────
-    all_workouts = result[1]
-
-
-
     """
     Render the pace-vs-date focus+context chart with brush navigator,
     workout filters, and an in-window workouts table.
@@ -495,6 +482,25 @@ def workouts_page() -> None:
         color_mode="gander",  # "gander" | "quality"
     )
 
+
+    """Top-level component for the Workouts page."""
+    result = get_all_workouts()
+    profile = get_profile() or {}
+
+    if not result:
+        with hd.box(padding=4, align="center"):
+            hd.text("No workouts found.", font_color="neutral-500")
+        return
+
+    if not profile or AppContext().sessions_dict is None: 
+        hd.box(padding=2, min_height="80vh")
+        return
+
+
+    # ── Pace-vs-date scatter + windowed workouts table ────────────────────────
+    all_workouts = result[1]
+
+
     # ── Attach Power Spread, HR Spread, and Quality fields ────────────────────
     # Block on the reference-watts loader so quality colouring + filters work.
     if not reference_watts_loader(all_workouts):
@@ -502,7 +508,6 @@ def workouts_page() -> None:
 
     workouts = _apply_outlier_filter(all_workouts)
 
-    profile = get_profile() or {}
     max_hr, _ = resolve_max_hr(profile, workouts)
     attach_spread_and_quality(workouts, workouts, max_hr)
     attach_ess_metrics(workouts, workouts, AppContext().sessions_dict or {}, profile, max_hr)
@@ -659,7 +664,7 @@ def workouts_page() -> None:
                 state.window_start_ms = chart.brush_start
 
             # ── Click-to-open: navigate to /workout/<id> when a chart dot is clicked ──
-            if chart.click_seq > state.last_click_seq:
+            if chart.click_seq > state.last_click_seq:                
                 state.last_click_seq = chart.click_seq
                 if chart.clicked_workout_id:
                     hd.location().go(path=f"/workout/{chart.clicked_workout_id}")

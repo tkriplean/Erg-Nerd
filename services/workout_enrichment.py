@@ -520,9 +520,7 @@ def attach_ess_metrics(
     gender = (profile or {}).get("gender")
     rwd_fn = _ref_watts_at_duration_fn(ref_watts_for)
     sessions_dict = sessions_dict or {}
-    by_id = {
-        str(w.get("id")): w for w in all_workouts if w.get("id") is not None
-    }
+    by_id = {str(w.get("id")): w for w in all_workouts if w.get("id") is not None}
 
     # Per-render memos.  Two separate caches:
     #
@@ -545,7 +543,7 @@ def attach_ess_metrics(
         if not refs:
             return _cp_w_prime_for_refs(refs, gender)
         # Sorted-items tuple is hashable and identical when refs content matches.
-        key = tuple(sorted(refs.items()))
+        key = tuple(sorted([(d, round(w)) for d, w in refs.items()]))
         cached = cp_memo.get(key)
         if cached is None:
             cached = _cp_w_prime_for_refs(refs, gender)
