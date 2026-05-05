@@ -557,61 +557,162 @@ def _peak_rolling_mean(arr: list[float], window: int) -> float:
     return best
 
 
-def compute_session_metrics(
-    session_workouts: list[dict],
-    ref_watts_at_duration_fn: Callable,
-    cp: Optional[float],
-    w_prime: Optional[float],
-) -> dict:
-    """Compute ESS / Severity / Anaerobic Strain across a session timeline.
+def _attach_per_workout_records(
+    total_session_s,
+    workout_windows,
+    w_bal_curve,
+    w_prime,
+    P_arr,
+    inv_taus,
+    inv_rws,
+    inv_amp,
+    kind_arr,
+    wid_arr,
+    ess_per_second,
+):
+    # ----- Per-workout records -----
+    # Per-workout severity / intensity use a *workout-isolated* EMA
+    # simulation — the bands are reset to zero at each workout's start
+    # and the EMAs are run forward only over that workout's seconds.
+    # This is what the column should report:
+    #
+    #   * Cooldown after a max-effort race: the session-level I(t) is
+    #     still high (inherited from the race), but the cooldown's own
+    #     low watts barely fill any band.  Workout-isolated I stays low.
+    #     ⇒ Severity = Low, as the user's intuition demands.
+    #   * 5k race after a warmup: identical to a standalone 5k race.
+    #     The session priming effect is captured in ESS attribution
+    #     (which uses the session-state I(t)), not in this column.
+    #
+    # ESS attribution (above) still uses the time-slice integral of the
+    # session-state I(t), so ``Σ ESS_workout = ESS_session`` exactly.
+    n_bands = len(ZONE_BANDS_S)
 
-    Parameters
-    ----------
-    session_workouts:
-        The list of workouts that make up this session.  Order doesn't
-        matter — we re-sort by start datetime internally.
-    ref_watts_at_duration_fn:
-        Callable ``(when: date, duration_s: float) -> Optional[float]``
-        returning the rower's reference watts at a given duration on a
-        given date.  Typically a partial of
-        :func:`services.reference_watts.reference_watts_at_duration`.  Called
-        once per band against the session's representative date (the last
-        workout's date — Concept2 logs end-time).
-    cp:
-        Rower's critical power (watts).  Typically the date-aware 60-min
-        reference watts.  ``None`` disables the W'bal track.
-    w_prime:
-        Rower's anaerobic capacity (joules).  ``None`` disables the
-        W'bal track.
+    # Per-workout ESS attribution
+    ess_by_workout: dict = {wid: 0.0 for wid in workout_windows}
+    for t in range(total_session_s):
+        wid = wid_arr[t]
+        if wid is not None:
+            ess_by_workout[wid] += ess_per_second[t]
 
-    Returns
-    -------
-    dict matching :func:`_empty_metrics`'s shape.  ``timeline`` is a list of
-    sub-sampled per-second records ``{t, intensity, P, w_bal_pct, zones}``
-    where ``zones`` is a dict mapping band-seconds → ratio.  ``per_workout``
-    attributes session ESS to each constituent workout so summing the
-    column yields the session value exactly.
-    """
-    # Annotate (start_dt, end_dt, w) per workout.
-    annotated: list = []
-    for w in session_workouts:
-        end_dt = _parse_workout_datetime(w.get("date"))
-        if end_dt is None:
-            continue
-        duration_s = _workout_total_duration_s(w)
-        start_dt = end_dt - timedelta(seconds=duration_s)
-        annotated.append((start_dt, end_dt, w))
+    per_workout_records: list = []
+    for wid, (t_start, t_end) in workout_windows.items():
+        n = max(1, t_end - t_start)
 
-    if not annotated:
-        return _empty_metrics()
-    annotated.sort(key=lambda x: x[0])
+        # Workout-isolated EMA simulation — uses the same flat-list /
+        # ``r*r*r`` hot-path as the session-level loop above.  Reuses the
+        # already-computed ``inv_taus`` and ``inv_rws``.
+        ema_w = [0.0] * n_bands
+        I_w_arr: list[float] = []
+        if SIGNAL_AMPLIFIER == 3:
+            for t in range(t_start, t_end):
+                P = P_arr[t]
+                sum_amp_w = 0.0
+                for i in range(n_bands):
+                    e = ema_w[i]
+                    e += (P - e) * inv_taus[i]
+                    ema_w[i] = e
+                    r = e * inv_rws[i]
+                    sum_amp_w += r * r * r
+                I_w_arr.append(INTENSITY_SCALE * (sum_amp_w**inv_amp))
+        else:
+            amp = SIGNAL_AMPLIFIER
+            for t in range(t_start, t_end):
+                P = P_arr[t]
+                sum_amp_w = 0.0
+                for i in range(n_bands):
+                    e = ema_w[i]
+                    e += (P - e) * inv_taus[i]
+                    ema_w[i] = e
+                    r = e * inv_rws[i]
+                    sum_amp_w += r**amp
+                I_w_arr.append(INTENSITY_SCALE * (sum_amp_w**inv_amp))
 
-    session_start = annotated[0][0]
-    session_end = max(end for _, end, _ in annotated)
-    total_session_s = max(0, int((session_end - session_start).total_seconds() + 0.5))
-    if total_session_s == 0:
-        return _empty_metrics()
+        # Workout intensity is the arithmetic mean of the workout-isolated
+        # I(t) across this workout's *work-only* seconds.  Excluding rest
+        # seconds keeps the workout-level number aligned with per-segment
+        # values shown in the splits/intervals table.
+        work_intensity_vals = [
+            I_w_arr[t - t_start] for t in range(t_start, t_end) if kind_arr[t] == "work"
+        ]
+        intensity_w = (
+            sum(work_intensity_vals) / len(work_intensity_vals)
+            if work_intensity_vals
+            else 0.0
+        )
+        slc = I_w_arr or [0.0]
+        pk5 = _peak_rolling_mean(slc, 300)
+        pk60 = _peak_rolling_mean(slc, 60)
+        pk15 = _peak_rolling_mean(slc, 15)
 
+        # Anaerobic strain per workout: depletion *caused* by this workout
+        # = (W'bal at workout start − min W'bal during workout) / W'.
+        # A cooldown that starts on an empty reserve and only recovers reads
+        # 0% even though the absolute W'bal level stays low; a race that
+        # drains a fresh reserve to 0 reads 100%.
+        if w_bal_curve is not None and w_prime:
+            wb_slc = w_bal_curve[t_start:t_end]
+            if wb_slc:
+                wb_start = w_bal_curve[t_start - 1] if t_start > 0 else w_prime
+                strain_w = max(0.0, min(1.0, (wb_start - min(wb_slc)) / w_prime))
+            else:
+                strain_w = 0.0
+        else:
+            strain_w = 0.0
+        sev_w = max(pk5, 0.90 * pk60, 0.75 * pk15) + 0.50 * strain_w
+        per_workout_records.append(
+            {
+                "workout_id": wid,
+                "t_start_s": t_start,
+                "t_end_s": t_end,
+                "duration_s": n,
+                "ess": ess_by_workout.get(wid, 0.0),
+                "intensity_avg": intensity_w,
+                "peak_intensity_5min": pk5,
+                "peak_intensity_60s": pk60,
+                "peak_intensity_15s": pk15,
+                "severity_score": sev_w,
+                "severity_bucket": severity_bucket(sev_w) or "Low",
+                "anaerobic_strain": strain_w,
+            }
+        )
+    return per_workout_records
+
+
+def _build_session_timeline(
+    total_session_s,
+    zone_ratio_arr,
+    w_bal_curve,
+    w_prime,
+    I_arr,
+    P_arr,
+):
+    # ----- Timeline (sub-sampled for chart payload) -----
+    # Keep ≤ 1800 points to bound payload size; for workouts ≤ 30 min, full
+    # 1-Hz resolution (1800 pts).  Longer: stride out evenly.  Each kept
+    # timepoint includes the per-zone ratios so the chart can paint the six
+    # band traces as percentages on the right axis.
+    target_points = 1800
+    stride = max(1, total_session_s // target_points)
+    timeline = []
+    for t in range(0, total_session_s, stride):
+        timeline.append(
+            {
+                "t": t,
+                "intensity": I_arr[t],
+                "P": P_arr[t],
+                "w_bal_pct": (
+                    (w_bal_curve[t] / w_prime) if (w_bal_curve and w_prime) else None
+                ),
+                "zones": {d: zone_ratio_arr[d][t] for d in ZONE_BANDS_S},
+            }
+        )
+    return timeline
+
+
+def _calculate_intensity(
+    annotated, total_session_s, session_start, start_dt, ref_watts_at_duration_fn
+):
     # Build per-second arrays.  Initialised to zero so untouched seconds
     # (gaps within the 30-minute session window where no workout is logged)
     # contribute neither power nor intensity.
@@ -713,37 +814,21 @@ def compute_session_metrics(
                 sum_amp += r**amp
             I_arr[t] = INTENSITY_SCALE * (sum_amp**inv_amp)
 
-    # Re-key zone arrays back to ``{band_seconds: [...]}`` for existing
-    # callers (timeline payload, per-segment records).  This is cheap —
-    # we're transferring six list references, not data.
-    zone_ratio_arr = {d: zone_arrs[i] for i, d in enumerate(ZONE_BANDS_S)}
+    return (
+        I_arr,
+        workout_windows,
+        inv_rws,
+        inv_taus,
+        inv_amp,
+        zone_arrs,
+        P_arr,
+        kind_arr,
+        wid_arr,
+        per_segment_records,
+    )
 
-    # ----- ESS -----
-    ess_per_second = [(I_arr[t] * I_arr[t]) * C_ESS for t in range(total_session_s)]
-    ess_total = sum(ess_per_second)
 
-    # Per-workout ESS attribution
-    ess_by_workout: dict = {wid: 0.0 for wid in workout_windows}
-    for t in range(total_session_s):
-        wid = wid_arr[t]
-        if wid is not None:
-            ess_by_workout[wid] += ess_per_second[t]
-
-    # Fill per-segment intensity_avg / ESS now that the I_arr exists.
-    for rec in per_segment_records:
-        s = int(rec["t_session_s"])
-        d = max(1, int(rec["duration_s"] + 0.5))
-        e = min(s + d, total_session_s)
-        if e > s:
-            slc = I_arr[s:e]
-            rec["intensity_avg"] = sum(slc) / len(slc) if slc else 0.0
-            rec["ess"] = sum(ess_per_second[s:e])
-
-    # ----- Peak rolling I(t) (session-level) -----
-    peak_5min = _peak_rolling_mean(I_arr, 300)
-    peak_60s = _peak_rolling_mean(I_arr, 60)
-    peak_15s = _peak_rolling_mean(I_arr, 15)
-
+def _compute_wbal(cp, w_prime, total_session_s, P_arr, kind_arr):
     # ----- W'bal -----
     w_bal_curve: Optional[list] = None
     w_bal_trough: Optional[float] = None
@@ -782,6 +867,106 @@ def compute_session_metrics(
             if w_bal < w_bal_trough:
                 w_bal_trough = w_bal
         anaerobic_strain = max(0.0, min(1.0, 1.0 - w_bal_trough / w_prime))
+    return anaerobic_strain, w_bal_curve, w_bal_trough
+
+
+def compute_session_metrics(
+    session_workouts: list[dict],
+    ref_watts_at_duration_fn: Callable,
+    cp: Optional[float],
+    w_prime: Optional[float],
+) -> dict:
+    """Compute ESS / Severity / Anaerobic Strain across a session timeline.
+
+    Parameters
+    ----------
+    session_workouts:
+        The list of workouts that make up this session.  Order doesn't
+        matter — we re-sort by start datetime internally.
+    ref_watts_at_duration_fn:
+        Callable ``(when: date, duration_s: float) -> Optional[float]``
+        returning the rower's reference watts at a given duration on a
+        given date.  Typically a partial of
+        :func:`services.reference_watts.reference_watts_at_duration`.  Called
+        once per band against the session's representative date (the last
+        workout's date — Concept2 logs end-time).
+    cp:
+        Rower's critical power (watts).  Typically the date-aware 60-min
+        reference watts.  ``None`` disables the W'bal track.
+    w_prime:
+        Rower's anaerobic capacity (joules).  ``None`` disables the
+        W'bal track.
+
+    Returns
+    -------
+    dict matching :func:`_empty_metrics`'s shape.  ``timeline`` is a list of
+    sub-sampled per-second records ``{t, intensity, P, w_bal_pct, zones}``
+    where ``zones`` is a dict mapping band-seconds → ratio.  ``per_workout``
+    attributes session ESS to each constituent workout so summing the
+    column yields the session value exactly.
+    """
+    # Annotate (start_dt, end_dt, w) per workout.
+    annotated: list = []
+    for w in session_workouts:
+        end_dt = _parse_workout_datetime(w.get("date"))
+        if end_dt is None:
+            continue
+        duration_s = _workout_total_duration_s(w)
+        start_dt = end_dt - timedelta(seconds=duration_s)
+        annotated.append((start_dt, end_dt, w))
+
+    if not annotated:
+        return _empty_metrics()
+    annotated.sort(key=lambda x: x[0])
+
+    session_start = annotated[0][0]
+    session_end = max(end for _, end, _ in annotated)
+    total_session_s = max(0, int((session_end - session_start).total_seconds() + 0.5))
+    if total_session_s == 0:
+        return _empty_metrics()
+
+    (
+        I_arr,
+        workout_windows,
+        inv_rws,
+        inv_taus,
+        inv_amp,
+        zone_arrs,
+        P_arr,
+        kind_arr,
+        wid_arr,
+        per_segment_records,
+    ) = _calculate_intensity(
+        annotated, total_session_s, session_start, start_dt, ref_watts_at_duration_fn
+    )
+
+    # Re-key zone arrays back to ``{band_seconds: [...]}`` for existing
+    # callers (timeline payload, per-segment records).  This is cheap —
+    # we're transferring six list references, not data.
+    zone_ratio_arr = {d: zone_arrs[i] for i, d in enumerate(ZONE_BANDS_S)}
+
+    # ----- ESS -----
+    ess_per_second = [(I_arr[t] * I_arr[t]) * C_ESS for t in range(total_session_s)]
+    ess_total = sum(ess_per_second)
+
+    # Fill per-segment intensity_avg / ESS now that the I_arr exists.
+    for rec in per_segment_records:
+        s = int(rec["t_session_s"])
+        d = max(1, int(rec["duration_s"] + 0.5))
+        e = min(s + d, total_session_s)
+        if e > s:
+            slc = I_arr[s:e]
+            rec["intensity_avg"] = sum(slc) / len(slc) if slc else 0.0
+            rec["ess"] = sum(ess_per_second[s:e])
+
+    # ----- Peak rolling I(t) (session-level) -----
+    peak_5min = _peak_rolling_mean(I_arr, 300)
+    peak_60s = _peak_rolling_mean(I_arr, 60)
+    peak_15s = _peak_rolling_mean(I_arr, 15)
+
+    anaerobic_strain, w_bal_curve, w_bal_trough = _compute_wbal(
+        cp, w_prime, total_session_s, P_arr, kind_arr
+    )
 
     # ----- Severity (session-level) -----
     # Severity = peak rolling I(t) over short windows + a strain bonus.
@@ -793,103 +978,19 @@ def compute_session_metrics(
     )
     sev_bucket = severity_bucket(severity_score) or "Low"
 
-    # ----- Per-workout records -----
-    # Per-workout severity / intensity use a *workout-isolated* EMA
-    # simulation — the bands are reset to zero at each workout's start
-    # and the EMAs are run forward only over that workout's seconds.
-    # This is what the column should report:
-    #
-    #   * Cooldown after a max-effort race: the session-level I(t) is
-    #     still high (inherited from the race), but the cooldown's own
-    #     low watts barely fill any band.  Workout-isolated I stays low.
-    #     ⇒ Severity = Low, as the user's intuition demands.
-    #   * 5k race after a warmup: identical to a standalone 5k race.
-    #     The session priming effect is captured in ESS attribution
-    #     (which uses the session-state I(t)), not in this column.
-    #
-    # ESS attribution (above) still uses the time-slice integral of the
-    # session-state I(t), so ``Σ ESS_workout = ESS_session`` exactly.
-    per_workout_records: list = []
-    for wid, (t_start, t_end) in workout_windows.items():
-        n = max(1, t_end - t_start)
-
-        # Workout-isolated EMA simulation — uses the same flat-list /
-        # ``r*r*r`` hot-path as the session-level loop above.  Reuses the
-        # already-computed ``inv_taus`` and ``inv_rws``.
-        ema_w = [0.0] * n_bands
-        I_w_arr: list[float] = []
-        if SIGNAL_AMPLIFIER == 3:
-            for t in range(t_start, t_end):
-                P = P_arr[t]
-                sum_amp_w = 0.0
-                for i in range(n_bands):
-                    e = ema_w[i]
-                    e += (P - e) * inv_taus[i]
-                    ema_w[i] = e
-                    r = e * inv_rws[i]
-                    sum_amp_w += r * r * r
-                I_w_arr.append(INTENSITY_SCALE * (sum_amp_w**inv_amp))
-        else:
-            amp = SIGNAL_AMPLIFIER
-            for t in range(t_start, t_end):
-                P = P_arr[t]
-                sum_amp_w = 0.0
-                for i in range(n_bands):
-                    e = ema_w[i]
-                    e += (P - e) * inv_taus[i]
-                    ema_w[i] = e
-                    r = e * inv_rws[i]
-                    sum_amp_w += r**amp
-                I_w_arr.append(INTENSITY_SCALE * (sum_amp_w**inv_amp))
-
-        # Workout intensity is the arithmetic mean of the workout-isolated
-        # I(t) across this workout's *work-only* seconds.  Excluding rest
-        # seconds keeps the workout-level number aligned with per-segment
-        # values shown in the splits/intervals table.
-        work_intensity_vals = [
-            I_w_arr[t - t_start] for t in range(t_start, t_end) if kind_arr[t] == "work"
-        ]
-        intensity_w = (
-            sum(work_intensity_vals) / len(work_intensity_vals)
-            if work_intensity_vals
-            else 0.0
-        )
-        slc = I_w_arr or [0.0]
-        pk5 = _peak_rolling_mean(slc, 300)
-        pk60 = _peak_rolling_mean(slc, 60)
-        pk15 = _peak_rolling_mean(slc, 15)
-
-        # Anaerobic strain per workout: depletion *caused* by this workout
-        # = (W'bal at workout start − min W'bal during workout) / W'.
-        # A cooldown that starts on an empty reserve and only recovers reads
-        # 0% even though the absolute W'bal level stays low; a race that
-        # drains a fresh reserve to 0 reads 100%.
-        if w_bal_curve is not None and w_prime:
-            wb_slc = w_bal_curve[t_start:t_end]
-            if wb_slc:
-                wb_start = w_bal_curve[t_start - 1] if t_start > 0 else w_prime
-                strain_w = max(0.0, min(1.0, (wb_start - min(wb_slc)) / w_prime))
-            else:
-                strain_w = 0.0
-        else:
-            strain_w = 0.0
-        sev_w = max(pk5, 0.90 * pk60, 0.75 * pk15) + 0.50 * strain_w
-        per_workout_records.append(
-            {
-                "workout_id": wid,
-                "t_start_s": t_start,
-                "t_end_s": t_end,
-                "duration_s": n,
-                "ess": ess_by_workout.get(wid, 0.0),
-                "intensity_avg": intensity_w,
-                "peak_intensity_5min": pk5,
-                "peak_intensity_60s": pk60,
-                "peak_intensity_15s": pk15,
-                "severity_score": sev_w,
-                "severity_bucket": severity_bucket(sev_w) or "Low",
-                "anaerobic_strain": strain_w,
-            }
-        )
+    per_workout_records = _attach_per_workout_records(
+        total_session_s,
+        workout_windows,
+        w_bal_curve,
+        w_prime,
+        P_arr,
+        inv_taus,
+        inv_rws,
+        inv_amp,
+        kind_arr,
+        wid_arr,
+        ess_per_second,
+    )
 
     # ----- Session-level intensity -----
     # Same convention as per-workout intensity: arithmetic mean over
@@ -904,26 +1005,14 @@ def compute_session_metrics(
         else 0.0
     )
 
-    # ----- Timeline (sub-sampled for chart payload) -----
-    # Keep ≤ 1800 points to bound payload size; for workouts ≤ 30 min, full
-    # 1-Hz resolution (1800 pts).  Longer: stride out evenly.  Each kept
-    # timepoint includes the per-zone ratios so the chart can paint the six
-    # band traces as percentages on the right axis.
-    target_points = 1800
-    stride = max(1, total_session_s // target_points)
-    timeline = []
-    for t in range(0, total_session_s, stride):
-        timeline.append(
-            {
-                "t": t,
-                "intensity": I_arr[t],
-                "P": P_arr[t],
-                "w_bal_pct": (
-                    (w_bal_curve[t] / w_prime) if (w_bal_curve and w_prime) else None
-                ),
-                "zones": {d: zone_ratio_arr[d][t] for d in ZONE_BANDS_S},
-            }
-        )
+    timeline = _build_session_timeline(
+        total_session_s,
+        zone_ratio_arr,
+        w_bal_curve,
+        w_prime,
+        I_arr,
+        P_arr,
+    )
 
     return {
         "ess": ess_total,
