@@ -11,7 +11,12 @@ Exported:
 
     normalize_strokes(raw_strokes) → list[dict]
         Convert Concept2 API stroke list (tenths/decimeters) to
-        [{t: secs, d: meters}, …] sorted by t.
+        [{t: secs, d: meters, p, spm, hr}, …] sorted by t.  Per-stroke
+        instantaneous power, stroke rate and heart rate are preserved
+        from the raw API response when present (used by the Erg Stress
+        Score chart for high-resolution IF_eff curves).  Consumers that
+        only need ``t`` and ``d`` (e.g. the race-page payload) can read
+        those fields and ignore the rest.
 
     synthesize_strokes(workout) → list[dict]
         Build synthetic [{t, d}] data from split-level information stored in
@@ -121,12 +126,14 @@ def normalize_strokes(raw_strokes: list[dict]) -> list[dict]:
     """
     Convert Concept2 API stroke records to internal format.
 
-    Input:  [{t: tenths_of_sec, d: decimeters, p: ..., spm: ..., hr: ...}, …]
-    Output: [{t: seconds (float), d: meters (float)}, …] sorted by t.
+    Input:  [{t: tenths_of_sec, d: decimeters, p: watts, spm: int, hr: bpm}, …]
+    Output: [{t: seconds (float), d: meters (float), p: int|None,
+              spm: int|None, hr: int|None}, …] sorted by t.
 
-    Fields other than t and d are stripped from the races payload (they are
-    retained in the raw cache via the full API response stored by
-    fetch_strokes_batch).
+    The per-stroke ``p`` (instantaneous power), ``spm`` and ``hr`` fields are
+    preserved from the raw API response when present so consumers needing
+    high-resolution physiological signals (e.g. the Erg Stress Score chart)
+    can use them.  Race-page consumers ignore the extra fields.
     """
     raw_strokes = ensure_raw_stroke_origin(raw_strokes)
     out = []
@@ -136,9 +143,13 @@ def normalize_strokes(raw_strokes: list[dict]) -> list[dict]:
         if t_raw is None or d_raw is None:
             continue
         try:
-            out.append({"t": float(t_raw) / 10.0, "d": float(d_raw) / 10.0})
+            rec: dict = {"t": float(t_raw) / 10.0, "d": float(d_raw) / 10.0}
         except (TypeError, ValueError):
             continue
+        for key in ("p", "spm", "hr"):
+            v = s.get(key)
+            rec[key] = int(v) if isinstance(v, (int, float)) and v >= 0 else None
+        out.append(rec)
     return sorted(out, key=lambda x: x["t"])
 
 

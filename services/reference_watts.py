@@ -57,6 +57,12 @@ Public API
     After the last marker: use last marker + merge-in any window-local PB using
     "better-of" (not average) — a fresh PB is hard evidence the prediction is
     stale.
+`reference_watts_at_duration(when, duration_s, all_workouts) -> watts | None`
+    Continuous power-duration curve evaluator: looks up the date's discrete
+    cat_key anchors, converts each to (duration, watts), and interpolates
+    piecewise-linearly in log-log space.  Outside the anchor range, extrapolates
+    on the nearest segment's slope.  Used by ESS computation to grade segments
+    of arbitrary duration against the rower's duration-appropriate ability.
 
 Loader-facing API (used only by `components/reference_watts_loader.py`)
 ----------------------------------------------------------------------
@@ -202,6 +208,76 @@ def get_reference_watts(when: date, all_workouts: list) -> dict:
     """
     index = resolve_index(all_workouts)
     return _reference_watts_from_index(when, index, all_workouts)
+
+
+def reference_watts_at_duration(
+    when: date, duration_s: float, all_workouts: list
+) -> Optional[float]:
+    """Return reference watts at an arbitrary duration on a date.
+
+    Builds the rower's continuous power-duration curve at ``when`` by querying
+    :func:`get_reference_watts` to obtain watts at the ranked-event anchors,
+    converting each anchor to a ``(duration_s, watts)`` pair, then
+    interpolating piecewise-linearly in ``log(duration)`` vs ``log(watts)``
+    space.
+
+    Distance anchors are converted to duration via the Concept2 pace formula:
+    ``pace = 500 / (W/2.80)^(1/3)``; ``duration = pace × dist_m / 500``.
+    Time anchors carry their duration directly (``tenths/10``).
+
+    Outside the ``[min_anchor, max_anchor]`` duration range, extrapolates on
+    the nearest segment's log-log slope.  Returns ``None`` if the date has
+    fewer than two populated anchors.
+    """
+    refs = get_reference_watts(when, all_workouts)
+    return _interp_watts_at_duration(refs, duration_s)
+
+
+def _interp_watts_at_duration(
+    refs: dict, duration_s: float
+) -> Optional[float]:
+    """Pure helper: log-log interpolation of (duration, watts) anchors.
+
+    Split out from :func:`reference_watts_at_duration` so hot-loop callers can
+    fetch a date's full ``refs`` dict once and resolve many durations against
+    it without rehitting the index.
+    """
+    if not refs or duration_s <= 0:
+        return None
+    pts: list = []
+    for ck, w in refs.items():
+        if w is None or w <= 0:
+            continue
+        if ck[0] == "time":
+            d = ck[1] / 10.0  # tenths → seconds
+        else:
+            # Distance event: duration = pace × dist / 500
+            pace = 500.0 * (2.80 / w) ** (1.0 / 3.0)
+            d = pace * ck[1] / 500.0
+        if d > 0:
+            pts.append((d, w))
+    if len(pts) < 2:
+        return None
+    pts.sort()
+    # Inside the anchor range: piecewise linear in log-log.
+    if pts[0][0] <= duration_s <= pts[-1][0]:
+        for (d0, w0), (d1, w1) in zip(pts, pts[1:]):
+            if d0 <= duration_s <= d1:
+                if d0 == d1:
+                    return w0
+                ld0, ld1 = math.log(d0), math.log(d1)
+                f = (math.log(duration_s) - ld0) / (ld1 - ld0)
+                return math.exp(math.log(w0) * (1 - f) + math.log(w1) * f)
+        return pts[-1][1]
+    # Outside the range: extrapolate on the nearest segment's log-log slope.
+    if duration_s < pts[0][0]:
+        (d0, w0), (d1, w1) = pts[0], pts[1]
+    else:
+        (d0, w0), (d1, w1) = pts[-2], pts[-1]
+    if d0 == d1:
+        return w0
+    slope = (math.log(w1) - math.log(w0)) / (math.log(d1) - math.log(d0))
+    return math.exp(math.log(w0) + slope * (math.log(duration_s) - math.log(d0)))
 
 
 def resolve_index(all_workouts: list) -> dict:

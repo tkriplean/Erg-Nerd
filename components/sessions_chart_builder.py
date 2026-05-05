@@ -8,7 +8,10 @@ Public surface:
 from __future__ import annotations
 
 import hashlib
+import json
 import math
+import os
+import tempfile
 
 import hyperdiv as hd
 
@@ -46,7 +49,7 @@ from services.volume_bins import (
     compute_bin_thresholds,
     power_bin_passes,
 )
-from services.workout_enrichment import attach_spread_and_quality
+from services.workout_enrichment import attach_ess_metrics, attach_spread_and_quality
 from services.workout_quality import QUALITY_STYLE
 
 
@@ -92,6 +95,32 @@ _WINDOW_DAYS = {
 
 def _hsla(h: int, s: int, l_: int, a: float) -> str:
     return f"hsla({h},{s}%,{l_}%,{a:.2f})"
+
+
+def _dump_workout_to_tmp(workout: dict) -> None:
+    """Write a workout dict to ``$TMPDIR/erg-nerd-workout-<id>.json``.
+
+    Strips fields starting with ``_`` (these are render-time enrichments —
+    SVG bar URIs, segment lists, full timeline arrays — that bloat the file
+    without adding diagnostic value).  Anything else (including ``date_dt``,
+    which we coerce to an ISO string) is preserved.
+    """
+    def _safe(v):
+        if isinstance(v, dict):
+            return {k: _safe(x) for k, x in v.items() if not str(k).startswith("_")}
+        if isinstance(v, (list, tuple)):
+            return [_safe(x) for x in v]
+        try:
+            json.dumps(v)
+            return v
+        except TypeError:
+            return str(v)
+
+    payload = {k: _safe(v) for k, v in workout.items() if not str(k).startswith("_")}
+    wid = workout.get("id") or "unknown"
+    path = os.path.join("tmp", f"erg-nerd-workout-{wid}.json")
+    with open(path, "w") as f:
+        json.dump(payload, f, indent=2, default=str)
 
 
 def _dot_r(meters: float) -> float:
@@ -462,6 +491,7 @@ def sessions_chart(workouts: list) -> None:
     profile = get_profile() or {}
     max_hr, _ = resolve_max_hr(profile, workouts)
     attach_spread_and_quality(workouts, workouts, max_hr)
+    attach_ess_metrics(workouts, workouts, profile, max_hr)
 
     # ── Apply filters ──────────────────────────────────────────────────────────
 
@@ -630,6 +660,15 @@ def sessions_chart(workouts: list) -> None:
         ]
         in_window.sort(key=lambda r: r["date"], reverse=True)
         if in_window:
+            in_window_by_id = {str(r["id"]): r for r in in_window}
+
+            def _on_dump_json(payload):
+                wid = str(payload.get("workout_id"))
+                row = in_window_by_id.get(wid)
+                if not row:
+                    return
+                _dump_workout_to_tmp(row)
+
             with hd.box(padding=(2, 0, 0, 0), align="center"):
                 hd.h2(f"Workouts in View  ({len(in_window)})")
                 WorkoutTable(
@@ -647,6 +686,12 @@ def sessions_chart(workouts: list) -> None:
                         "power_spread",
                         "hr_spread",
                         "quality",
+                        "ess",
+                        "if_eff",
+                        "severity",
+                        "anaerobic_strain",
+                        "dump_json",
                         "link",
                     ],
+                    on_event={"dump_json": _on_dump_json},
                 )

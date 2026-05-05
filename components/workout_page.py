@@ -29,6 +29,7 @@ task-cached so repeated calls within a render cycle are free.
 from __future__ import annotations
 
 import json
+import os
 from typing import Optional
 
 import hyperdiv as hd
@@ -54,7 +55,7 @@ from services.heartrate_utils import (
     resolve_max_hr,
 )
 from services.volume_bins import BIN_COLORS, BIN_NAMES
-from services.workout_enrichment import attach_spread_and_quality
+from services.workout_enrichment import attach_ess_metrics, attach_spread_and_quality
 
 from components.workout_chart_builder import (
     build_interval_rows_and_bands,
@@ -65,6 +66,8 @@ from components.workout_chart_builder import (
     _stitch_interval_times,
 )
 from components.workout_chart_plugin import StrokeChart
+from components.ess_chart_plugin import EffortStressChart
+from components.ess_chart_builder import build_effort_stress_chart_config
 from services.rowing_utils import compute_watts
 
 from components.hyperdiv_extensions import radio_group
@@ -100,6 +103,119 @@ def _spread_stat(label: str, render_inner) -> None:
         render_inner()
 
 
+def _safe_for_json(v):
+    """Recursively coerce a workout dict's value into JSON-serialisable form.
+
+    Drops keys starting with ``_`` (render-time enrichments — SVG bar URIs,
+    full timeline arrays — that bloat the file without adding diagnostic
+    value).  Anything else (including ``date_dt``) is preserved; falls back
+    to ``str(v)`` for non-serialisable leaves.
+    """
+    if isinstance(v, dict):
+        return {
+            k: _safe_for_json(x)
+            for k, x in v.items()
+            if not str(k).startswith("_")
+        }
+    if isinstance(v, (list, tuple)):
+        return [_safe_for_json(x) for x in v]
+    try:
+        json.dumps(v)
+        return v
+    except TypeError:
+        return str(v)
+
+
+def _dump_session_to_tmp(session_workouts: list, current_id) -> str:
+    """Write every workout in a same-day session to ``tmp/session-<id>/``.
+
+    Filenames encode the workout's local time-of-day, distance, watts, and
+    id so they sort chronologically and tell you what they are at a glance:
+    ``HH-MM-SS_<distance>m_<watts>W_<id>.json``.
+
+    The directory is named after the *current* workout's id (the page the
+    user is on when they click the button) so multiple sessions can sit
+    side-by-side without colliding.
+
+    Returns the directory path so callers can surface it in the UI.
+    """
+    sid = current_id if current_id is not None else "unknown"
+    dirpath = os.path.join("tmp", f"session-{sid}")
+    os.makedirs(dirpath, exist_ok=True)
+
+    for w in session_workouts:
+        date_str = w.get("date") or ""
+        # ``date`` is "YYYY-MM-DD HH:MM:SS"; pull the time portion as HH-MM-SS.
+        time_part = (
+            date_str[11:19].replace(":", "-")
+            if len(date_str) >= 19
+            else "unknown"
+        )
+        dist_m = int(w.get("distance") or 0)
+        watts = int(w.get("watts") or 0)
+        wid = w.get("id") or "unknown"
+        filename = f"{time_part}_{dist_m}m_{watts}W_{wid}.json"
+        path = os.path.join(dirpath, filename)
+        payload = {
+            k: _safe_for_json(v)
+            for k, v in w.items()
+            if not str(k).startswith("_")
+        }
+        with open(path, "w") as f:
+            json.dump(payload, f, indent=2, default=str)
+
+    return dirpath
+
+
+def _session_rollup(workout: dict) -> None:
+    """Compact session-level summary panel for the same-day section.
+
+    Rendered above the same-day workouts table when the current workout is
+    part of a multi-workout session.  Surfaces the session's combined ESS,
+    effective IF, peak Severity bucket, anaerobic-strain trough, and total
+    elapsed minutes — quantities that aren't visible from looking at any
+    single workout's columns.
+    """
+    summary = workout.get("_ess_session_summary") or {}
+    members = summary.get("member_ids") or []
+    if not summary or len(members) < 2:
+        return
+
+    sev_bucket = summary.get("severity_bucket")
+    sev_score = summary.get("severity_score") or 0.0
+    sess_ess = summary.get("ess") or 0.0
+    sess_if = summary.get("if_eff_session") or 0.0
+    strain = summary.get("anaerobic_strain") or 0.0
+    duration_s = int(summary.get("duration_s") or 0)
+    minutes = duration_s // 60
+    seconds = duration_s % 60
+
+    with hd.box(
+        padding=(0.75, 1.25, 0.75, 1.25),
+        gap=0.5,
+        border="1px solid neutral-200",
+        border_radius="medium",
+        margin_bottom=1,
+    ):
+        hd.text(
+            f"Session ({len(members)} workouts)",
+            font_size="small",
+            font_color="neutral-500",
+            font_weight="semibold",
+        )
+        with hd.hbox(wrap="wrap", gap=0):
+            _stat("Session ESS", f"{sess_ess:.1f}")
+            _stat("Session IF eff", f"{sess_if:.2f}")
+            if sev_bucket:
+                _stat("Peak Severity", f"{sev_bucket} ({sev_score:.2f})")
+            _stat("W' Used (peak)", f"{round(strain * 100)}%")
+            _stat(
+                "Session Time",
+                f"{minutes}:{seconds:02d}" if minutes < 60
+                else f"{minutes // 60}:{minutes % 60:02d}:{seconds:02d}",
+            )
+
+
 def _summary_section(workout: dict, strokes: Optional[list]) -> None:
     """Compact multi-column stat grid."""
     is_interval = workout["is_interval"]
@@ -130,6 +246,7 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
     has_power_spread = workout.get("_power_spread_score") is not None
     has_hr_spread = workout.get("_hr_spread_score") is not None
     has_quality = workout.get("_quality") is not None
+    has_ess = workout.get("_ess") is not None
 
     with hd.box(grow=True, gap=0.25):
         # ── Top row: Power Spread, HR Spread, Quality ─────────────────────
@@ -174,6 +291,20 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
                             ),
                             is_dark,
                         ),
+                    )
+
+        # ── ESS row: ESS, IF eff, Severity, W' Used ────────────────────
+        if has_ess:
+            with hd.hbox(wrap="wrap", gap=0):
+                _stat("ESS", f"{workout['_ess']:.1f}")
+                if workout.get("_if_eff") is not None:
+                    _stat("IF eff", f"{workout['_if_eff']:.2f}")
+                if workout.get("_severity"):
+                    _stat("Severity", workout["_severity"])
+                if workout.get("_anaerobic_strain") is not None:
+                    _stat(
+                        "W' Used",
+                        f"{round(workout['_anaerobic_strain'] * 100)}%",
                     )
 
         with hd.hbox(wrap="wrap", gap=0):
@@ -696,6 +827,7 @@ def _splits_table(
             focused_idx=focused_idx,
             on_focus=on_focus,
             strokes=strokes,
+            ess_segments=workout.get("_ess_segments"),
         )
         return
 
@@ -726,11 +858,16 @@ def _splits_table(
         return
 
     has_hr = any(sp.get("hr_avg") is not None for sp in splits_data)
+    ess_segments = workout.get("_ess_segments") or []
+    has_if = bool(ess_segments)
     col_w = [2.5, 6, 6, 6, 7, 3.5, 7]
     headers = ["#", "Dist", "Time", "Pace", "Watts", "SPM", "HR"]
     if not has_hr:
         col_w = col_w[:-1]
         headers = headers[:-1]
+    if has_if:
+        col_w.append(4.5)
+        headers.append("IF eff")
 
     _table_frame(
         splits_data,
@@ -740,11 +877,13 @@ def _splits_table(
         ts,
         focused_idx=focused_idx,
         on_focus=on_focus,
-        row_renderer=lambda i, sp, cw: _split_row(i, sp, cw, ts, has_hr),
+        row_renderer=lambda i, sp, cw: _split_row(
+            i, sp, cw, ts, has_hr, ess_segments if has_if else None
+        ),
     )
 
 
-def _split_row(i, sp, col_w, ts, has_hr):
+def _split_row(i, sp, col_w, ts, has_hr, ess_segments=None):
     pace_t = sp.get("pace_tenths")
     avg_w = round(compute_watts(pace_t / 10.0)) if pace_t else None
     max_w = sp.get("max_watts")
@@ -784,6 +923,10 @@ def _split_row(i, sp, col_w, ts, has_hr):
     ]
     if has_hr:
         cells.append((hr_str, col_w[6], None))
+    if ess_segments is not None:
+        seg = ess_segments[i] if i < len(ess_segments) else None
+        if_eff = seg.get("IF_eff_avg") if seg else None
+        cells.append((f"{if_eff:.2f}" if if_eff else "—", col_w[-1], None))
 
     for idx, (val, w, color) in enumerate(cells):
         with hd.scope(f"{idx}"):
@@ -800,6 +943,7 @@ def _intervals_table(
     focused_idx: int = -1,
     on_focus=None,
     strokes: Optional[list] = None,
+    ess_segments: Optional[list] = None,
 ) -> None:
     """
     Render interval-workout intervals table.
@@ -813,12 +957,16 @@ def _intervals_table(
 
     # Detect HR data across work rows only
     has_hr = any(r.get("hr_avg") for r in rows if not r.get("_is_rest"))
+    has_if = bool(ess_segments)
 
     col_w = [2.5, 6, 6, 6, 5, 3.5]
     headers = ["#", "Dist", "Time", "Pace", "W", "SPM"]
     if has_hr:
         col_w.append(5.5)
         headers.append("HR")
+    if has_if:
+        col_w.append(4.5)
+        headers.append("IF eff")
 
     _table_frame(
         rows,
@@ -828,11 +976,13 @@ def _intervals_table(
         ts,
         focused_idx=focused_idx,
         on_focus=on_focus,
-        row_renderer=lambda i, r, cw: _interval_row(i, r, cw, ts, has_hr),
+        row_renderer=lambda i, r, cw: _interval_row(
+            i, r, cw, ts, has_hr, ess_segments if has_if else None
+        ),
     )
 
 
-def _interval_row(i, r, col_w, ts, has_hr):
+def _interval_row(i, r, col_w, ts, has_hr, ess_segments=None):
     is_rest = r.get("_is_rest", False)
     pace_t = r.get("pace_tenths")
     d = r.get("distance") or 0
@@ -844,6 +994,8 @@ def _interval_row(i, r, col_w, ts, has_hr):
     num_str = "" if is_rest else str(r["_work_idx"] + 1)
     if is_rest and d == 0:
         return hd.text(height=0, border=None)
+
+    hr_col_idx = 6 if has_hr else None
 
     cells = [
         (num_str, col_w[0], "neutral-400" if is_rest else "neutral-500"),
@@ -859,6 +1011,10 @@ def _interval_row(i, r, col_w, ts, has_hr):
     ]
     if has_hr:
         cells.append((f"{hr:.0f}" if hr else "", col_w[6], muted))
+    if ess_segments is not None:
+        seg = ess_segments[i] if i < len(ess_segments) else None
+        if_eff = seg.get("IF_eff_avg") if seg else None
+        cells.append((f"{if_eff:.2f}" if if_eff else "—", col_w[-1], muted))
 
     for idx, (val, w, color) in enumerate(cells):
         with hd.scope(f"{idx}"):
@@ -1172,14 +1328,18 @@ def workout_page(session_id: int) -> None:
     _workouts_dict, all_workouts = sync_result
     workout = _workouts_dict.get(str(session_id))
 
-    # Attach Power Spread, HR Spread, and Quality fields so the summary cells
-    # can render them.  Best-effort: if reference watts haven't loaded yet,
-    # the fields stay as None and the summary row hides the cells.
+    # Attach Power Spread, HR Spread, Quality, and ESS family fields so the
+    # summary cells can render them.  Best-effort: if reference watts haven't
+    # loaded yet, the fields stay as None and the summary row hides the cells.
     if workout is not None:
         profile = get_profile() or {}
         max_hr, _ = resolve_max_hr(profile, all_workouts)
         try:
             attach_spread_and_quality([workout], all_workouts, max_hr)
+        except Exception:
+            pass
+        try:
+            attach_ess_metrics([workout], all_workouts, profile, max_hr)
         except Exception:
             pass
 
@@ -1411,12 +1571,30 @@ def workout_page(session_id: int) -> None:
                     on_focus=on_split_focus,
                 )
 
+        # ── Effort & Stress (IF_eff + W'bal time-series) ─────────────────
+        ess_cfg = build_effort_stress_chart_config(
+            workout, is_dark=_theme.is_dark
+        )
+        if ess_cfg:
+            with hd.box(gap=0.5, width="100%"):
+                hd.h2(
+                    "Effort & Stress",
+                    font_weight="semibold",
+                    font_size="x-large",
+                    font_color="neutral-800",
+                )
+                EffortStressChart(config=ess_cfg, height=220)
+
         # ── Similar sessions ─────────────────────────────────────────────
 
         similar = _find_similar(workout, all_workouts)
         if similar:
             try:
                 attach_spread_and_quality(similar, all_workouts, max_hr)
+            except Exception:
+                pass
+            try:
+                attach_ess_metrics(similar, all_workouts, profile, max_hr)
             except Exception:
                 pass
             with hd.box(align="center"):
@@ -1445,6 +1623,10 @@ def workout_page(session_id: int) -> None:
                         "spm",
                         "hr",
                         "quality",
+                        "ess",
+                        "if_eff",
+                        "severity",
+                        "anaerobic_strain",
                         "similarity",
                         compare_col_entry,
                         "link",
@@ -1461,6 +1643,10 @@ def workout_page(session_id: int) -> None:
                         "spm",
                         "hr",
                         "quality",
+                        "ess",
+                        "if_eff",
+                        "severity",
+                        "anaerobic_strain",
                         "similarity",
                         compare_col_entry,
                         "link",
@@ -1491,6 +1677,10 @@ def workout_page(session_id: int) -> None:
                 attach_spread_and_quality(same_day, all_workouts, max_hr)
             except Exception:
                 pass
+            try:
+                attach_ess_metrics(same_day, all_workouts, profile, max_hr)
+            except Exception:
+                pass
             with hd.box(align="center", padding_top=2):
                 hd.h2(
                     "All workouts on this day",
@@ -1498,6 +1688,34 @@ def workout_page(session_id: int) -> None:
                     font_size="x-large",
                     font_color="neutral-800",
                 )
+
+                # Dev affordance: dump every workout in the session to
+                # /tmp/session-<id>/ so the dev (or Claude reviewing real
+                # data) can read the full session payload off disk.
+                _dump_state = hd.state(last_path=None)
+                with hd.hbox(gap=0.5, align="center"):
+                    dump_btn = hd.button(
+                        "Download session",
+                        prefix_icon="download",
+                        size="small",
+                        variant="default",
+                    )
+                    if dump_btn.clicked:
+                        try:
+                            _dump_state.last_path = _dump_session_to_tmp(
+                                same_day, workout.get("id")
+                            )
+                        except Exception as exc:
+                            _dump_state.last_path = f"error: {exc}"
+                    if _dump_state.last_path:
+                        hd.text(
+                            _dump_state.last_path,
+                            font_family="mono",
+                            font_size="small",
+                            font_color="neutral-600",
+                        )
+
+                _session_rollup(workout)
                 day_cols = [
                     "date",
                     "type",
@@ -1509,6 +1727,10 @@ def workout_page(session_id: int) -> None:
                     "spm",
                     "hr",
                     "quality",
+                    "ess",
+                    "if_eff",
+                    "severity",
+                    "anaerobic_strain",
                     {"key": "link", "current_id": str(workout["id"])},
                 ]
                 WorkoutTable(

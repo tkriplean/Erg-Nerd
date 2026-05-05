@@ -40,6 +40,29 @@ mutate each workout dict in-place to attach the heavier metrics:
   _quality_score      float | None   Continuous quality score
   _quality_energy     dict | None    Per-category energy breakdown
 
+``attach_ess_metrics`` is an additional Stage-3 attachment that fills the
+Erg Stress Score family of fields (workout-level, session-aware).  The v2
+model is a multi-band PDC-saturation intensity (see
+:mod:`services.erg_stress`); the attribute names below are kept for
+backwards compatibility with the column registry, but the underlying
+values now derive from ``I(t)`` rather than the v1 single-anchor IF_eff:
+
+  _ess                float | None   This workout's session-aware ESS slice
+  _ess_session        float | None   Total session ESS this workout belongs to
+  _if_eff             float | None   Workout-level intensity (mean of I(t)
+                                     over work-seconds; column header reads
+                                     "Intensity")
+  _if_eff_session     float | None   Session-level intensity
+  _severity           str  | None    "Low"/"Moderate"/"High"/"Maximal"
+  _severity_score     float | None   Continuous severity score
+  _anaerobic_strain   float | None   Skiba W'bal trough fraction, 0..1
+  _w_bal_trough       float | None   Joules at the W'bal trough (for tooltip)
+  _ess_segments       list | None    Per-segment dicts for the splits/intervals table
+  _ess_timeline       list | None    Sub-sampled per-second I(t) / W'bal /
+                                     per-zone-ratio trace (for the chart)
+  _ess_session_summary dict | None   {ess, severity_bucket, duration_s,
+                                      anaerobic_strain, member_ids} for rollup
+
 Every Stage-3 metric is routed through ``services.workout_metrics_cache``
 so repeated renders (and other pages requesting the same workout) reuse
 the result instead of recomputing.  HR-dependent metrics include
@@ -81,6 +104,13 @@ from services.volume_bins import (
 )
 from services.workout_metrics_cache import get_or_compute
 from services.workout_quality import compute_workout_quality
+from services.critical_power_model import fit_critical_power
+from services.erg_stress import (
+    compute_session_metrics,
+    compute_w_prime_estimate,
+    find_session,
+)
+from services.reference_watts import _interp_watts_at_duration
 
 
 # ---------------------------------------------------------------------------
@@ -314,3 +344,204 @@ def attach_quality_only(
         _assign_quality(
             r, _cached_quality(r, h, ref_watts_for, thresholds_for, reference_pbs_for)
         )
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 — Erg Stress Score
+# ---------------------------------------------------------------------------
+
+
+def _ref_watts_at_duration_fn(ref_watts_for: Callable):
+    """Bind a date-aware ref-watts resolver into a ``(date, dur_s) → watts`` callable.
+
+    Caches the per-date refs dict so the inner ``_interp_watts_at_duration``
+    is the only work for repeated duration lookups within one session
+    integration.
+    """
+    cache: dict = {}
+
+    def fn(when, duration_s):
+        if when is None:
+            return None
+        refs = cache.get(when)
+        if refs is None:
+            refs = ref_watts_for({"date_dt": when, "day": when.isoformat()})
+            cache[when] = refs
+        if not refs:
+            return None
+        return _interp_watts_at_duration(refs, duration_s)
+
+    return fn
+
+
+def _cp_w_prime_for_refs(refs: dict, gender: Optional[str]) -> tuple:
+    """Return ``(cp_watts, w_prime_joules, cp_params_or_None)`` from a refs dict.
+
+    Builds a synthetic PB list from the date's ranked-event reference watts
+    and runs :func:`fit_critical_power` over it; the resulting Pow1·tau1
+    feeds :func:`compute_w_prime_estimate`.  Falls back to a population
+    default for W' when the fit doesn't converge.
+
+    CP itself is the rower's 60-min reference watts (``("time", 36000)``);
+    falls back to ``None`` if the anchor is missing.
+    """
+    if not refs:
+        return (None, compute_w_prime_estimate(None, gender), None)
+
+    pb_list = []
+    for ck, watts in refs.items():
+        if watts is None or watts <= 0:
+            continue
+        if ck[0] == "time":
+            d = ck[1] / 10.0
+        else:
+            pace = 500.0 * (2.80 / watts) ** (1.0 / 3.0)
+            d = pace * ck[1] / 500.0
+        pb_list.append({"duration_s": d, "watts": watts})
+
+    cp_params = fit_critical_power(pb_list)
+    cp = refs.get(("time", 36000))
+    w_prime = compute_w_prime_estimate(cp_params, gender)
+    return (cp, w_prime, cp_params)
+
+
+def _session_cache_key(
+    session_workouts: list,
+    h: str,
+    max_hr,
+    gender: Optional[str],
+) -> tuple:
+    """Stable cache key for a session's metrics."""
+    ids = tuple(
+        sorted(w.get("id") for w in session_workouts if w.get("id") is not None)
+    )
+    return ("ess_session", ids, h, max_hr or 0, (gender or "").lower())
+
+
+def _assign_ess(r: dict, sm: Optional[dict], wid) -> None:
+    """Copy session-metric fields onto a workout dict."""
+    if sm is None:
+        for k in (
+            "_ess",
+            "_ess_session",
+            "_if_eff",
+            "_if_eff_session",
+            "_severity",
+            "_severity_score",
+            "_anaerobic_strain",
+            "_w_bal_trough",
+            "_ess_segments",
+            "_ess_timeline",
+            "_ess_session_summary",
+        ):
+            r[k] = None
+        return
+
+    # Find this workout's per-workout slice
+    pw = None
+    for rec in sm.get("per_workout") or []:
+        if rec.get("workout_id") == wid:
+            pw = rec
+            break
+
+    # Per-workout column values (use this workout's slice, not the session's).
+    # Field names use the legacy ``_if_eff`` key for backwards compatibility
+    # with the column registry; the value is the v2 I(t) intensity mean.
+    r["_ess"] = pw["ess"] if pw else None
+    r["_if_eff"] = pw["intensity_avg"] if pw else None
+    r["_severity"] = pw["severity_bucket"] if pw else None
+    r["_severity_score"] = pw["severity_score"] if pw else None
+    r["_anaerobic_strain"] = pw["anaerobic_strain"] if pw else None
+    # Session-level values for the Workout Page summary / rollup widget.
+    r["_ess_session"] = sm.get("ess")
+    r["_if_eff_session"] = sm.get("intensity_session")
+    r["_w_bal_trough"] = sm.get("w_bal_trough")
+    r["_ess_segments"] = [
+        seg for seg in (sm.get("per_segment") or []) if seg.get("workout_id") == wid
+    ]
+    r["_ess_timeline"] = sm.get("timeline")
+    r["_ess_session_summary"] = {
+        "ess": sm.get("ess"),
+        "severity_bucket": sm.get("severity_bucket"),
+        "severity_score": sm.get("severity_score"),
+        "duration_s": sm.get("duration_s"),
+        "anaerobic_strain": sm.get("anaerobic_strain"),
+        "w_bal_trough": sm.get("w_bal_trough"),
+        "if_eff_session": sm.get("intensity_session"),
+        "member_ids": [pw["workout_id"] for pw in (sm.get("per_workout") or [])],
+        "per_workout": sm.get("per_workout"),
+    }
+
+
+def attach_ess_metrics(
+    workouts: list,
+    all_workouts: list,
+    profile: Optional[dict] = None,
+    max_hr: Optional[int] = None,
+    *,
+    thresholds_for: Optional[Callable] = None,
+    ref_watts_for: Optional[Callable] = None,
+    reference_pbs_for: Optional[Callable] = None,
+) -> None:
+    """Attach ESS / Severity / Anaerobic-Strain fields to each workout in-place.
+
+    For each workout in ``workouts``, we identify its session (same-day
+    workouts within a 30-minute gap), compute :func:`compute_session_metrics`
+    once per session, and attribute the per-workout slice onto ``r``.  See
+    the module docstring above for the complete field list.
+
+    ``profile`` is optional — only ``gender`` is used (for the W' default).
+    ``max_hr`` is accepted for signature compatibility with v1 but is
+    ignored — the v2 model is power-only (no HR-track), so workouts
+    lacking power will have ``None`` ESS.
+
+    Uses the central metrics cache keyed by ``("ess_session",
+    sorted_ids_tuple, input_hash, gender, "v2")`` so repeated renders of
+    the same session reuse the result.  The ``"v2"`` literal is part of
+    the key to invalidate v1 cached entries on first render after the
+    multi-band rewrite.
+    """
+    thresholds_for, ref_watts_for, reference_pbs_for = _resolvers(
+        all_workouts, thresholds_for, ref_watts_for, reference_pbs_for
+    )
+
+    h = input_hash(all_workouts)
+    gender = (profile or {}).get("gender")
+    rwd_fn = _ref_watts_at_duration_fn(ref_watts_for)
+
+    # Per-render memo (also avoids redundant cache hits for session-mates).
+    session_memo: dict = {}
+
+    for r in workouts:
+        wid = r.get("id")
+        # Find this workout's session.
+        session = find_session(r, all_workouts)
+        memo_key = tuple(
+            sorted(w.get("id") for w in session if w.get("id") is not None)
+        )
+        sm = session_memo.get(memo_key)
+
+        if sm is None:
+            cache_key_workout_id = memo_key  # tuple of ids — hashable
+            cache_extra = {"gender": (gender or "").lower(), "model": "v2"}
+
+            def _compute(_session=session, _r=r):
+                ref_watts = ref_watts_for(_r)
+                cp, w_prime, _cp_params = _cp_w_prime_for_refs(ref_watts, gender)
+                return compute_session_metrics(
+                    _session,
+                    rwd_fn,
+                    cp=cp,
+                    w_prime=w_prime,
+                )
+
+            sm = get_or_compute(
+                "ess_session",
+                cache_key_workout_id,
+                h,
+                _compute,
+                **cache_extra,
+            )
+            session_memo[memo_key] = sm
+
+        _assign_ess(r, sm, wid)

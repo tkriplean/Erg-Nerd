@@ -129,11 +129,11 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     }
     .struct-btn.active { color: var(--sl-color-primary-500); font-weight: 600; }
 
-    .rank-btn { background: none; border: none; cursor: pointer; padding: 0 0.3rem; font: inherit; color: inherit; }
+    .rank-btn { background: none; border: none; cursor: pointer; padding: 0 0.3rem; font: inherit; color: var(--sl-color-primary-600); }
     .rank-btn:hover { background: var(--sl-color-neutral-100); border-radius: 4px; }
     .rank-btn .row { display: inline-flex; gap: 0.3rem; align-items: center; justify-content: center; }
     .rank-num { font-family: var(--sl-font-mono, monospace); text-align: right; font-size: var(--sl-font-size-small); }
-    .rank-of  { font-size: var(--sl-font-size-x-small); }
+    .rank-of  { font-size: var(--sl-font-size-x-small); text-align: center; }
 
     .pct-whole { font-size: var(--sl-font-size-large); font-weight: 600; }
     .pct-tenth { font-size: var(--sl-font-size-x-small); color: var(--sl-color-neutral-500); padding-top: 0.1rem; }
@@ -286,6 +286,12 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     rank_wr_pct_pace:  (r) => "wr_pct_pace"  in r ? `${r.wr_pct_pace.toFixed(1)}%`  : "—",
     rank_wr_pct_watts: (r) => "wr_pct_watts" in r ? `${r.wr_pct_watts.toFixed(1)}%` : "—",
     rank_wr_pace:      (r) => r.wr_pace ? fmtSplit(Math.round(r.wr_pace * 10)) : "—",
+    // ── ESS family ─────────────────────────────────────────────────────────
+    ess:               (r) => r._ess != null ? r._ess.toFixed(1) : "—",
+    if_eff:            (r) => r._if_eff != null ? r._if_eff.toFixed(2) : "—",
+    anaerobic_strain:  (r) => r._anaerobic_strain != null
+                                ? `${Math.round(r._anaerobic_strain * 100)}%`
+                                : "—",
   };
 
   // ── Sort-key dispatch ────────────────────────────────────────────────────
@@ -310,6 +316,10 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     power_spread:      (r) => r._power_spread_score != null ? r._power_spread_score : -1,
     hr_spread:         (r) => r._hr_spread_score != null ? r._hr_spread_score : -1,
     quality:           (r) => r._quality_score != null ? r._quality_score : -1,
+    ess:               (r) => r._ess != null ? r._ess : -1,
+    if_eff:            (r) => r._if_eff != null ? r._if_eff : -1,
+    severity:          (r) => r._severity_score != null ? r._severity_score : -1,
+    anaerobic_strain:  (r) => r._anaerobic_strain != null ? r._anaerobic_strain : -1,
     rank_event:        (r, opts) => (opts && opts.event_order && opts.event_order[r.event_key]) ?? 99,
     rank_date:         (r) => r.date_iso || "",
     rank_age:          (r) => r.age || 0,
@@ -400,6 +410,15 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       return cb;
     },
 
+    dump_json(r) {
+      if (r.id == null) return emDash();
+      const btn = el("button", {
+        class: "link",
+        onClick: () => emit("dump_json", { workout_id: r.id }),
+      }, "dump");
+      return btn;
+    },
+
     power_spread(r, col) {
       const score = r._power_spread_score;
       const bins = r._bin_meters;
@@ -425,6 +444,20 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       const score = r._quality_score || 0;
       const energy = r._quality_energy || {};
       lazyTooltipWrap(pill, () => _qualityTooltipBody(q, score, energy), "top");
+      return pill;
+    },
+
+    severity(r, col) {
+      const sev = r._severity;
+      if (sev == null) return emDash();
+      const styles = (col.opts && col.opts.severity_styles) || {};
+      const style = styles[sev];
+      if (!style) return text(sev);
+      const pill = el("div", { class: "quality-pill", style: { background: style.bg } },
+        el("span", { class: "label" }, style.label || sev));
+      const score = r._severity_score || 0;
+      const strain = r._anaerobic_strain || 0;
+      lazyTooltipWrap(pill, () => _severityTooltipBody(sev, score, strain), "top");
       return pill;
     },
 
@@ -525,6 +558,20 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     };
     lazyTooltipWrap(trigger, buildBody, "top");
     return trigger;
+  }
+
+  function _severityTooltipBody(sev, score, strain) {
+    const body = el("div", { class: "tt-body quality" });
+    body.appendChild(el("div", { class: "tt-title" }, `${sev} severity`));
+    let headline;
+    if (sev === "Low") headline = `Severity ${score.toFixed(2)} — easy / recovery / base session.`;
+    else if (sev === "Moderate") headline = `Severity ${score.toFixed(2)} — solid moderate session.`;
+    else if (sev === "High") headline = `Severity ${score.toFixed(2)} — sharp threshold / VO2 / intervals.`;
+    else headline = `Severity ${score.toFixed(2)} — race-pace or max effort; high recovery demand.`;
+    body.appendChild(el("div", { class: "tt-headline" }, headline));
+    body.appendChild(el("div", { class: "tt-label" },
+      `W' depleted: ${Math.round(strain * 100)}%`));
+    return body;
   }
 
   function _qualityTooltipBody(q, score, energy) {

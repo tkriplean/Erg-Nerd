@@ -76,6 +76,7 @@ import hyperdiv as hd
 from services.volume_bins import BIN_COLORS, BIN_NAMES, swatch_svg
 from services.heartrate_utils import HR_ZONE_COLORS, HR_ZONE_NAMES
 from services.workout_quality import QUALITY_STYLE
+from services.erg_stress import SEVERITY_STYLE
 from services.formatters import fmt_distance
 
 
@@ -144,6 +145,13 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
     "power_spread":      ColumnDef("power_spread", "Power Spread", "8rem", renderer="power_spread"),
     "hr_spread":         ColumnDef("hr_spread", "HR Spread", "8rem", renderer="hr_spread"),
     "quality":           ColumnDef("quality", "Quality", "6rem", renderer="quality"),
+    # ── ESS family (services/erg_stress.py) ─────────────────────────────
+    "ess":               ColumnDef("ess", "ESS", "5rem", format="ess"),
+    "if_eff":            ColumnDef("if_eff", "Intensity", "6rem", format="if_eff"),
+    "severity":          ColumnDef("severity", "Severity", "7rem", renderer="severity"),
+    "anaerobic_strain":  ColumnDef("anaerobic_strain", "W' Used", "5rem", format="anaerobic_strain"),
+    # ── Dev affordance — emit a "dump_json" event to write the row dict to disk ─
+    "dump_json":         ColumnDef("dump_json", "JSON", "3rem", renderer="dump_json", sortable=False),
     # ── Stateful columns ─────────────────────────────────────────────────
     "structure_filter":  ColumnDef("structure_filter", "Structure", "minmax(8rem,1fr)", renderer="structure_filter", sortable=False),
     "compare":           ColumnDef("compare", "Compare", "5.5rem", renderer="compare", sortable=False),
@@ -356,6 +364,14 @@ def _enrich_opts(key: str, opts: dict) -> dict:
             "quality_styles": {
                 q: {"label": s["label"], "bg": _rgba_css(s["bg"])}
                 for q, s in QUALITY_STYLE.items()
+            },
+        }
+    if key == "severity":
+        return {
+            **opts,
+            "severity_styles": {
+                s: {"label": v["label"], "bg": _rgba_css(v["bg"])}
+                for s, v in SEVERITY_STYLE.items()
             },
         }
     return opts

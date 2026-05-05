@@ -29,16 +29,13 @@ import os
 import hyperdiv as hd
 
 _HERE = os.path.dirname(__file__)
-with open(os.path.join(_HERE, "chart_assets", "workout_chart_plugin.js")) as _f:
-    _STROKE_CHART_JS = _f.read()
 
 
 class StrokeChart(hd.Plugin):
     _name = "StrokeChart"
     _assets_root = os.path.join(_HERE, "chart_assets")
     _assets = [
-        # Shared Chart.js CDN copy — deduplicated by HyperDiv if PowerCurveChart
-        # is already registered on the same page.
+        # Shared Chart.js CDN copy — deduplicated by HyperDiv
         hd.Plugin.js_link(
             "https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"
         ),

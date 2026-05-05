@@ -56,6 +56,8 @@ from services.rowing_utils import (
     is_30r20,
 )
 from services.formatters import format_time, fmt_split
+from services.heartrate_utils import resolve_max_hr
+from services.workout_enrichment import attach_ess_metrics
 from services.stroke_utils import (
     build_races_data,
     build_boat_label,
@@ -393,6 +395,10 @@ def _results_table(workouts: list, etype: str, pb_id: int | None) -> None:
         "drag",
         "spm",
         "hr",
+        "ess",
+        "if_eff",
+        "severity",
+        "anaerobic_strain",
         "link",
     ]
     WorkoutTable(
@@ -731,6 +737,15 @@ def race_page() -> None:
             # ── Results table ─────────────────────────────────────────────────────────
             with hd.box():
                 if racing_workouts:
+                    _max_hr, _ = resolve_max_hr(profile or {}, all_workouts)
+                    try:
+                        attach_ess_metrics(
+                            racing_workouts, all_workouts, profile or {}, _max_hr,
+                        )
+                    except Exception:
+                        # Defensive: if ref-watts haven't loaded, the ESS
+                        # columns simply render "—" rather than blocking.
+                        pass
                     _results_table(racing_workouts, event_type, pb_id)
                 elif not is_loading:
                     with hd.box(padding=3, align="center"):
