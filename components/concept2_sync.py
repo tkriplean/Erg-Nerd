@@ -59,11 +59,18 @@ from components import indexed_db
 from components.indexed_db import (
     META_STORE,
     SCHEMA_VERSION_KEY,
+    SESSIONS_STORE,
     STROKES_STORE,
     WORKOUTS_STORE,
 )
 from services.data_integrity import INTEGRITY_VERSION, normalize_new_workouts
 from services.quarantine import write_quarantine
+from services.sessions import (
+    SESSIONS_SCHEMA_VERSION,
+    SESSIONS_SCHEMA_VERSION_KEY,
+    assign_sessions_incremental,
+    build_sessions_from_scratch,
+)
 from services.workout_enrichment import enrich_all
 from services.concept2_records import (
     age_category as wr_age_category,
@@ -82,6 +89,54 @@ def _fmt_month_year(date_str: str) -> str:
         return datetime.strptime(date_str[:10], "%Y-%m-%d").strftime("%b %Y")
     except Exception:
         return date_str[:7]
+
+
+def _workout_timing_signature(w: dict) -> tuple:
+    """Fields that affect a workout's session bucketing.  When any of these
+    change between ``trusted`` and ``current`` the workout's session needs
+    re-evaluation."""
+    return (
+        w.get("date"),
+        w.get("time"),
+        w.get("rest_time"),
+        w.get("type"),
+    )
+
+
+def _affected_workout_ids(
+    workouts_dict: dict,
+    initial_workouts: dict,
+    initial_sessions: dict,
+) -> set[str]:
+    """Return the set of workout-id strings whose session assignment may
+    need rebuilding.
+
+    Catches:
+      * new workouts (not in the trusted seed),
+      * workouts whose timing fields shifted (e.g. interval repair),
+      * workouts that lack a ``session_id`` (cold-start of feature on an
+        existing user with workouts already in IDB),
+      * workouts referenced by a session record but missing from the
+        current dict (defensive — Concept2 doesn't currently delete).
+    """
+    affected: set[str] = set()
+    initial = initial_workouts or {}
+    for wid, w in workouts_dict.items():
+        prev = initial.get(wid)
+        if prev is None:
+            affected.add(wid)
+            continue
+        if _workout_timing_signature(prev) != _workout_timing_signature(w):
+            affected.add(wid)
+            continue
+        if not w.get("session_id"):
+            affected.add(wid)
+    for sid, rec in (initial_sessions or {}).items():
+        for wid in rec.get("workout_ids") or []:
+            if wid not in workouts_dict:
+                affected.add(wid)
+
+    return affected
 
 
 def _reconcile_machine_filter(ctx) -> str:
@@ -159,6 +214,12 @@ def concept2_sync(client) -> None:
         # AND we delete the public-profile mirror before republishing so a
         # partial failure can't leave stale-rule data published.
         cache_version_ok=False,
+        # Sessions cache state — parallel to ``initial_workouts`` /
+        # ``cache_version_ok``.  ``sessions_cache_ok`` is True only when both
+        # the workouts cache and the sessions cache carried current schema
+        # versions; otherwise sessions are rebuilt from scratch.
+        initial_sessions=None,
+        sessions_cache_ok=False,
         initial_loaded=False,
         synth_cache=None,
         # Public-profile push-on-sync state. Set once per sync-completion; the
@@ -174,10 +235,17 @@ def concept2_sync(client) -> None:
                 hd.spinner()
             return
         # Fire schema-version + getAll in parallel; the IDB queue serialises
-        # them on the JS side but both polling handles resolve independently.
+        # them on the JS side but the polling handles resolve independently.
         schema_cmd = indexed_db.get(META_STORE, SCHEMA_VERSION_KEY)
+        sessions_schema_cmd = indexed_db.get(META_STORE, SESSIONS_SCHEMA_VERSION_KEY)
         workouts_cmd = indexed_db.get_all(WORKOUTS_STORE)
-        if not (schema_cmd.done and workouts_cmd.done):
+        sessions_cmd = indexed_db.get_all(SESSIONS_STORE)
+        if not (
+            schema_cmd.done
+            and sessions_schema_cmd.done
+            and workouts_cmd.done
+            and sessions_cmd.done
+        ):
             with hd.box(align="center", padding=4):
                 hd.spinner()
             return
@@ -208,6 +276,26 @@ def concept2_sync(client) -> None:
                 indexed_db.clear(STROKES_STORE)
             sync_state.initial_workouts = {}
             sync_state.cache_version_ok = False
+
+        # Sessions cache: only honour when the workouts cache is also fresh
+        # (workout start_dt may have shifted via interval repair).
+        cached_sessions = {
+            item["key"]: item["value"] for item in (sessions_cmd.result or [])
+        }
+        sessions_version = (
+            int(sessions_schema_cmd.result)
+            if isinstance(sessions_schema_cmd.result, int)
+            else None
+        )
+        sessions_ok = (
+            sync_state.cache_version_ok and sessions_version == SESSIONS_SCHEMA_VERSION
+        )
+        if not sessions_ok and cached_sessions:
+            indexed_db.clear(SESSIONS_STORE)
+            cached_sessions = {}
+        sync_state.initial_sessions = cached_sessions
+        sync_state.sessions_cache_ok = sessions_ok
+
         sync_state.initial_loaded = True
 
     # ── Step 2: background API sync ──────────────────────────────────────────
@@ -253,6 +341,28 @@ def concept2_sync(client) -> None:
             except Exception as exc:
                 print(f"[concept2_sync] quarantine write failed: {exc}")
 
+        # Sessions: cluster workouts into session records and stamp each
+        # workout with its ``session_id``.  Cold path rebuilds everything;
+        # hot path rebuilds only the (machine, day) buckets touched by new
+        # or changed workouts.  Runs BEFORE the workouts IDB write so the
+        # ``session_id`` field lands in IDB alongside the rest of the
+        # persisted workout dict.
+        if not sync_state.sessions_cache_ok:
+            sessions_dict, mutations = build_sessions_from_scratch(workouts_dict)
+            dropped_session_ids = set()
+        else:
+            affected = _affected_workout_ids(
+                workouts_dict,
+                sync_state.initial_workouts,
+                sync_state.initial_sessions,
+            )
+            sessions_dict, mutations, dropped_session_ids = assign_sessions_incremental(
+                workouts_dict, sync_state.initial_sessions, affected
+            )
+        for wid, sid in mutations.items():
+            if wid in workouts_dict:
+                workouts_dict[wid]["session_id"] = sid
+
         # Persist + public mirror BEFORE enrichment so the canonical
         # normalized shape is what reaches IndexedDB and the public
         # profile directory.  Enrichment fields are derived and re-applied
@@ -263,11 +373,22 @@ def concept2_sync(client) -> None:
                 # IDB readwrite txn so the sync write cost is O(1) round-trips.
                 indexed_db.put_many(WORKOUTS_STORE, workouts_dict)
                 indexed_db.put(META_STORE, SCHEMA_VERSION_KEY, INTEGRITY_VERSION)
+            for sid in dropped_session_ids:
+                indexed_db.delete(SESSIONS_STORE, sid)
+            if sessions_dict:
+                indexed_db.put_many(SESSIONS_STORE, sessions_dict)
+            indexed_db.put(
+                META_STORE, SESSIONS_SCHEMA_VERSION_KEY, SESSIONS_SCHEMA_VERSION
+            )
             sync_state.written = True
 
         if not sync_state.published and not SYNTHETIC_MODE and ctx.profile:
             _maybe_push_on_sync(
-                client, sync_state, workouts_dict, sync_state.cache_version_ok
+                client,
+                sync_state,
+                workouts_dict,
+                sessions_dict,
+                sync_state.cache_version_ok,
             )
 
         # Detach from the dicts that the queued IDB put_many and the
@@ -293,19 +414,35 @@ def concept2_sync(client) -> None:
                 # enriched) plus newly-built synthetic workouts (not).
                 # enrich_for_storage is idempotent, so a second pass is safe.
                 enrich_all(synth_dict)
+                # Synthetic workouts arrive without session_id; cluster the
+                # union so downstream consumers can resolve sessions for them
+                # too.  Cheap — runs once per session and only on the
+                # synthetic path.
+
+                synth_sessions, synth_mutations = build_sessions_from_scratch(
+                    synth_dict
+                )
+                for wid, sid in synth_mutations.items():
+                    if wid in synth_dict:
+                        synth_dict[wid]["session_id"] = sid
                 synth_sorted = sorted(
                     synth_dict.values(),
                     key=lambda r: r.get("date", ""),
                     reverse=True,
                 )
-                sync_state.synth_cache = (synth_dict, synth_sorted)
-            ctx.workouts_dict, ctx.sorted_workouts = sync_state.synth_cache
+                sync_state.synth_cache = (synth_dict, synth_sorted, synth_sessions)
+            (
+                ctx.workouts_dict,
+                ctx.sorted_workouts,
+                ctx.sessions_dict,
+            ) = sync_state.synth_cache
             ctx.all_seasons, ctx.all_machines = derive_filter_metadata(
                 ctx.workouts_dict
             )
             return
         ctx.workouts_dict = workouts_dict
         ctx.sorted_workouts = sorted_workouts
+        ctx.sessions_dict = sessions_dict
         ctx.all_seasons, ctx.all_machines = derive_filter_metadata(workouts_dict)
         return
 
@@ -345,16 +482,22 @@ def concept2_sync(client) -> None:
 
 
 def _maybe_push_on_sync(
-    client, sync_state, workouts_dict: dict, cache_version_ok: bool
+    client,
+    sync_state,
+    workouts_dict: dict,
+    sessions_dict: dict,
+    cache_version_ok: bool,
 ) -> None:
     """
     If the owner has opted in (``profile.public == True``), mirror the freshly
-    synced profile + workouts to the server-side public-profile directory.
+    synced profile + workouts + sessions to the server-side public-profile
+    directory.
 
     When ``cache_version_ok`` is False the localStorage cache was discarded
     due to a data-integrity version bump; the on-disk public mirror may
-    still hold stale-rule data, so we delete it first so a partial republish
-    failure can't leave wrongly-normalized data published.
+    still hold stale-rule data, so we delete the workouts and sessions
+    files first so a partial republish failure can't leave wrongly-clustered
+    or wrongly-normalized data published.
 
     Runs as an ``hd.task`` so the dashboard is not blocked on disk I/O. Flips
     ``sync_state.published`` eagerly so a single sync completion triggers one
@@ -377,18 +520,29 @@ def _maybe_push_on_sync(
 
     push_task = hd.task()
 
-    def _do_push(uid, prof, wkts, force):
+    def _do_push(uid, prof, wkts, sessions, force):
         if force:
             try:
                 public_profiles.delete_workouts(uid)
             except Exception as exc:
                 print(f"[public_profiles] pre-republish delete failed: {exc}")
+            try:
+                public_profiles.delete_sessions(uid)
+            except Exception as exc:
+                print(f"[public_profiles] pre-republish sessions delete failed: {exc}")
         # display_name now lives on the profile dict (populated at OAuth /
         # stale refresh), so no extra /users/me call is needed here.
-        public_profiles.publish_all(uid, prof, wkts)
+        public_profiles.publish_all(uid, prof, wkts, sessions)
 
     if not push_task.running and not push_task.done:
-        push_task.run(_do_push, user_id, profile, workouts_dict, not cache_version_ok)
+        push_task.run(
+            _do_push,
+            user_id,
+            profile,
+            workouts_dict,
+            sessions_dict,
+            not cache_version_ok,
+        )
 
     if push_task.done:
         sync_state.published = True

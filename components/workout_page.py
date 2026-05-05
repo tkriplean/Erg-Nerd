@@ -48,7 +48,7 @@ from components.workout_table import (
     render_quality_cell,
     render_spread_cell,
 )
-from components.app_context import get_profile
+from components.app_context import AppContext, get_profile
 from services.heartrate_utils import (
     HR_ZONE_COLORS,
     HR_ZONE_NAMES,
@@ -1300,7 +1300,6 @@ def _chart_controls(
 def workout_page(workout_id: int) -> None:
     """Render the full-screen workout detail overlay."""
     _theme = hd.theme()
-
     state = hd.state(
         metric="pace",  # "pace" | "watts"
         focused_interval=None,  # int | None  (raw band index)
@@ -1316,6 +1315,8 @@ def workout_page(workout_id: int) -> None:
 
     # ── Pre-fetch workout list (task-cached; free on repeat renders) ────────
     sync_result = sync_workouts()
+    profile = get_profile()
+
     if sync_result is None:
         hd.box(padding=2, min_height="80vh")
         return
@@ -1323,20 +1324,9 @@ def workout_page(workout_id: int) -> None:
     _workouts_dict, all_workouts = sync_result
     workout = _workouts_dict.get(str(workout_id))
 
-    # Attach Power Spread, HR Spread, Quality, and ESS family fields so the
-    # summary cells can render them.  Best-effort: if reference watts haven't
-    # loaded yet, the fields stay as None and the summary row hides the cells.
-    if workout is not None:
-        profile = get_profile() or {}
-        max_hr, _ = resolve_max_hr(profile, all_workouts)
-        try:
-            attach_spread_and_quality([workout], all_workouts, max_hr)
-        except Exception:
-            pass
-        try:
-            attach_ess_metrics([workout], all_workouts, profile, max_hr)
-        except Exception:
-            pass
+    if profile is None or workout is None or AppContext().sessions_dict is None:
+        hd.box(padding=2, min_height="80vh")
+        return
 
     # ── Fetch stroke data (unified via concept2_sync.strokes_for) ────────────
 
@@ -1348,6 +1338,31 @@ def workout_page(workout_id: int) -> None:
     stroke_status = stroke_result["status"]
     stroke_error = stroke_result["error"]
     strokes = stroke_result["strokes"]
+
+    if stroke_status == "loading":
+        hd.box(padding=2, min_height="80vh")
+        return
+
+    # Attach Power Spread, HR Spread, Quality, and ESS family fields so the
+    # summary cells can render them.  Best-effort: if reference watts haven't
+    # loaded yet, the fields stay as None and the summary row hides the cells.
+
+    max_hr, _ = resolve_max_hr(profile, all_workouts)
+    try:
+        attach_spread_and_quality([workout], all_workouts, max_hr)
+    except Exception:
+        pass
+
+    try:
+        attach_ess_metrics(
+            [workout],
+            all_workouts,
+            AppContext().sessions_dict or {},
+            profile,
+            max_hr,
+        )
+    except Exception:
+        pass
 
     # ── Fetch strokes for each compared workout ───────────────────────────────
 
@@ -1587,7 +1602,13 @@ def workout_page(workout_id: int) -> None:
             except Exception:
                 pass
             try:
-                attach_ess_metrics(similar, all_workouts, profile, max_hr)
+                attach_ess_metrics(
+                    similar,
+                    all_workouts,
+                    AppContext().sessions_dict or {},
+                    profile,
+                    max_hr,
+                )
             except Exception:
                 pass
             with hd.box(align="center"):
@@ -1671,7 +1692,13 @@ def workout_page(workout_id: int) -> None:
             except Exception:
                 pass
             try:
-                attach_ess_metrics(same_day, all_workouts, profile, max_hr)
+                attach_ess_metrics(
+                    same_day,
+                    all_workouts,
+                    AppContext().sessions_dict or {},
+                    profile,
+                    max_hr,
+                )
             except Exception:
                 pass
             with hd.box(align="center", padding_top=2):

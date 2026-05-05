@@ -246,7 +246,7 @@ class _ScrollToTop(hd.Plugin):
 # ---------------------------------------------------------------------------
 
 
-# @hd.cached
+@hd.cached
 def _app_footer() -> None:
     import datetime
 

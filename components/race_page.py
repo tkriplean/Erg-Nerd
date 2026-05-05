@@ -740,7 +740,11 @@ def race_page() -> None:
                     _max_hr, _ = resolve_max_hr(profile or {}, all_workouts)
                     try:
                         attach_ess_metrics(
-                            racing_workouts, all_workouts, profile or {}, _max_hr,
+                            racing_workouts,
+                            all_workouts,
+                            AppContext().sessions_dict or {},
+                            profile or {},
+                            _max_hr,
                         )
                     except Exception:
                         # Defensive: if ref-watts haven't loaded, the ESS

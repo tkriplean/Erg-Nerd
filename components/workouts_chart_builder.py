@@ -36,7 +36,7 @@ from services.critical_power_model import (
 )
 from components.workouts_chart_plugin import WorkoutsChart
 from components.workout_table import WorkoutTable
-from components.app_context import get_profile
+from components.app_context import get_profile, AppContext
 from components.reference_watts_loader import reference_watts_loader
 from components.shared_ui import global_filter_ui, header_dropdown
 from components.spread_quality_legends import spread_quality_legends, SpreadQualityFilters
@@ -491,7 +491,7 @@ def workouts_chart(workouts: list) -> None:
     profile = get_profile() or {}
     max_hr, _ = resolve_max_hr(profile, workouts)
     attach_spread_and_quality(workouts, workouts, max_hr)
-    attach_ess_metrics(workouts, workouts, profile, max_hr)
+    attach_ess_metrics(workouts, workouts, AppContext().sessions_dict or {}, profile, max_hr)
 
     # ── Apply filters ──────────────────────────────────────────────────────────
 

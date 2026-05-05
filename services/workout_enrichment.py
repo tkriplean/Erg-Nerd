@@ -108,7 +108,7 @@ from services.critical_power_model import fit_critical_power
 from services.erg_stress import (
     compute_session_metrics,
     compute_w_prime_estimate,
-    find_session,
+    find_session,  # defensive fallback; remove once session_id is universal
 )
 from services.reference_watts import _interp_watts_at_duration
 
@@ -476,6 +476,7 @@ def _assign_ess(r: dict, sm: Optional[dict], wid) -> None:
 def attach_ess_metrics(
     workouts: list,
     all_workouts: list,
+    sessions_dict: dict,
     profile: Optional[dict] = None,
     max_hr: Optional[int] = None,
     *,
@@ -485,10 +486,18 @@ def attach_ess_metrics(
 ) -> None:
     """Attach ESS / Severity / Anaerobic-Strain fields to each workout in-place.
 
-    For each workout in ``workouts``, we identify its session (same-day
-    workouts within a 30-minute gap), compute :func:`compute_session_metrics`
-    once per session, and attribute the per-workout slice onto ``r``.  See
-    the module docstring above for the complete field list.
+    For each workout in ``workouts``, we resolve its session via
+    ``workout["session_id"]`` against ``sessions_dict`` (populated by the
+    sync pipeline; see ``services.sessions``), compute
+    :func:`compute_session_metrics` once per session, and attribute the
+    per-workout slice onto ``r``.  See the module docstring above for the
+    complete field list.
+
+    ``sessions_dict`` is the ``AppContext.sessions_dict`` snapshot —
+    ``{session_id: session_record}``.  Pass ``{}`` if unavailable; the
+    defensive fallback below uses :func:`find_session` for any workout
+    missing a ``session_id`` so the page still renders during the brief
+    cold-start window before the first sync persists clusters.
 
     ``profile`` is optional — only ``gender`` is used (for the W' default).
     ``max_hr`` is accepted for signature compatibility with v1 but is
@@ -497,9 +506,11 @@ def attach_ess_metrics(
 
     Uses the central metrics cache keyed by ``("ess_session",
     sorted_ids_tuple, input_hash, gender, "v2")`` so repeated renders of
-    the same session reuse the result.  The ``"v2"`` literal is part of
-    the key to invalidate v1 cached entries on first render after the
-    multi-band rewrite.
+    the same session reuse the result.  Cache identity is the **sorted
+    member-id tuple**, not ``session_id``, so re-clustering that produces
+    a fresh uid for an unchanged member set hits the same cached entry.
+    The ``"v2"`` literal is part of the key to invalidate v1 cached
+    entries on first render after the multi-band rewrite.
     """
     thresholds_for, ref_watts_for, reference_pbs_for = _resolvers(
         all_workouts, thresholds_for, ref_watts_for, reference_pbs_for
@@ -508,6 +519,10 @@ def attach_ess_metrics(
     h = input_hash(all_workouts)
     gender = (profile or {}).get("gender")
     rwd_fn = _ref_watts_at_duration_fn(ref_watts_for)
+    sessions_dict = sessions_dict or {}
+    by_id = {
+        str(w.get("id")): w for w in all_workouts if w.get("id") is not None
+    }
 
     # Per-render memos.  Two separate caches:
     #
@@ -539,8 +554,20 @@ def attach_ess_metrics(
 
     for r in workouts:
         wid = r.get("id")
-        # Find this workout's session.
-        session = find_session(r, all_workouts)
+        # Resolve this workout's session via session_id; fall back to the
+        # legacy O(N) scan only when the persisted id is missing.
+        sid = r.get("session_id")
+        session_rec = sessions_dict.get(sid) if sid else None
+        if session_rec is not None:
+            session = [
+                by_id[w_id_str]
+                for w_id_str in session_rec.get("workout_ids") or ()
+                if w_id_str in by_id
+            ]
+            if not session:
+                session = [r]
+        else:
+            session = find_session(r, all_workouts)
         memo_key = tuple(
             sorted(w.get("id") for w in session if w.get("id") is not None)
         )

@@ -127,7 +127,7 @@ from services.rowing_utils import (
     compute_watts,
 )
 from components.concept2_sync import sync_workouts
-from components.app_context import get_profile
+from components.app_context import AppContext, get_profile
 from services.rowing_utils import profile_complete
 from services.heartrate_utils import resolve_max_hr
 from services.workout_enrichment import attach_ess_metrics, attach_spread_and_quality
@@ -1183,6 +1183,7 @@ def power_curve_page() -> None:
                 attach_ess_metrics(
                     efforts_filtered_by_event_and_display,
                     _all,
+                    AppContext().sessions_dict or {},
                     profile or {},
                     _max_hr,
                 )

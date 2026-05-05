@@ -14,6 +14,8 @@ Layout on disk
         profile.json            — scrubbed profile (no DOB)
         workouts.zb64           — compressed workouts (same format as
                                   localStorage "workouts")
+        sessions.zb64           — compressed session records mirroring the
+                                  client-side IDB ``sessions`` store
         strokes/
           {result_id}.json      — per-workout stroke arrays, cached
                                   on-owner-view (not eager-prefetched)
@@ -63,7 +65,12 @@ from pathlib import Path
 from typing import Optional
 
 from services.concept2 import load_token
-from services.local_storage_compression import compress_workouts, decompress_workouts
+from services.local_storage_compression import (
+    compress_dict,
+    compress_workouts,
+    decompress_dict,
+    decompress_workouts,
+)
 from services.rowing_utils import age_from_dob
 
 
@@ -109,6 +116,10 @@ def _profile_path(user_id: str) -> Path:
 
 def _workouts_path(user_id: str) -> Path:
     return _user_dir(user_id) / "workouts.zb64"
+
+
+def _sessions_path(user_id: str) -> Path:
+    return _user_dir(user_id) / "sessions.zb64"
 
 
 def _strokes_dir(user_id: str) -> Path:
@@ -271,18 +282,57 @@ def delete_workouts(user_id: str) -> None:
         pass
 
 
+def publish_sessions(user_id: str, sessions_dict: dict) -> None:
+    """
+    Compress + validate + write sessions.zb64.  Mirrors publish_workouts but
+    for the session-cluster records.  Empty sessions dicts are accepted —
+    we still want to clear any prior file.  Requires owner authentication.
+    """
+    if not owner_is_authenticated(user_id):
+        raise PermissionError(f"No token on file for user_id={user_id!r}")
+    if not isinstance(sessions_dict, dict):
+        raise ValueError("sessions_dict is not a dict")
+
+    encoded = compress_dict(sessions_dict or {})
+    size = len(encoded.encode("utf-8"))
+    if size > MAX_WORKOUTS_ZB64_BYTES:
+        raise ValueError(
+            f"Compressed sessions ({size} bytes) exceeds "
+            f"{MAX_WORKOUTS_ZB64_BYTES}-byte ceiling"
+        )
+    _atomic_write_text(_sessions_path(user_id), encoded)
+
+
+def delete_sessions(user_id: str) -> None:
+    """Remove the published sessions file for ``user_id``, if present.
+
+    Mirrors :func:`delete_workouts`; called alongside it when an integrity
+    version bump forces a republish.
+    """
+    if not owner_is_authenticated(user_id):
+        raise PermissionError(f"No token on file for user_id={user_id!r}")
+    path = _sessions_path(user_id)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def publish_all(
     user_id: str,
     profile: dict,
     workouts_dict: dict,
+    sessions_dict: dict,
     display_name: Optional[str] = None,
 ) -> None:
-    """Convenience: publish_profile + publish_workouts in sequence.
+    """Convenience: publish_profile + publish_workouts + publish_sessions
+    in sequence.
 
     ``display_name`` is optional; falls back to ``profile["display_name"]``.
     """
     publish_profile(user_id, profile, display_name)
     publish_workouts(user_id, workouts_dict)
+    publish_sessions(user_id, sessions_dict)
 
 
 def publish_strokes(user_id: str, result_id, strokes: list) -> None:
@@ -336,6 +386,18 @@ def load_public_workouts(user_id: str) -> Optional[dict]:
     except (FileNotFoundError, ValueError):
         return None
     decoded = decompress_workouts(encoded)
+    return decoded or None
+
+
+def load_public_sessions(user_id: str) -> Optional[dict]:
+    """Return ``{session_id: session_record}`` from sessions.zb64, or None
+    when the file is absent or unreadable (callers fall back to rebuilding
+    from workouts in memory)."""
+    try:
+        encoded = _sessions_path(user_id).read_text()
+    except (FileNotFoundError, ValueError):
+        return None
+    decoded = decompress_dict(encoded)
     return decoded or None
 
 

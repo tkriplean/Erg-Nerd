@@ -109,6 +109,12 @@ class AppContext(hd.BaseState):
     # Public mode: written by ``populate_public`` from disk-stored snapshots.
     workouts_dict = hd.Prop(hd.Any, None)
     sorted_workouts = hd.Prop(hd.Any, None)
+    # Session records — ``{session_id: session_record}``.  Owner mode:
+    # written by ``concept2_sync`` from the IDB ``sessions`` store after
+    # cluster assignment.  Public mode: written by ``populate_public`` from
+    # the disk-stored ``sessions.zb64`` mirror, or rebuilt in memory from
+    # the workouts dict when that file is absent (older publishes).
+    sessions_dict = hd.Prop(hd.Any, None)
     # Filter-UI metadata derived from ``workouts_dict`` at population time;
     # consumed by ``components.shared_ui.global_filter_ui``.
     all_seasons = hd.Prop(hd.List(hd.String), [])
@@ -308,6 +314,7 @@ def populate_owner(user_id: str, profile: Optional[dict] = None) -> bool:
     if not same_user:
         ctx.workouts_dict = None
         ctx.sorted_workouts = None
+        ctx.sessions_dict = None
         ctx.all_seasons = []
         ctx.all_machines = []
         ctx.public_profile = None
@@ -325,13 +332,21 @@ def populate_public(user_id: str) -> bool:
     should render the 404 view).
 
     Idempotent: skips writes when (mode, user_id) already match.
+
+    Sessions: when ``sessions.zb64`` is present we load the mirrored cluster
+    records directly.  When it's missing (publishes predating the sessions
+    feature) we rebuild from the workouts dict in memory so consumers that
+    rely on ``ctx.sessions_dict`` keep working — there's no write-back; the
+    next owner-side sync will produce the file.
     """
     from services.public_profiles import (
         exists as pp_exists,
         load_public_profile,
+        load_public_sessions,
         load_public_workouts,
     )
     from services.rowing_utils import derive_filter_metadata
+    from services.sessions import build_sessions_from_scratch
     from services.workout_enrichment import enrich_all
 
     if not pp_exists(user_id):
@@ -344,6 +359,15 @@ def populate_public(user_id: str) -> bool:
     workouts_dict = load_public_workouts(user_id)
     if profile is None or workouts_dict is None:
         return False
+    sessions_dict = load_public_sessions(user_id)
+    if not sessions_dict:
+        # Fallback: rebuild in memory.  We also stamp session_id onto each
+        # workout so attach_ess_metrics can resolve sessions via the same
+        # lookup path used in owner mode.
+        sessions_dict, mutations = build_sessions_from_scratch(workouts_dict)
+        for wid, sid in mutations.items():
+            if wid in workouts_dict:
+                workouts_dict[wid]["session_id"] = sid
     # Stage-2 enrichment matches the owner-mode pipeline so consumers can
     # rely on pace/watts/season/etc. being present regardless of mode.
     enrich_all(workouts_dict)
@@ -357,6 +381,7 @@ def populate_public(user_id: str) -> bool:
     ctx.token_expires_at = 0.0
     ctx.workouts_dict = workouts_dict
     ctx.sorted_workouts = sorted_workouts
+    ctx.sessions_dict = sessions_dict
     ctx.all_seasons, ctx.all_machines = derive_filter_metadata(workouts_dict)
     ctx.public_profile = profile
     ctx.profile = _public_profile_to_local_shape(profile)

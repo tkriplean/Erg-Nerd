@@ -67,11 +67,15 @@ _HERE = os.path.dirname(__file__)
 # Object stores backing the app's client-side caches.
 #   "workouts"  — key = str(workout_id), value = workout dict
 #   "strokes"   — key = str(workout_id), value = raw Concept2 strokes list
-#   "_meta"     — key = "schema_version" → INTEGRITY_VERSION (and similar)
-IDB_STORES = ("workouts", "strokes", "_meta")
+#   "sessions"  — key = session_id (uuid hex), value = session record dict
+#                 (see services.sessions for the schema)
+#   "_meta"     — key = "schema_version" → INTEGRITY_VERSION,
+#                 "sessions_schema_version" → SESSIONS_SCHEMA_VERSION
+IDB_STORES = ("workouts", "strokes", "sessions", "_meta")
 
 WORKOUTS_STORE = "workouts"
 STROKES_STORE = "strokes"
+SESSIONS_STORE = "sessions"
 META_STORE = "_meta"
 SCHEMA_VERSION_KEY = "schema_version"
 

@@ -157,3 +157,25 @@ def decompress_workouts(stored: str) -> dict:
         return {}
 
 
+# ---------------------------------------------------------------------------
+# Generic dict compression — used for session records on the public profile.
+# No per-field stripping; the workout-specific helpers above mangle session
+# records because fields like ``machine`` and ``day`` overlap with Stage-2
+# enrichment names that get dropped on workout compression.
+# ---------------------------------------------------------------------------
+
+
+def compress_dict(payload: dict) -> str:
+    """JSON + zlib(9) + base64 for an arbitrary dict.  No per-field filtering."""
+    raw = json.dumps(payload or {}).encode()
+    return base64.b64encode(zlib.compress(raw, level=9)).decode()
+
+
+def decompress_dict(stored: str) -> dict:
+    """Reverse of :func:`compress_dict`.  Returns ``{}`` on error."""
+    try:
+        return json.loads(zlib.decompress(base64.b64decode(stored)))
+    except Exception:
+        return {}
+
+
