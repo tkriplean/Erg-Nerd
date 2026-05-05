@@ -144,7 +144,7 @@ otherwise balloon the y-axis or visually mislead.
 **Fallback:** if the CP fit is unavailable (too few ranked bests, poor R², etc.),
 keep every workout ≥ 500m.
 
-**Constants** (all in `workouts_chart_builder.py`):
+**Constants** (all in `workouts_page.py`):
 
 | Name | Value | Meaning |
 |---|---|---|
@@ -574,7 +574,7 @@ the totals footer.
 
 | File | Role |
 |---|---|
-| `components/workouts_chart_builder.py` | Data prep, outlier filter, SB detection, interval parsing, point serialisation, HyperDiv component |
+| `components/workouts_page.py` | Data prep, outlier filter, SB detection, interval parsing, point serialisation, HyperDiv component |
 | `components/workouts_chart_plugin.py` | HyperDiv `Plugin` subclass — prop definitions, JS asset registration |
 | `components/rowing_chart_assets/workouts_chart.js` | Chart.js plugin, brush logic, hatch pattern generator, tooltip callbacks |
 | `components/workouts_page.py` | Tab entry point; loads workouts, calls `workouts_chart()` |

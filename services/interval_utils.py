@@ -24,7 +24,7 @@ from __future__ import annotations
 from services.formatters import fmt_tenths
 
 # ---------------------------------------------------------------------------
-# Formatting helpers  (moved verbatim from workouts_chart_builder.py)
+# Formatting helpers
 # ---------------------------------------------------------------------------
 
 
@@ -173,7 +173,7 @@ def _detect_super_block(
 
 
 # ---------------------------------------------------------------------------
-# Interval description  (moved verbatim from workouts_chart_builder.py)
+# Interval description
 # ---------------------------------------------------------------------------
 
 
