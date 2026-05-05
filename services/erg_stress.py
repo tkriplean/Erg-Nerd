@@ -9,7 +9,7 @@ alongside (not replacing) the existing Quality metric in
   60' continuous effort at 60-min reference watts yields ESS ≈ 100.  Strictly
   additive: a session's ESS is the sum of its workouts' ESS, and a workout's
   ESS is the sum of its segments'.
-* **Severity** — peak rolling ``I(t)`` (5-min, 60-s, 15-s windows) plus a
+* **Severity** — peak rolling ``I(t)`` (5-min, 60-s, 20-s windows) plus a
   contribution from anaerobic depletion.  Bucketed Low / Moderate / High /
   Maximal.  Captures recovery demand independently of total volume.
 * **Anaerobic Strain** — Skiba (2012) W'bal model.  Reports
@@ -472,7 +472,7 @@ def _empty_metrics() -> dict:
         "intensity_session": 0.0,
         "peak_intensity_5min": 0.0,
         "peak_intensity_60s": 0.0,
-        "peak_intensity_15s": 0.0,
+        "peak_intensity_20s": 0.0,
         "severity_score": 0.0,
         "severity_bucket": "Low",
         "anaerobic_strain": 0.0,
@@ -591,7 +591,7 @@ def _attach_per_workout_records(
         slc = I_w_arr or [0.0]
         pk5 = _peak_rolling_mean(slc, 300)
         pk60 = _peak_rolling_mean(slc, 60)
-        pk15 = _peak_rolling_mean(slc, 15)
+        pk20 = _peak_rolling_mean(slc, 20)
 
         # Anaerobic strain per workout: depletion *caused* by this workout
         # = (W'bal at workout start − min W'bal during workout) / W'.
@@ -607,7 +607,8 @@ def _attach_per_workout_records(
                 strain_w = 0.0
         else:
             strain_w = 0.0
-        sev_w = max(pk5, 0.90 * pk60, 0.75 * pk15) + 0.50 * strain_w
+
+        sev_w = _calc_severity(pk5, pk60, pk20, strain_w)
         per_workout_records.append(
             {
                 "workout_id": wid,
@@ -618,13 +619,17 @@ def _attach_per_workout_records(
                 "intensity_avg": intensity_w,
                 "peak_intensity_5min": pk5,
                 "peak_intensity_60s": pk60,
-                "peak_intensity_15s": pk15,
+                "peak_intensity_20s": pk20,
                 "severity_score": sev_w,
                 "severity_bucket": severity_bucket(sev_w) or "Low",
                 "anaerobic_strain": strain_w,
             }
         )
     return per_workout_records
+
+
+def _calc_severity(pk5, pk60, pk20, anaerobic_strain):
+    return max(pk5, pk60, pk20) + 0.50 * anaerobic_strain
 
 
 def _build_session_timeline(
@@ -910,7 +915,7 @@ def compute_session_metrics(
     # ----- Peak rolling I(t) (session-level) -----
     peak_5min = _peak_rolling_mean(I_arr, 300)
     peak_60s = _peak_rolling_mean(I_arr, 60)
-    peak_15s = _peak_rolling_mean(I_arr, 15)
+    peak_20s = _peak_rolling_mean(I_arr, 20)
 
     anaerobic_strain, w_bal_curve, w_bal_trough = _compute_wbal(
         cp, w_prime, total_session_s, P_arr, kind_arr
@@ -921,9 +926,7 @@ def compute_session_metrics(
     # The strain term rescues short max-efforts that don't sustain long
     # enough for the long-band EMAs to climb (e.g. a 2k PB peaks ~1.1 in I
     # but fully drains W'bal — the +0.5·strain pushes it past 1.4 → Maximal).
-    severity_score = (
-        max(peak_5min, 0.90 * peak_60s, 0.75 * peak_15s) + 0.50 * anaerobic_strain
-    )
+    severity_score = _calc_severity(peak_5min, peak_60s, peak_20s, anaerobic_strain)
     sev_bucket = severity_bucket(severity_score) or "Low"
 
     per_workout_records = _attach_per_workout_records(
@@ -967,7 +970,7 @@ def compute_session_metrics(
         "intensity_session": intensity_session,
         "peak_intensity_5min": peak_5min,
         "peak_intensity_60s": peak_60s,
-        "peak_intensity_15s": peak_15s,
+        "peak_intensity_20s": peak_20s,
         "severity_score": severity_score,
         "severity_bucket": sev_bucket,
         "anaerobic_strain": anaerobic_strain,
