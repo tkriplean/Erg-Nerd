@@ -124,51 +124,97 @@ class ColumnDef:
 
 COLUMN_REGISTRY: dict[str, ColumnDef] = {
     # ── Workout columns ─────────────────────────────────────────────────
-    "date":              ColumnDef("date", "Date", "10rem", format="date"),
-    "type":              ColumnDef("type", "Type", "7rem", format="type"),
-    "distance":          ColumnDef("distance", "Distance", "7rem", format="distance", align="end"),
-    "time":              ColumnDef("time", "Time", "7rem", format="time", align="end"),
-    "pace":              ColumnDef("pace", "Pace /500m", "7rem", format="pace", default_asc=True),
-    "watts":             ColumnDef("watts", "Watts", "5rem", format="watts"),
-    "drag":              ColumnDef("drag", "Drag", "5rem", format="drag"),
-    "spm":               ColumnDef("spm", "SPM", "4rem", format="spm"),
-    "hr":                ColumnDef("hr", "HR", "8rem", format="hr"),
-    "season":            ColumnDef("season", "Season", "6rem", format="season"),
-    "link":              ColumnDef("link", "", "2.5rem", renderer="link", sortable=False),
-    "structure":         ColumnDef("structure", "Intervals", "minmax(8rem,1fr)", format="structure", align="start"),
-    "reps":              ColumnDef("reps", "Reps", "4rem", format="reps"),
-    "work_pace":         ColumnDef("work_pace", "Avg Split", "7rem", format="work_pace", default_asc=True),
-    "work_spm":          ColumnDef("work_spm", "SPM", "4rem", format="work_spm"),
-    "stimulus":          ColumnDef("stimulus", "Stimulus", "10rem", renderer="stimulus", sortable=False),
-    "workout_structure": ColumnDef("workout_structure", "Intervals", "minmax(8rem,1fr)", format="workout_structure", align="start"),
-    "similarity":        ColumnDef("similarity", "Similarity", "6rem", format="similarity"),
-    "power_spread":      ColumnDef("power_spread", "Power Spread", "8rem", renderer="power_spread"),
-    "hr_spread":         ColumnDef("hr_spread", "HR Spread", "8rem", renderer="hr_spread"),
-    "quality":           ColumnDef("quality", "Quality", "6rem", renderer="quality"),
+    "date": ColumnDef("date", "Date", "10rem", format="date"),
+    "type": ColumnDef("type", "Type", "7rem", format="type"),
+    "distance": ColumnDef(
+        "distance", "Distance", "7rem", format="distance", align="end"
+    ),
+    "time": ColumnDef("time", "Time", "7rem", format="time", align="end"),
+    "pace": ColumnDef("pace", "Pace /500m", "7rem", format="pace", default_asc=True),
+    "watts": ColumnDef("watts", "Watts", "5rem", format="watts"),
+    "drag": ColumnDef("drag", "Drag", "5rem", format="drag"),
+    "spm": ColumnDef("spm", "SPM", "4rem", format="spm"),
+    # "hr": ColumnDef("hr", "HR", "8rem", format="hr"),
+    "season": ColumnDef("season", "Season", "6rem", format="season"),
+    "link": ColumnDef("link", "", "2.5rem", renderer="link", sortable=False),
+    "structure": ColumnDef(
+        "structure", "Intervals", "minmax(8rem,1fr)", format="structure", align="start"
+    ),
+    "reps": ColumnDef("reps", "Reps", "4rem", format="reps"),
+    "work_pace": ColumnDef(
+        "work_pace", "Avg Split", "7rem", format="work_pace", default_asc=True
+    ),
+    "work_spm": ColumnDef("work_spm", "SPM", "4rem", format="work_spm"),
+    "stimulus": ColumnDef(
+        "stimulus", "Stimulus", "10rem", renderer="stimulus", sortable=False
+    ),
+    "workout_structure": ColumnDef(
+        "workout_structure",
+        "Intervals",
+        "minmax(8rem,1fr)",
+        format="workout_structure",
+        align="start",
+    ),
+    "similarity": ColumnDef("similarity", "Similarity", "6rem", format="similarity"),
+    "power_spread": ColumnDef(
+        "power_spread", "Power Spread", "8rem", renderer="power_spread"
+    ),
+    "hr": ColumnDef("hr", "HR Spread", "8rem", renderer="hr_spread"),
+    "quality": ColumnDef("quality", "Quality", "6rem", renderer="quality"),
     # ── ESS family (services/erg_stress.py) ─────────────────────────────
-    "ess":               ColumnDef("ess", "ESS", "5rem", format="ess"),
-    "if_eff":            ColumnDef("if_eff", "Intensity", "6rem", format="if_eff"),
-    "severity":          ColumnDef("severity", "Severity", "7rem", renderer="severity"),
-    "anaerobic_strain":  ColumnDef("anaerobic_strain", "W' Used", "5rem", format="anaerobic_strain"),
-    # ── Dev affordance — emit a "dump_json" event to write the row dict to disk ─
-    "dump_json":         ColumnDef("dump_json", "JSON", "3rem", renderer="dump_json", sortable=False),
+    "ess": ColumnDef("ess", "ESS", "5rem", format="ess"),
+    "if_eff": ColumnDef("if_eff", "Intensity", "6rem", format="if_eff"),
+    "severity": ColumnDef("severity", "Severity", "7rem", renderer="severity"),
+    "anaerobic_strain": ColumnDef(
+        "anaerobic_strain", "W' Used", "5rem", format="anaerobic_strain"
+    ),
     # ── Stateful columns ─────────────────────────────────────────────────
-    "structure_filter":  ColumnDef("structure_filter", "Structure", "minmax(8rem,1fr)", renderer="structure_filter", sortable=False),
-    "compare":           ColumnDef("compare", "Compare", "5.5rem", renderer="compare", sortable=False),
+    "structure_filter": ColumnDef(
+        "structure_filter",
+        "Structure",
+        "minmax(8rem,1fr)",
+        renderer="structure_filter",
+        sortable=False,
+    ),
+    "compare": ColumnDef(
+        "compare", "Compare", "5.5rem", renderer="compare", sortable=False
+    ),
     # ── Rank-page columns ────────────────────────────────────────────────
-    "rank_event":        ColumnDef("rank_event", "Event", "7rem", format="rank_event", default_asc=True),
-    "rank_date":         ColumnDef("rank_date", "Date", "9rem", format="rank_date"),
-    "rank_age":          ColumnDef("rank_age", "Age", "4rem", format="rank_age"),
-    "rank_age_group":    ColumnDef("rank_age_group", "Age Group", "6rem", format="rank_age_group"),
-    "rank_result":       ColumnDef("rank_result", "Result", "7rem", format="rank_result", align="end"),
-    "rank_pace":         ColumnDef("rank_pace", "Pace", "6rem", format="rank_pace", default_asc=True),
-    "rank_watts":        ColumnDef("rank_watts", "Watts", "5rem", format="rank_watts"),
-    "rank_wr_pct_pace":  ColumnDef("rank_wr_pct_pace", "% WR Pace", "6rem", format="rank_wr_pct_pace"),
-    "rank_wr_pct_watts": ColumnDef("rank_wr_pct_watts", "% WR Watts", "6rem", format="rank_wr_pct_watts"),
-    "rank_wr_pace":      ColumnDef("rank_wr_pace", "WR Pace", "6rem", format="rank_wr_pace", default_asc=True),
-    "rank":              ColumnDef("rank", "Rank", "9rem", renderer="rank", default_asc=True),
-    "rank_percentile":   ColumnDef("rank_percentile", "%ile", "5rem", renderer="rank_percentile"),
-    "rank_distribution": ColumnDef("rank_distribution", "Watts Distribution", "minmax(10rem,1fr)", renderer="rank_distribution", sortable=False),
+    "rank_event": ColumnDef(
+        "rank_event", "Event", "7rem", format="rank_event", default_asc=True
+    ),
+    "rank_date": ColumnDef("rank_date", "Date", "9rem", format="rank_date"),
+    "rank_age": ColumnDef("rank_age", "Age", "4rem", format="rank_age"),
+    "rank_age_group": ColumnDef(
+        "rank_age_group", "Age Group", "6rem", format="rank_age_group"
+    ),
+    "rank_result": ColumnDef(
+        "rank_result", "Result", "7rem", format="rank_result", align="end"
+    ),
+    "rank_pace": ColumnDef(
+        "rank_pace", "Pace", "6rem", format="rank_pace", default_asc=True
+    ),
+    "rank_watts": ColumnDef("rank_watts", "Watts", "5rem", format="rank_watts"),
+    "rank_wr_pct_pace": ColumnDef(
+        "rank_wr_pct_pace", "% WR Pace", "6rem", format="rank_wr_pct_pace"
+    ),
+    "rank_wr_pct_watts": ColumnDef(
+        "rank_wr_pct_watts", "% WR Watts", "6rem", format="rank_wr_pct_watts"
+    ),
+    "rank_wr_pace": ColumnDef(
+        "rank_wr_pace", "WR Pace", "6rem", format="rank_wr_pace", default_asc=True
+    ),
+    "rank": ColumnDef("rank", "Rank", "9rem", renderer="rank", default_asc=True),
+    "rank_percentile": ColumnDef(
+        "rank_percentile", "%ile", "5rem", renderer="rank_percentile"
+    ),
+    "rank_distribution": ColumnDef(
+        "rank_distribution",
+        "Watts Distribution",
+        "minmax(10rem,1fr)",
+        renderer="rank_distribution",
+        sortable=False,
+    ),
 }
 
 
@@ -340,6 +386,7 @@ def _theme_swatches(zone_colors, is_dark: bool) -> list[str]:
 
 def _enrich_opts(key: str, opts: dict) -> dict:
     """Add theme-dependent or constant resources to a column's opts."""
+    print(key)
     if key == "power_spread":
         return {
             **opts,
@@ -349,7 +396,7 @@ def _enrich_opts(key: str, opts: dict) -> dict:
             "bar_w": _SPREAD_BAR_WIDTH,
             "bar_h": _SPREAD_BAR_HEIGHT,
         }
-    if key == "hr_spread":
+    if key == "hr":
         return {
             **opts,
             "swatch_uris": _theme_swatches(HR_ZONE_COLORS, hd.theme().is_dark),
@@ -392,10 +439,34 @@ def _json_safe(v):
     return v
 
 
+# Heavy enrichment fields that are *only* consumed by Python-side Workout-Page
+# rendering (charts, rollup widgets, splits-table builders) — never read by
+# the JS table plugin.  Shipping them through ``_row_for_js`` once per row
+# was the dominant render cost on the Sessions page once the ESS family
+# landed: ``_ess_timeline`` alone is ~1800 timepoints × six per-zone ratios
+# per workout.  Skipping them at JSON-serialisation time cut the
+# Sessions-page render from ~25 s to ~0.5 s in profiling.
+#
+# Do NOT add ``_bin_meters`` / ``_hr_bin_meters`` / ``_quality_energy`` to
+# this set — they're small AND the JS plugin reads them (power/HR-spread
+# tooltip bars, quality tooltip top-3 categories).
+_TABLE_IRRELEVANT_KEYS: frozenset = frozenset(
+    {
+        "_ess_timeline",
+        "_ess_segments",
+        "_ess_session_summary",
+    }
+)
+
+
 def _row_for_js(r: dict) -> dict:
-    """Coerce a row dict into JSON-safe form for the JS plugin.  Cost is
-    paid once per render."""
-    return {k: _json_safe(v) for k, v in r.items()}
+    """Coerce a row dict into JSON-safe form for the JS plugin.
+
+    Heavy Python-only enrichment fields (see :data:`_TABLE_IRRELEVANT_KEYS`)
+    are skipped — they bloat the JS payload without ever being read.  Cost
+    is paid once per render.
+    """
+    return {k: _json_safe(v) for k, v in r.items() if k not in _TABLE_IRRELEVANT_KEYS}
 
 
 def _compile_column(entry) -> dict:
@@ -469,9 +540,7 @@ def WorkoutTable(
     column_configs = [_compile_column(c) for c in columns]
 
     if highlight is not None:
-        highlight_ids = [
-            r["id"] for r in results if "id" in r and highlight(r)
-        ]
+        highlight_ids = [r["id"] for r in results if "id" in r and highlight(r)]
     else:
         highlight_ids = []
 

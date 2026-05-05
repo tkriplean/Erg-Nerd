@@ -662,12 +662,6 @@ def sessions_chart(workouts: list) -> None:
         if in_window:
             in_window_by_id = {str(r["id"]): r for r in in_window}
 
-            def _on_dump_json(payload):
-                wid = str(payload.get("workout_id"))
-                row = in_window_by_id.get(wid)
-                if not row:
-                    return
-                _dump_workout_to_tmp(row)
 
             with hd.box(padding=(2, 0, 0, 0), align="center"):
                 hd.h2(f"Workouts in View  ({len(in_window)})")
@@ -684,14 +678,11 @@ def sessions_chart(workouts: list) -> None:
                         "spm",
                         "hr",
                         "power_spread",
-                        "hr_spread",
                         "quality",
                         "ess",
                         "if_eff",
                         "severity",
                         "anaerobic_strain",
-                        "dump_json",
                         "link",
-                    ],
-                    on_event={"dump_json": _on_dump_json},
+                    ]
                 )

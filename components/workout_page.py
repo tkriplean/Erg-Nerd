@@ -113,9 +113,7 @@ def _safe_for_json(v):
     """
     if isinstance(v, dict):
         return {
-            k: _safe_for_json(x)
-            for k, x in v.items()
-            if not str(k).startswith("_")
+            k: _safe_for_json(x) for k, x in v.items() if not str(k).startswith("_")
         }
     if isinstance(v, (list, tuple)):
         return [_safe_for_json(x) for x in v]
@@ -147,9 +145,7 @@ def _dump_session_to_tmp(session_workouts: list, current_id) -> str:
         date_str = w.get("date") or ""
         # ``date`` is "YYYY-MM-DD HH:MM:SS"; pull the time portion as HH-MM-SS.
         time_part = (
-            date_str[11:19].replace(":", "-")
-            if len(date_str) >= 19
-            else "unknown"
+            date_str[11:19].replace(":", "-") if len(date_str) >= 19 else "unknown"
         )
         dist_m = int(w.get("distance") or 0)
         watts = int(w.get("watts") or 0)
@@ -157,9 +153,7 @@ def _dump_session_to_tmp(session_workouts: list, current_id) -> str:
         filename = f"{time_part}_{dist_m}m_{watts}W_{wid}.json"
         path = os.path.join(dirpath, filename)
         payload = {
-            k: _safe_for_json(v)
-            for k, v in w.items()
-            if not str(k).startswith("_")
+            k: _safe_for_json(v) for k, v in w.items() if not str(k).startswith("_")
         }
         with open(path, "w") as f:
             json.dump(payload, f, indent=2, default=str)
@@ -211,7 +205,8 @@ def _session_rollup(workout: dict) -> None:
             _stat("W' Used (peak)", f"{round(strain * 100)}%")
             _stat(
                 "Session Time",
-                f"{minutes}:{seconds:02d}" if minutes < 60
+                f"{minutes}:{seconds:02d}"
+                if minutes < 60
                 else f"{minutes // 60}:{minutes % 60:02d}:{seconds:02d}",
             )
 
@@ -1572,9 +1567,7 @@ def workout_page(session_id: int) -> None:
                 )
 
         # ── Effort & Stress (IF_eff + W'bal time-series) ─────────────────
-        ess_cfg = build_effort_stress_chart_config(
-            workout, is_dark=_theme.is_dark
-        )
+        ess_cfg = build_effort_stress_chart_config(workout, is_dark=_theme.is_dark)
         if ess_cfg:
             with hd.box(gap=0.5, width="100%"):
                 hd.h2(

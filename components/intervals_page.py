@@ -980,7 +980,7 @@ def intervals_page() -> None:
         },
         "stimulus",
         "power_spread",
-        "hr_spread",
+        "hr",
         "quality",
         {"key": "distance", "header": "Work", "width": "6rem"},
         "work_pace",

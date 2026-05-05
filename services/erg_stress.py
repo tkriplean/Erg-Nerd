@@ -665,24 +665,58 @@ def compute_session_metrics(
         rw_d[d] = float(rw) if (rw and rw > 0) else 0.0
 
     # ----- Run 6 EMAs forward in lock-step; build I(t) and per-zone traces -----
-    ema = {d: 0.0 for d in ZONE_BANDS_S}
-    taus = {d: _tau(d) for d in ZONE_BANDS_S}
+    # The inner loop runs ~once per second of session × six bands; in pure
+    # Python that's the dominant cost on the Sessions page (every visible
+    # session triggers it on cache miss).  We flatten band-keyed dicts
+    # into parallel lists indexed by band index so the inner loop sees no
+    # dict lookups, and we specialise for the common SIGNAL_AMPLIFIER=3
+    # case (cube via ``r*r*r`` is ~3× faster than ``math.pow(r, 3)`` since
+    # the latter pays C-FFI + log/exp cost).
+    n_bands = len(ZONE_BANDS_S)
+    ema = [0.0] * n_bands
+    taus_list = [_tau(d) for d in ZONE_BANDS_S]
+    rws_list = [rw_d[d] for d in ZONE_BANDS_S]
+    inv_rws = [(1.0 / rw if rw > 0 else 0.0) for rw in rws_list]
+    inv_taus = [1.0 / tau for tau in taus_list]
     I_arr = [0.0] * total_session_s
-    zone_ratio_arr = {d: [0.0] * total_session_s for d in ZONE_BANDS_S}
+    # Per-band zone-ratio time-series.  Kept as a list-of-lists so the
+    # inner loop can index without hashing.  We re-key by band-seconds
+    # at the end of the function for the existing return shape.
+    zone_arrs = [[0.0] * total_session_s for _ in ZONE_BANDS_S]
+    inv_amp = 1.0 / SIGNAL_AMPLIFIER
 
-    for t in range(total_session_s):
-        P = P_arr[t]
-        sum_sq = 0.0
-        for d in ZONE_BANDS_S:
-            # Forward Euler with dt=1; effective τ = d · EMA_TAU_FACTORS[d].
-            # Smallest τ (20 s × 0.30 = 6 s) keeps Euler ratio 1/τ ≈ 0.17,
-            # still well-behaved.
-            ema[d] += (P - ema[d]) / taus[d]
-            rw = rw_d[d]
-            r = (ema[d] / rw) if rw > 0 else 0.0
-            zone_ratio_arr[d][t] = r
-            sum_sq += math.pow(r, SIGNAL_AMPLIFIER)
-        I_arr[t] = INTENSITY_SCALE * math.pow(sum_sq, 1.0 / SIGNAL_AMPLIFIER)
+    if SIGNAL_AMPLIFIER == 3:
+        # Hot-path specialisation: cube via plain multiplication.
+        for t in range(total_session_s):
+            P = P_arr[t]
+            sum_amp = 0.0
+            for i in range(n_bands):
+                e = ema[i]
+                e += (P - e) * inv_taus[i]
+                ema[i] = e
+                r = e * inv_rws[i]
+                zone_arrs[i][t] = r
+                sum_amp += r * r * r
+            I_arr[t] = INTENSITY_SCALE * (sum_amp ** inv_amp)
+    else:
+        # General-case fallback for any SIGNAL_AMPLIFIER value.
+        amp = SIGNAL_AMPLIFIER
+        for t in range(total_session_s):
+            P = P_arr[t]
+            sum_amp = 0.0
+            for i in range(n_bands):
+                e = ema[i]
+                e += (P - e) * inv_taus[i]
+                ema[i] = e
+                r = e * inv_rws[i]
+                zone_arrs[i][t] = r
+                sum_amp += r ** amp
+            I_arr[t] = INTENSITY_SCALE * (sum_amp ** inv_amp)
+
+    # Re-key zone arrays back to ``{band_seconds: [...]}`` for existing
+    # callers (timeline payload, per-segment records).  This is cheap —
+    # we're transferring six list references, not data.
+    zone_ratio_arr = {d: zone_arrs[i] for i, d in enumerate(ZONE_BANDS_S)}
 
     # ----- ESS -----
     ess_per_second = [(I_arr[t] * I_arr[t]) * C_ESS for t in range(total_session_s)]
@@ -779,18 +813,34 @@ def compute_session_metrics(
     for wid, (t_start, t_end) in workout_windows.items():
         n = max(1, t_end - t_start)
 
-        # Workout-isolated EMA simulation.
-        ema_w = {d: 0.0 for d in ZONE_BANDS_S}
+        # Workout-isolated EMA simulation — uses the same flat-list /
+        # ``r*r*r`` hot-path as the session-level loop above.  Reuses the
+        # already-computed ``inv_taus`` and ``inv_rws``.
+        ema_w = [0.0] * n_bands
         I_w_arr: list[float] = []
-        for t in range(t_start, t_end):
-            P = P_arr[t]
-            sum_sq_w = 0.0
-            for d in ZONE_BANDS_S:
-                ema_w[d] += (P - ema_w[d]) / taus[d]
-                rw = rw_d[d]
-                r = (ema_w[d] / rw) if rw > 0 else 0.0
-                sum_sq_w += math.pow(r, SIGNAL_AMPLIFIER)
-            I_w_arr.append(INTENSITY_SCALE * math.pow(sum_sq_w, 1.0 / SIGNAL_AMPLIFIER))
+        if SIGNAL_AMPLIFIER == 3:
+            for t in range(t_start, t_end):
+                P = P_arr[t]
+                sum_amp_w = 0.0
+                for i in range(n_bands):
+                    e = ema_w[i]
+                    e += (P - e) * inv_taus[i]
+                    ema_w[i] = e
+                    r = e * inv_rws[i]
+                    sum_amp_w += r * r * r
+                I_w_arr.append(INTENSITY_SCALE * (sum_amp_w ** inv_amp))
+        else:
+            amp = SIGNAL_AMPLIFIER
+            for t in range(t_start, t_end):
+                P = P_arr[t]
+                sum_amp_w = 0.0
+                for i in range(n_bands):
+                    e = ema_w[i]
+                    e += (P - e) * inv_taus[i]
+                    ema_w[i] = e
+                    r = e * inv_rws[i]
+                    sum_amp_w += r ** amp
+                I_w_arr.append(INTENSITY_SCALE * (sum_amp_w ** inv_amp))
 
         # Workout intensity is the arithmetic mean of the workout-isolated
         # I(t) across this workout's *work-only* seconds.  Excluding rest

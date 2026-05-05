@@ -288,6 +288,7 @@ def attach_spread_and_quality(
         )
 
         if max_hr:
+            print("ATTACH HR")
             hrm = get_or_compute(
                 "_hr_bin_meters",
                 wid,
@@ -509,8 +510,33 @@ def attach_ess_metrics(
     gender = (profile or {}).get("gender")
     rwd_fn = _ref_watts_at_duration_fn(ref_watts_for)
 
-    # Per-render memo (also avoids redundant cache hits for session-mates).
+    # Per-render memos.  Two separate caches:
+    #
+    # * ``session_memo`` — keyed by the session's sorted-id tuple; avoids
+    #   redundant cache lookups when several session-mate workouts ask for
+    #   the same SessionMetrics inside one render.
+    #
+    # * ``cp_memo`` — keyed by the rower's reference-watts contents.  The
+    #   underlying ``fit_critical_power`` call (scipy curve_fit) is the
+    #   second-largest hot spot in compute-uncached ESS rendering (~3.5 s
+    #   per call in the May-2026 profile).  Date-aware reference watts
+    #   change only when a new PB lands, so consecutive same-date sessions
+    #   resolve to the *same refs dict content* — caching by content here
+    #   collapses N curve-fits to one per distinct refs profile per render.
     session_memo: dict = {}
+    cp_memo: dict = {}
+
+    def _cached_cp_w_prime(refs: Optional[dict]) -> tuple:
+        """Memoised wrapper around :func:`_cp_w_prime_for_refs`."""
+        if not refs:
+            return _cp_w_prime_for_refs(refs, gender)
+        # Sorted-items tuple is hashable and identical when refs content matches.
+        key = tuple(sorted(refs.items()))
+        cached = cp_memo.get(key)
+        if cached is None:
+            cached = _cp_w_prime_for_refs(refs, gender)
+            cp_memo[key] = cached
+        return cached
 
     for r in workouts:
         wid = r.get("id")
@@ -527,7 +553,7 @@ def attach_ess_metrics(
 
             def _compute(_session=session, _r=r):
                 ref_watts = ref_watts_for(_r)
-                cp, w_prime, _cp_params = _cp_w_prime_for_refs(ref_watts, gender)
+                cp, w_prime, _cp_params = _cached_cp_w_prime(ref_watts)
                 return compute_session_metrics(
                     _session,
                     rwd_fn,

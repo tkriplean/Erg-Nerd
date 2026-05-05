@@ -130,7 +130,7 @@ from components.concept2_sync import sync_workouts
 from components.app_context import get_profile
 from services.rowing_utils import profile_complete
 from services.heartrate_utils import resolve_max_hr
-from services.workout_enrichment import attach_ess_metrics
+from services.workout_enrichment import attach_ess_metrics, attach_spread_and_quality
 from services.rowinglevel import fetch_rowinglevel
 
 from services.concept2_records import wr_category_label, wr_machine_supported
@@ -818,16 +818,12 @@ def _page_header(
                                 size="small",
                                 variant="text",
                             ).clicked:
-                                state.dist_enabled = tuple(
-                                    True for _ in _hdr_dists
-                                )
+                                state.dist_enabled = tuple(True for _ in _hdr_dists)
                                 state.time_enabled = tuple(True for _ in _hdr_times)
                             if hd.button(
                                 "Clear all", size="small", variant="text"
                             ).clicked:
-                                state.dist_enabled = tuple(
-                                    False for _ in _hdr_dists
-                                )
+                                state.dist_enabled = tuple(False for _ in _hdr_dists)
                                 state.time_enabled = tuple(False for _ in _hdr_times)
                         with hd.hbox(gap=0.5, wrap="wrap"):
                             for i, (dist, label) in enumerate(_hdr_dists):
@@ -1169,6 +1165,7 @@ def power_curve_page() -> None:
                 "drag",
                 "spm",
                 "hr",
+                "power_spread",
                 "ess",
                 "if_eff",
                 "severity",
@@ -1178,6 +1175,11 @@ def power_curve_page() -> None:
             try:
                 _all = sync_result[1]
                 _max_hr, _ = resolve_max_hr(profile or {}, _all)
+                attach_spread_and_quality(
+                    efforts_filtered_by_event_and_display,
+                    efforts_filtered_by_event_and_display,
+                    _max_hr,
+                )
                 attach_ess_metrics(
                     efforts_filtered_by_event_and_display,
                     _all,

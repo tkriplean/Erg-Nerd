@@ -305,7 +305,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     watts:             (r) => r.watts ?? 0,
     drag:              (r) => r.drag_factor || 0,
     spm:               (r) => r.stroke_rate || 0,
-    hr:                (r) => (r.heart_rate && r.heart_rate.average) || 0,
+    //hr:                (r) => (r.heart_rate && r.heart_rate.average) || 0,
     season:            (r) => r.date || "",
     structure:         (r) => r.is_interval ? (r.structure_key || "") : "",
     reps:              (r) => r.reps || 0,
@@ -314,7 +314,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     workout_structure: (r) => r.is_interval ? (r.structure_key || "") : "",
     similarity:        (r) => r._similarity != null ? r._similarity : -1,
     power_spread:      (r) => r._power_spread_score != null ? r._power_spread_score : -1,
-    hr_spread:         (r) => r._hr_spread_score != null ? r._hr_spread_score : -1,
+    hr:                (r) => r._hr_spread_score != null ? ((r.heart_rate && r.heart_rate.average) || 0) + r._hr_spread_score : -1,
     quality:           (r) => r._quality_score != null ? r._quality_score : -1,
     ess:               (r) => r._ess != null ? r._ess : -1,
     if_eff:            (r) => r._if_eff != null ? r._if_eff : -1,
@@ -410,15 +410,6 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       return cb;
     },
 
-    dump_json(r) {
-      if (r.id == null) return emDash();
-      const btn = el("button", {
-        class: "link",
-        onClick: () => emit("dump_json", { workout_id: r.id }),
-      }, "dump");
-      return btn;
-    },
-
     power_spread(r, col) {
       const score = r._power_spread_score;
       const bins = r._bin_meters;
@@ -427,10 +418,12 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     },
 
     hr_spread(r, col) {
-      const score = r._hr_spread_score;
+      const hr = (r.heart_rate && r.heart_rate.average) || null
       const bins = r._hr_bin_meters;
-      if (score == null || bins == null) return emDash();
-      return _spreadCell(score, r._hr_bar_uri, bins, col);
+      console.log("HI", hr, bins)
+
+      if (hr == null || bins == null) return emDash();
+      return _spreadCell(hr, r._hr_bar_uri, bins, col);
     },
 
     quality(r, col) {
