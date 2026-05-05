@@ -1,8 +1,8 @@
 """
-Builder and component function for the sessions pace-vs-date chart.
+Builder and component function for the workouts pace-vs-date chart.
 
 Public surface:
-  sessions_chart(workouts)  — HyperDiv component; call from sessions_page.
+  workouts_chart(workouts)  — HyperDiv component; call from workouts_page.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from services.critical_power_model import (
     critical_power_model,
     fit_critical_power,
 )
-from components.sessions_chart_plugin import SessionsChart
+from components.workouts_chart_plugin import WorkoutsChart
 from components.workout_table import WorkoutTable
 from components.app_context import get_profile
 from components.reference_watts_loader import reference_watts_loader
@@ -133,7 +133,7 @@ def _dot_r(meters: float) -> float:
 # ---------------------------------------------------------------------------
 
 _CP_MIN_DIST_M = 500  # exclude sub-500m events from the CP fit (too sprint-y)
-_OUTLIER_FACTOR = 1.75  # drop sessions whose pace > this × predicted 2k pace
+_OUTLIER_FACTOR = 1.75  # drop workouts whose pace > this × predicted 2k pace
 _MIN_DIST_M = 100  # hard floor: anything shorter is never plotted
 
 # Duration bracket for brentq when solving for the 2k time [seconds].
@@ -217,16 +217,16 @@ def _predict_2k_pace_from_params(params: dict) -> float | None:
 
 def _apply_outlier_filter(workouts: list) -> list:
     """
-    Remove sessions that are clearly warm-ups, aborted pieces, or erroneous rows.
+    Remove workouts that are clearly warm-ups, aborted pieces, or erroneous rows.
 
     Primary method — CP curve:
       1. Build a pb_list from ranked non-interval bests (distance and duration).
       2. Fit the four-parameter veloclinic model via fit_critical_power().
       3. Solve for the predicted 2k pace using the fitted curve.
-      4. Drop any session whose pace > _OUTLIER_FACTOR × predicted_2k_pace.
+      4. Drop any workout whose pace > _OUTLIER_FACTOR × predicted_2k_pace.
 
     Fallback (CP fit unavailable — fewer than 5 ranked bests, poor R², etc.):
-      Keep any session ≥ _MIN_DIST_M meters.
+      Keep any workout ≥ _MIN_DIST_M meters.
     """
     # Hard length floor first.
     candidates = [r for r in workouts if (r.get("distance") or 0) >= _MIN_DIST_M]
@@ -254,7 +254,7 @@ def compute_sb_ids(workouts: list) -> set:
     Return the set of workout IDs that are a season best for their
     (season, ranked event) combination.
 
-    Only non-interval sessions at a ranked distance (100m … marathon) or
+    Only non-interval workouts at a ranked distance (100m … marathon) or
     ranked timed duration (1 min … 1 hr) are eligible for SB status.
     """
     bests: dict = {}  # (season, event_key) → (best_pace, rid)
@@ -310,8 +310,8 @@ def prepare_points(
     Convert raw workout dicts into the compact point dicts expected by the JS plugin.
     Returns list sorted largest-dist-first so big dots render behind small ones.
 
-    color_mode = "gander" (default): each session gets a deterministic palette
-    colour from its id.  color_mode = "quality": each session is coloured by
+    color_mode = "gander" (default): each workout gets a deterministic palette
+    colour from its id.  color_mode = "quality": each workout is coloured by
     its workout-quality category (workouts must already have ``_quality``
     attached); workouts without a quality value get a neutral grey.
 
@@ -377,7 +377,7 @@ def prepare_points(
         if color_mode == "quality":
             h, s, l_ = _quality_hsl(r.get("_quality"))
         else:
-            # Deterministic color from session ID
+            # Deterministic color from workout ID
             idx = int(hashlib.md5(str(rid).encode()).hexdigest(), 16) % len(_PALETTE)
             h, s, l_ = _PALETTE[idx]
 
@@ -424,7 +424,7 @@ def window_bounds_ms(
     """
     Return (start_ms, end_ms) for the current view window.
 
-    window_end_ms is the right edge; if 0 (uninitialised) defaults to latest session.
+    window_end_ms is the right edge; if 0 (uninitialised) defaults to latest workout.
     window_start_ms overrides the left edge when non-zero (set after a brush resize).
     When 0, the left edge is derived from window_size.
     """
@@ -464,14 +464,14 @@ def step_ms(all_ms: list, window_size: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def sessions_chart(workouts: list) -> None:
+def workouts_chart(workouts: list) -> None:
     """
     Render the pace-vs-date focus+context chart with brush navigator,
-    session filters, and an in-window workouts table.
+    workout filters, and an in-window workouts table.
     """
     state = hd.state(
         window_size="Year",
-        window_end_ms=0,   # 0 = uninitialised → defaults to latest session
+        window_end_ms=0,   # 0 = uninitialised → defaults to latest workout
         window_start_ms=0, # 0 = derive from window_size; non-zero after a brush resize
         last_change_id=0,
         last_click_seq=0,
@@ -539,7 +539,7 @@ def sessions_chart(workouts: list) -> None:
     )
 
     if not pts:
-        hd.text("No sessions match the selected filters.", font_color="neutral-500")
+        hd.text("No workouts match the selected filters.", font_color="neutral-500")
         return
 
     all_ms = [p["x"] for p in pts]
@@ -566,16 +566,16 @@ def sessions_chart(workouts: list) -> None:
                         current_value=state.color_mode,
                         field="color_mode",
                     )
-                    with hd.dropdown() as _sessions_dd:
+                    with hd.dropdown() as _workouts_dd:
                         from components.app_context import your as _your
 
                         _poss = _your()
-                        _sessions_label = f"All {_poss}{" Long " if state.filter_10k else " "} {" " if state.filter_ivl == "All" else state.filter_ivl} Work"
-                        _sessions_btn = hd.button(
-                            _sessions_label, caret=True, size="small", font_color="neutral-800",font_size=2,font_weight="bold", padding=(1, 0, 1, 0),border="none",label_style=hd.style(padding_right=0), slot=_sessions_dd.trigger
+                        _workouts_label = f"All {_poss}{" Long " if state.filter_10k else " "} {" " if state.filter_ivl == "All" else state.filter_ivl} Work"
+                        _workouts_btn = hd.button(
+                            _workouts_label, caret=True, size="small", font_color="neutral-800",font_size=2,font_weight="bold", padding=(1, 0, 1, 0),border="none",label_style=hd.style(padding_right=0), slot=_workouts_dd.trigger
                         )
-                        if _sessions_btn.clicked:
-                            _sessions_dd.opened = not _sessions_dd.opened
+                        if _workouts_btn.clicked:
+                            _workouts_dd.opened = not _workouts_dd.opened
 
                         with hd.hbox(gap=1, padding=1,background_color="neutral-50", align="center"):
                             with hd.radio_group(value=state.filter_ivl) as ivl_rg:
@@ -616,7 +616,7 @@ def sessions_chart(workouts: list) -> None:
 
 
         # ── Plugin ────────────────────────────────────────────────────────────────
-        chart = SessionsChart(
+        chart = WorkoutsChart(
             points=pts,
             target_window_start=target_start,
             target_window_end=target_end,
@@ -643,11 +643,11 @@ def sessions_chart(workouts: list) -> None:
             state.window_end_ms = chart.brush_end
             state.window_start_ms = chart.brush_start
 
-        # ── Click-to-open: navigate to /session/<id> when a chart dot is clicked ──
+        # ── Click-to-open: navigate to /workout/<id> when a chart dot is clicked ──
         if chart.click_seq > state.last_click_seq:
             state.last_click_seq = chart.click_seq
             if chart.clicked_workout_id:
-                hd.location().go(path=f"/session/{chart.clicked_workout_id}")
+                hd.location().go(path=f"/workout/{chart.clicked_workout_id}")
 
         # ── Spread + Quality legend (Power Spread / HR Spread / Quality) ──────────
         spread_quality_legends(max_hr)

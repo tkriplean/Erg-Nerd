@@ -288,7 +288,6 @@ def attach_spread_and_quality(
         )
 
         if max_hr:
-            print("ATTACH HR")
             hrm = get_or_compute(
                 "_hr_bin_meters",
                 wid,
@@ -520,7 +519,7 @@ def attach_ess_metrics(
     #   underlying ``fit_critical_power`` call (scipy curve_fit) is the
     #   second-largest hot spot in compute-uncached ESS rendering (~3.5 s
     #   per call in the May-2026 profile).  Date-aware reference watts
-    #   change only when a new PB lands, so consecutive same-date sessions
+    #   change only when a new PB lands, so consecutive same-date workouts
     #   resolve to the *same refs dict content* — caching by content here
     #   collapses N curve-fits to one per distinct refs profile per render.
     session_memo: dict = {}

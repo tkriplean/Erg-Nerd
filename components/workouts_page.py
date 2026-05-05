@@ -1,10 +1,10 @@
 """
-Sessions tab — pace-vs-date scatter chart + recent-workouts table.
+Workouts page — pace-vs-date scatter chart + recent-workouts table.
 """
 
 import hyperdiv as hd
 
-from components.sessions_chart_builder import sessions_chart
+from components.workouts_chart_builder import workouts_chart
 from components.concept2_sync import get_all_workouts
 
 
@@ -13,8 +13,8 @@ from components.concept2_sync import get_all_workouts
 # ---------------------------------------------------------------------------
 
 
-def sessions_page() -> None:
-    """Top-level component for the Sessions tab."""
+def workouts_page() -> None:
+    """Top-level component for the Workouts page."""
     result = get_all_workouts()
 
     if not result:
@@ -25,4 +25,4 @@ def sessions_page() -> None:
     # ── Pace-vs-date scatter + windowed workouts table ────────────────────────
     all_workouts = result[1]
     with hd.box(padding=2, min_height="80vh", gap=2):
-        sessions_chart(all_workouts)
+        workouts_chart(all_workouts)

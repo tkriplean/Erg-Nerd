@@ -314,7 +314,7 @@ def render_quality_cell(
     if q == "Low":
         headline = (
             f"Quality score {score:.2f} — below the 0.50 threshold for a "
-            f"Medium session."
+            f"Medium workout."
         )
     elif q == "Medium":
         headline = (
@@ -386,7 +386,6 @@ def _theme_swatches(zone_colors, is_dark: bool) -> list[str]:
 
 def _enrich_opts(key: str, opts: dict) -> dict:
     """Add theme-dependent or constant resources to a column's opts."""
-    print(key)
     if key == "power_spread":
         return {
             **opts,
@@ -442,10 +441,10 @@ def _json_safe(v):
 # Heavy enrichment fields that are *only* consumed by Python-side Workout-Page
 # rendering (charts, rollup widgets, splits-table builders) — never read by
 # the JS table plugin.  Shipping them through ``_row_for_js`` once per row
-# was the dominant render cost on the Sessions page once the ESS family
+# was the dominant render cost on the Workouts page once the ESS family
 # landed: ``_ess_timeline`` alone is ~1800 timepoints × six per-zone ratios
 # per workout.  Skipping them at JSON-serialisation time cut the
-# Sessions-page render from ~25 s to ~0.5 s in profiling.
+# Workouts-page render from ~25 s to ~0.5 s in profiling.
 #
 # Do NOT add ``_bin_meters`` / ``_hr_bin_meters`` / ``_quality_energy`` to
 # this set — they're small AND the JS plugin reads them (power/HR-spread

@@ -1,5 +1,5 @@
 """
-Volume aggregation and power-zone binning for the Sessions chart.
+Volume aggregation and power-zone binning for the Workouts chart.
 
 Power zones are defined in watts, against a **time-aware** fitness reference:
 for each workout we look up the rower's reference watts at that workout's date
@@ -29,7 +29,7 @@ Exported:
     classify_watts()            — map a watts value → bin index
     workout_bin_meters()        — per-bin meter counts for a single workout
     workout_power_spread()      — single-workout score using date-appropriate
-                                  thresholds (for the sessions-page hook)
+                                  thresholds (for the workouts-page hook)
     bin_bar_svg()               — data-URI SVG stacked bar from bin meters
     swatch_svg()                — data-URI SVG color swatch for legends
     aggregate_workouts()        — group all workouts by week / month / season × bin
@@ -236,7 +236,7 @@ def workout_bin_meters(workout: dict, thresholds: Optional[dict]) -> tuple:
     (from ``compute_watts(interval_pace)``).  The top-level ``rest_distance``
     goes into bin 0.
 
-    For steady-state workouts the session's overall watts set a single bin.
+    For steady-state workouts the workout's overall watts set a single bin.
     """
     bins = _empty_bins()
 
@@ -312,7 +312,7 @@ def workout_power_spread(workout: dict, all_workouts: list) -> Optional[float]:
     """
     Single-workout Power Spread score using date-appropriate thresholds.
 
-    Intended for the sessions-page quality metric.  Resolves reference watts
+    Intended for the workouts-page quality metric.  Resolves reference watts
     at the workout's own date, derives thresholds, then scores that workout.
     """
     # Local import — avoid a circular dependency with reference_watts, which

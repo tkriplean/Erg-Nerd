@@ -5,7 +5,7 @@ is on ``/u/{user_id}``.
 Shows:
   - "Viewing {display_name}'s public profile"
   - A link back to the logged-in dashboard ("/")
-  - If the viewer's own user_id (from the combined session LS key) matches
+  - If the viewer's own user_id (from the combined profile LS key) matches
     the public profile id, a small "(This is how others see your profile.)"
     hint — useful for owner QA without needing an incognito window.
 """
@@ -22,11 +22,11 @@ def public_banner() -> None:
     if ctx.mode != "public":
         return
 
-    ls_session = hd.local_storage.get_item(_SESSION_LS_KEY)
+    ls_profile = hd.local_storage.get_item(_SESSION_LS_KEY)
     viewer_uid = ""
-    if ls_session.done and ls_session.result:
+    if ls_profile.done and ls_profile.result:
         try:
-            viewer_uid = json.loads(ls_session.result).get("user_id") or ""
+            viewer_uid = json.loads(ls_profile.result).get("user_id") or ""
         except Exception:
             viewer_uid = ""
     is_self_view = bool(viewer_uid) and str(viewer_uid) == str(ctx.user_id)

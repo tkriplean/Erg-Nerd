@@ -37,7 +37,7 @@ The app opens at **http://localhost:8888**. On first launch it will redirect you
 |---|---|
 | **Profile** | Your age, weight, gender, and max heart rate. Settings for switching to public profile. |
 | **Volume** | Weekly / monthly training volume broken down by pace zone and HR zone |
-| **Sessions** | Individual session explorer with HR, split, and stroke-rate overlays |
+| **Workouts** | Individual workout explorer with HR, split, and stroke-rate overlays |
 | **Intervals** | 2D grid of interval work by duration × work:rest ratio, with zone intensity |
 | **Performance** | Ranked performances scatter (pace vs distance), simulation timeline, and multi-model prediction table |
 

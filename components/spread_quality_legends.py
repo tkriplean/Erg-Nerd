@@ -1,7 +1,7 @@
 """
 Shared filter-legend component for Power Spread, HR Spread, and Quality.
 
-Both the Intervals and Sessions pages render this same stack of three
+Both the Intervals and Workouts pages render this same stack of three
 labelled legends.  Each legend is a row of clickable chips; clicking a chip
 toggles its membership in the page's active-set.  Filtering is **disjunctive
 within** a legend (selecting two chips matches workouts in EITHER zone) and

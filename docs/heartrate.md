@@ -218,7 +218,7 @@ Top-level HR is always populated (with zeros) even when no monitor was worn, mak
 ## Future Extensions
 
 - **HR drift analysis**: show how HR trends across splits within a workout.
-- **Per-workout HR zone pie** in the session detail view.
+- **Per-workout HR zone pie** in the workout detail view.
 - **Resting HR field** in profile to enable HRR-based zones.
 - **HR-pace efficiency metric**: e.g. pace / (HR / max_hr) per workout.
 - **Tempo/threshold boundary refinement**: lactate threshold correlates with a deflection point in the HR–pace curve, potentially auto-detectable from workout history.

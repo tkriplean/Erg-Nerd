@@ -476,7 +476,7 @@ def load_world_record_data(state, profile: dict, machine: str = "rower"):
 
 def _public_enabled() -> bool:
     """Read ``profile.public`` from ``AppContext``. Synchronous — boot has
-    already populated the profile from the combined session LS key."""
+    already populated the profile from the combined profile LS key."""
     return bool((AppContext().profile or {}).get("public"))
 
 

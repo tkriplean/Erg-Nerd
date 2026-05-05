@@ -91,9 +91,9 @@ Each tab uses a `sync_state = hd.state(written=False, initial_workouts=None, ini
 
 The write happens in the render frame (not the task), which is required because `hd.local_storage.set_item()` cannot be called from a background task.
 
-#### Per-session stroke data
+#### Per-workout stroke data
 
-Full stroke-by-stroke data (~50 bytes × 600 strokes per workout) is **not** cached in localStorage — even with 7× compression, 2,000 workouts would produce ~50 MB. Stroke data is fetched on-demand from the Concept2 API when a user views a specific session.
+Full stroke-by-stroke data (~50 bytes × 600 strokes per workout) is **not** cached in localStorage — even with 7× compression, 2,000 workouts would produce ~50 MB. Stroke data is fetched on-demand from the Concept2 API when a user views a specific workout.
 
 ### `profile`
 

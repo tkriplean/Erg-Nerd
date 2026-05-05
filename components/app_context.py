@@ -28,11 +28,11 @@ The ``client``, ``profile``, and workout snapshot props are stored as
 ``hd.Any`` because they are arbitrary Python objects that live purely
 server-side (BaseState is ``collect=False``).
 
-Combined session key: ``c2_user_id`` and ``profile`` used to be two
+Combined profile key: ``c2_user_id`` and ``profile`` used to be two
 separate localStorage keys, each requiring its own async fetch on every
 boot. They are now packed into a single JSON object under ``app_session``
-so the boot flow makes one round-trip. The helpers ``write_session_ls``
-and ``clear_session_ls`` keep the on-disk shape in sync with AppContext.
+so the boot flow makes one round-trip. The helpers ``write_profile_ls``
+and ``clear_profile_ls`` keep the on-disk shape in sync with AppContext.
 
 Profile flow
 ------------
@@ -125,12 +125,12 @@ class AppContext(hd.BaseState):
 
 
 # ---------------------------------------------------------------------------
-# Combined session localStorage helpers
+# Combined profile localStorage helpers
 # ---------------------------------------------------------------------------
 
 
-def write_session_ls(user_id: str, profile: Optional[dict] = None) -> None:
-    """Persist ``user_id`` + ``profile`` to the combined session key.
+def write_profile_ls(user_id: str, profile: Optional[dict] = None) -> None:
+    """Persist ``user_id`` + ``profile`` to the combined profile key.
 
     Call after any change to the user's profile so the next boot reads
     fresh values without an extra round-trip.
@@ -139,8 +139,8 @@ def write_session_ls(user_id: str, profile: Optional[dict] = None) -> None:
     hd.local_storage.set_item(_SESSION_LS_KEY, json.dumps(payload))
 
 
-def clear_session_ls() -> None:
-    """Remove the combined session key (used on Disconnect / token loss)."""
+def clear_profile_ls() -> None:
+    """Remove the combined profile key (used on Disconnect / token loss)."""
     hd.local_storage.remove_item(_SESSION_LS_KEY)
 
 
@@ -223,7 +223,7 @@ def refresh_profile_if_stale() -> None:
         if merged != profile:
             ctx.profile = merged
             ctx.display_name = merged.get("display_name") or ctx.display_name
-            write_session_ls(ctx.user_id, merged)
+            write_profile_ls(ctx.user_id, merged)
 
 
 # ---------------------------------------------------------------------------

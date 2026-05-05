@@ -1,7 +1,7 @@
 """
 Per-date cache for reference watts and derived power-bin thresholds.
 
-The Intervals, Volume, Workout, and Sessions pages all need to map a workout
+The Intervals, Volume, Workout, and Workouts pages all need to map a workout
 to its date-appropriate ``ref_watts`` (for the Quality metric) and
 ``thresholds`` (for power-bin classification).  Both lookups are cheap when
 cached but expensive when recomputed for every workout — and many workouts

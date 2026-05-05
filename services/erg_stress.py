@@ -65,7 +65,7 @@ available, else fall back to a population default (28 kJ men, 22 kJ women).
 ``CP`` is the rower's date-aware 60-min reference watts.  Skiba's recovery
 time constant ``τ_W' = 546 × exp(−0.01 × DCP) + 316`` where DCP is the
 session-mean watts below CP; clamped to ``[200, 1200]`` seconds for short
-sessions where DCP is undefined.
+workouts where DCP is undefined.
 
 Public API
 ----------
@@ -174,7 +174,7 @@ SESSION_GAP_S = 1800.0 * 2
 W_PRIME_DEFAULT_M = 28_000.0
 W_PRIME_DEFAULT_F = 22_000.0
 
-#: Bounds on Skiba τ_W' to keep DCP-driven formula sensible for short sessions.
+#: Bounds on Skiba τ_W' to keep DCP-driven formula sensible for short workouts.
 TAU_W_MIN = 200.0
 TAU_W_MAX = 1200.0
 
@@ -417,15 +417,15 @@ def find_session(workout: dict, all_workouts: list) -> list[dict]:
     same_day.sort(key=lambda x: x[0])
 
     # Greedy session grouping by gap.
-    sessions: list[list] = [[same_day[0]]]
+    workouts: list[list] = [[same_day[0]]]
     for prev, curr in zip(same_day, same_day[1:]):
         gap = (curr[0] - prev[1]).total_seconds()
         if gap < SESSION_GAP_S:
-            sessions[-1].append(curr)
+            workouts[-1].append(curr)
         else:
-            sessions.append([curr])
+            workouts.append([curr])
 
-    for sess in sessions:
+    for sess in workouts:
         if any(w.get("id") == target_id for _, _, w in sess):
             return [w for _, _, w in sess]
     return [workout]
@@ -666,7 +666,7 @@ def compute_session_metrics(
 
     # ----- Run 6 EMAs forward in lock-step; build I(t) and per-zone traces -----
     # The inner loop runs ~once per second of session × six bands; in pure
-    # Python that's the dominant cost on the Sessions page (every visible
+    # Python that's the dominant cost on the Workouts page (every visible
     # session triggers it on cache miss).  We flatten band-keyed dicts
     # into parallel lists indexed by band index so the inner loop sees no
     # dict lookups, and we specialise for the common SIGNAL_AMPLIFIER=3
@@ -697,7 +697,7 @@ def compute_session_metrics(
                 r = e * inv_rws[i]
                 zone_arrs[i][t] = r
                 sum_amp += r * r * r
-            I_arr[t] = INTENSITY_SCALE * (sum_amp ** inv_amp)
+            I_arr[t] = INTENSITY_SCALE * (sum_amp**inv_amp)
     else:
         # General-case fallback for any SIGNAL_AMPLIFIER value.
         amp = SIGNAL_AMPLIFIER
@@ -710,8 +710,8 @@ def compute_session_metrics(
                 ema[i] = e
                 r = e * inv_rws[i]
                 zone_arrs[i][t] = r
-                sum_amp += r ** amp
-            I_arr[t] = INTENSITY_SCALE * (sum_amp ** inv_amp)
+                sum_amp += r**amp
+            I_arr[t] = INTENSITY_SCALE * (sum_amp**inv_amp)
 
     # Re-key zone arrays back to ``{band_seconds: [...]}`` for existing
     # callers (timeline payload, per-segment records).  This is cheap —
@@ -828,7 +828,7 @@ def compute_session_metrics(
                     ema_w[i] = e
                     r = e * inv_rws[i]
                     sum_amp_w += r * r * r
-                I_w_arr.append(INTENSITY_SCALE * (sum_amp_w ** inv_amp))
+                I_w_arr.append(INTENSITY_SCALE * (sum_amp_w**inv_amp))
         else:
             amp = SIGNAL_AMPLIFIER
             for t in range(t_start, t_end):
@@ -839,8 +839,8 @@ def compute_session_metrics(
                     e += (P - e) * inv_taus[i]
                     ema_w[i] = e
                     r = e * inv_rws[i]
-                    sum_amp_w += r ** amp
-                I_w_arr.append(INTENSITY_SCALE * (sum_amp_w ** inv_amp))
+                    sum_amp_w += r**amp
+                I_w_arr.append(INTENSITY_SCALE * (sum_amp_w**inv_amp))
 
         # Workout intensity is the arithmetic mean of the workout-isolated
         # I(t) across this workout's *work-only* seconds.  Excluding rest
@@ -905,7 +905,7 @@ def compute_session_metrics(
     )
 
     # ----- Timeline (sub-sampled for chart payload) -----
-    # Keep ≤ 1800 points to bound payload size; for sessions ≤ 30 min, full
+    # Keep ≤ 1800 points to bound payload size; for workouts ≤ 30 min, full
     # 1-Hz resolution (1800 pts).  Longer: stride out evenly.  Each kept
     # timepoint includes the per-zone ratios so the chart can paint the six
     # band traces as percentages on the right axis.

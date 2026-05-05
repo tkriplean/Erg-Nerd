@@ -72,7 +72,7 @@ SLOW_AEROBIC_WATTS_FACTOR = 0.9
 WORK_REST_PENALTY_FACTOR = 0.25
 
 # Category buckets.  Deliberately lenient — the intent is a spread that makes
-# typical "junk miles" land Low, solid sessions Medium, and true PR-quality
+# typical "junk miles" land Low, solid workouts Medium, and true PR-quality
 # work High.  Reassess once real usage lands.
 _LOW_MAX = 0.5
 _MEDIUM_MAX = 0.75
@@ -123,10 +123,10 @@ QUALITY_STYLE: dict[str, dict] = {
 
 # One-line category descriptions and filter rules — used by legend chip tooltips.
 QUALITY_DEFINITION_TEXT: dict[str, str] = {
-    "Low": "Quality score below 0.50 — junk-mile / easy-day session.",
-    "Medium": "Quality score 0.50–0.75 — solid moderate session.",
-    "High": "Quality score 0.75–1.0 — sharp session with most splits at category-reference watts.",
-    "Ultra": "Quality score > 1.0 — rare, top-end session at or beyond reference power.",
+    "Low": "Quality score below 0.50 — junk-mile / easy-day workout.",
+    "Medium": "Quality score 0.50–0.75 — solid moderate workout.",
+    "High": "Quality score 0.75–1.0 — sharp workout with most splits at category-reference watts.",
+    "Ultra": "Quality score > 1.0 — rare, top-end workout at or beyond reference power.",
 }
 
 QUALITY_FILTER_TEXT: dict[str, str] = {
@@ -232,7 +232,7 @@ def compute_workout_quality(
     Parameters
     ----------
     workout
-        Concept2 workout dict (either an interval or steady-state session).
+        Concept2 workout dict (either an interval or steady-state workout).
     ref_watts
         The rower's reference watts at the workout's date, keyed by cat_key —
         i.e. the output of :func:`services.reference_watts.get_reference_watts`.

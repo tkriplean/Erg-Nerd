@@ -53,7 +53,7 @@ from services.volume_bins import BIN_COLORS
 # The six duration bands map naturally to the six rowing power bins
 # (1 Fast → 6 Slow Aerobic) in inverse-duration order: shortest band = most
 # anaerobic = matches the "Fast" bin.  This palette is shared with the
-# Sessions / Volume page so a user already trained to read the colors finds
+# Workouts / Volume page so a user already trained to read the colors finds
 # them familiar here.
 _BAND_TO_BIN: dict[int, int] = {
     20: 1,  # Fast       (red)

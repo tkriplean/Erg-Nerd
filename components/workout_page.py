@@ -2,8 +2,8 @@
 components/workout_page.py — Full-screen workout detail overlay.
 
 Activated by URL routing: app.py renders this component when
-loc.path starts with "/session/".  The view icon in every result table
-navigates to /session/{id}; the Back link returns to the previous tab.
+loc.path starts with "/workout/".  The view icon in every result table
+navigates to /workout/{id}; the Back link returns to the previous tab.
 
 Displays:
 
@@ -12,13 +12,13 @@ Displays:
   3. Chart + splits  — pace/watts chart (left) beside splits/intervals table (right)
                        Chart has Pace/Watts toggle, Stack mode, and Reset zoom button.
                        Clicking a split/interval row zooms the chart to that band.
-  4. Similar sessions — WorkoutTable() of workouts with matching structure
+  4. Similar workouts — WorkoutTable() of workouts with matching structure
 
 Entry point::
 
-    workout_page(session_id, client, user_id)
+    workout_page(workout_id, client, user_id)
 
-    session_id  int   — extracted from loc.path ("/session/<id>")
+    workout_id  int   — extracted from loc.path ("/workout/<id>")
     client      Concept2Client
     user_id     str
 
@@ -132,7 +132,7 @@ def _dump_session_to_tmp(session_workouts: list, current_id) -> str:
     ``HH-MM-SS_<distance>m_<watts>W_<id>.json``.
 
     The directory is named after the *current* workout's id (the page the
-    user is on when they click the button) so multiple sessions can sit
+    user is on when they click the button) so multiple workouts can sit
     side-by-side without colliding.
 
     Returns the directory path so callers can surface it in the UI.
@@ -470,7 +470,7 @@ def _custom_splits_ui(workout: dict, strokes: list, on_splits_change) -> None:
         else:
             # Smart default: divide the workout into 5 as-even-as-possible
             # splits (e.g. 5k → 5×1000m, 30min → 5×6:00).  Beats the old
-            # fixed 500m / 60s defaults on longer sessions.
+            # fixed 500m / 60s defaults on longer workouts.
             s.inputs = _even_splits(target, _DEFAULT_SPLIT_COUNT)
             s.unit = target_unit
         s.loaded = True
@@ -1145,7 +1145,7 @@ def _find_similar(workout: dict, all_workouts: list) -> list:
             if _interval_dimension(w) != ref_dim:
                 continue
             vol, wf = _interval_volume_and_work_fraction(w)
-            # Drop wildly-different sessions: total work volume must be within
+            # Drop wildly-different workouts: total work volume must be within
             # ±40% of the reference (e.g. 5×1000m can match 4×1250m or 6×800m
             # but not 10×500m).
             if not ref_vol or not vol:
@@ -1297,7 +1297,7 @@ def _chart_controls(
 # ---------------------------------------------------------------------------
 
 
-def workout_page(session_id: int) -> None:
+def workout_page(workout_id: int) -> None:
     """Render the full-screen workout detail overlay."""
     _theme = hd.theme()
 
@@ -1321,7 +1321,7 @@ def workout_page(session_id: int) -> None:
         return
 
     _workouts_dict, all_workouts = sync_result
-    workout = _workouts_dict.get(str(session_id))
+    workout = _workouts_dict.get(str(workout_id))
 
     # Attach Power Spread, HR Spread, Quality, and ESS family fields so the
     # summary cells can render them.  Best-effort: if reference watts haven't
@@ -1438,7 +1438,7 @@ def workout_page(session_id: int) -> None:
                         height=18,
                     ):
                         hd.text(
-                            "Stroke data not available for this session.",
+                            "Stroke data not available for this workout.",
                             font_color="neutral-500",
                         )
                 elif stroke_status == "uncached":
@@ -1454,12 +1454,12 @@ def workout_page(session_id: int) -> None:
                         gap=0.5,
                     ):
                         hd.text(
-                            "Stroke-level data for this session is not yet available.",
+                            "Stroke-level data for this workout is not yet available.",
                             font_color="neutral-500",
                             text_align="center",
                         )
                         hd.text(
-                            "It appears after the owner opens this session.",
+                            "It appears after the owner opens this workout.",
                             font_color="neutral-400",
                             font_size="small",
                             text_align="center",
@@ -1578,7 +1578,7 @@ def workout_page(session_id: int) -> None:
                 )
                 EffortStressChart(config=ess_cfg, height=220)
 
-        # ── Similar sessions ─────────────────────────────────────────────
+        # ── Similar workouts ─────────────────────────────────────────────
 
         similar = _find_similar(workout, all_workouts)
         if similar:
@@ -1592,7 +1592,7 @@ def workout_page(session_id: int) -> None:
                 pass
             with hd.box(align="center"):
                 hd.h2(
-                    "Similar sessions",
+                    "Similar workouts",
                     font_weight="semibold",
                     font_size="x-large",
                     font_color="neutral-800",
@@ -1604,7 +1604,7 @@ def workout_page(session_id: int) -> None:
                     "stack_active": state.stack,
                 }
                 if is_interval_workout:
-                    # Similar sessions are mostly intervals — show the interval
+                    # Similar workouts are mostly intervals — show the interval
                     # structure (which already encodes the rep count when present).
                     cols = [
                         "date",

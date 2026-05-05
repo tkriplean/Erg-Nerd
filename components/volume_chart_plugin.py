@@ -1,6 +1,6 @@
 """
 VolumeChart — a HyperDiv Plugin that wraps Chart.js for the stacked-bar
-volume (meters × pace zone) chart on the Sessions tab.
+volume (meters × pace zone) chart on the Workouts page.
 
 Usage:
     from components.volume_chart_plugin import VolumeChart

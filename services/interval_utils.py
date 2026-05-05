@@ -24,7 +24,7 @@ from __future__ import annotations
 from services.formatters import fmt_tenths
 
 # ---------------------------------------------------------------------------
-# Formatting helpers  (moved verbatim from sessions_chart_builder.py)
+# Formatting helpers  (moved verbatim from workouts_chart_builder.py)
 # ---------------------------------------------------------------------------
 
 
@@ -173,7 +173,7 @@ def _detect_super_block(
 
 
 # ---------------------------------------------------------------------------
-# Interval description  (moved verbatim from sessions_chart_builder.py)
+# Interval description  (moved verbatim from workouts_chart_builder.py)
 # ---------------------------------------------------------------------------
 
 
@@ -191,7 +191,7 @@ def build_interval_lines(r: dict, compact: bool = False) -> list[str]:
         If True, use abbreviated time strings and
         shorten the rest suffix from " rest" to "r".  Intended for compact
         labels in the interval browser.  Default False preserves original
-        output used by the session chart detail view.
+        output used by the workout chart detail view.
 
     Algorithm
     ---------
@@ -299,9 +299,7 @@ def build_interval_lines(r: dict, compact: bool = False) -> list[str]:
                         f"{iv.get('distance') or 0:,}m" for iv in rep_block
                     )
                 else:
-                    inner_str = "+".join(
-                        _ft(iv.get("time") or 0) for iv in rep_block
-                    )
+                    inner_str = "+".join(_ft(iv.get("time") or 0) for iv in rep_block)
                 n_reps = len(blocks)
                 if outer_rest > 0:
                     return [

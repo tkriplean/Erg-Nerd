@@ -85,7 +85,7 @@ depletion (W' draining).  Bucketed:
 | High | 1.00–1.40 | Sharp threshold, VO₂ work, hard intervals |
 | Maximal | ≥ 1.40 | Race-pace or PB territory; high recovery demand |
 
-Sessions and individual workouts each get their own Severity rating.  The
+Workouts and individual workouts each get their own Severity rating.  The
 session-level rating reflects the hardest moment anywhere in the session,
 plus its overall W'-strain; the per-workout rating is computed
 workout-isolated.
@@ -94,7 +94,7 @@ workout-isolated.
 moment during the workout.  Tightly correlated with how "wiped" you feel.
 A 100% reading means your modeled W'bal hit zero.
 
-### Sessions ("All workouts on this day")
+### Workouts ("All workouts on this day")
 
 Workouts logged within 30 minutes of each other count as one session.  The
 "All workouts on this day" panel on the Workout Page shows each member's

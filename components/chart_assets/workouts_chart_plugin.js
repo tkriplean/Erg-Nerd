@@ -1,5 +1,5 @@
 /**
- * SessionsChart — HyperDiv plugin for the pace-vs-date scatter with brush
+ * WorkoutsChart — HyperDiv plugin for the pace-vs-date scatter with brush
  * navigator (focus+context / overview+detail pattern).
  *
  * Layout (flexbox column inside the shadow root):
@@ -42,7 +42,7 @@
  *   click outside      → jump (centre brush on click, immediate rebuild)
  */
 
-window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
+window.hyperdiv.registerPlugin("WorkoutsChart", (ctx) => {
 
   // ── Shadow DOM styles ──────────────────────────────────────────────────────
   const style = document.createElement("style");
@@ -317,7 +317,7 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
       });
     }
 
-    // Layer 2 — regular (non-interval) sessions: 33% fill + 1px opaque border
+    // Layer 2 — regular (non-interval) workouts: 33% fill + 1px opaque border
     if (regPts.length) {
       datasets.push({
         type:             "scatter",
@@ -335,7 +335,7 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
       });
     }
 
-    // Layer 1 — interval sessions.
+    // Layer 1 — interval workouts.
     //
     // Visual design:
     //   • Single circle; pointRadius = (r + r2) / 2; borderWidth = r - r2.
@@ -524,7 +524,7 @@ window.hyperdiv.registerPlugin("SessionsChart", (ctx) => {
   // ── Brush plugin ──────────────────────────────────────────────────────────
 
   const brushPlugin = {
-    id: "sessionsBrush",
+    id: "workoutsBrush",
     afterDatasetsDraw(chart) {
       const xScale = chart.scales.x;
       if (!xScale) return;

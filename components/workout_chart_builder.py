@@ -17,7 +17,7 @@ Stroke data format (from Concept2 API /users/{u}/results/{id}/strokes):
 
 For interval workouts the API resets t to 0 at the start of each interval.
 _stitch_interval_times() detects backwards jumps and accumulates an offset so
-the resulting t values are monotonically increasing across the whole session.
+the resulting t values are monotonically increasing across the whole workout.
 """
 
 from __future__ import annotations
@@ -605,9 +605,7 @@ def _apply_rest_gaps(points: list, rest_spans: list) -> list:
     """
     if not rest_spans or not points:
         return points
-    kept = [
-        p for p in points if not any(lo <= p["x"] <= hi for lo, hi in rest_spans)
-    ]
+    kept = [p for p in points if not any(lo <= p["x"] <= hi for lo, hi in rest_spans)]
     nulls = [{"x": lo, "y": None} for lo, _ in rest_spans]
     return sorted(kept + nulls, key=lambda p: p["x"])
 
@@ -906,20 +904,17 @@ def build_stroke_chart_config(
         y_pace = [
             p["y"]
             for p in pace_pts
-            if p["y"] is not None
-            and any(lo <= p["x"] <= hi for lo, hi in work_ranges)
+            if p["y"] is not None and any(lo <= p["x"] <= hi for lo, hi in work_ranges)
         ]
         y_spm = [
             p["y"]
             for p in spm_pts
-            if p["y"] is not None
-            and any(lo <= p["x"] <= hi for lo, hi in work_ranges)
+            if p["y"] is not None and any(lo <= p["x"] <= hi for lo, hi in work_ranges)
         ]
         y_hr = [
             p["y"]
             for p in hr_pts
-            if p["y"] is not None
-            and any(lo <= p["x"] <= hi for lo, hi in work_ranges)
+            if p["y"] is not None and any(lo <= p["x"] <= hi for lo, hi in work_ranges)
         ]
     else:
         y_pace = [p["y"] for p in pace_pts if p["y"] is not None]
@@ -1009,7 +1004,7 @@ def build_stroke_chart_config(
         x_min = b["xMin"]
         x_max = b["xMax"]
     else:
-        # Cap the x-axis at the recorded session duration so trailing noise
+        # Cap the x-axis at the recorded workout duration so trailing noise
         # beyond the finish doesn't expand the domain.  For interval workouts
         # the workout's `time` is work-only, so derive the wall-clock end from
         # the last band's xMax instead.

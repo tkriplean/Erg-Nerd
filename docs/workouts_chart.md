@@ -1,6 +1,6 @@
-# Sessions Chart — Design Reference
+# Workouts Chart — Design Reference
 
-Pace-vs-date scatter chart for the Sessions page, implemented as a HyperDiv plugin
+Pace-vs-date scatter chart for the Workouts page, implemented as a HyperDiv plugin
 backed by Chart.js 4. This document records the design decisions and important
 implementation details so that future changes can be made with full context.
 
@@ -14,12 +14,12 @@ implementation details so that future changes can be made with full context.
 4. [Season-best detection](#season-best-detection)
 5. [Point preparation](#point-preparation)
 6. [Visual encoding](#visual-encoding)
-7. [Interval session display](#interval-session-display)
+7. [Interval workout display](#interval-workout-display)
 8. [Chart area locking](#chart-area-locking)
 9. [Y-axis range calculation](#y-axis-range-calculation)
 10. [X-axis adaptive ticks](#x-axis-adaptive-ticks)
 11. [Focus+context / brush navigator](#focuscontext--brush-navigator)
-12. [Session filters and window controls](#session-filters-and-window-controls)
+12. [Session filters and window controls](#workout-filters-and-window-controls)
 13. [Workouts-in-view table](#workouts-in-view-table)
 14. [Tooltip design](#tooltip-design)
 15. [Prop contract (Python ↔ JS)](#prop-contract-python--js)
@@ -42,14 +42,14 @@ The chart uses the **focus+context** pattern (also called overview+detail):
 
 Both panels are Chart.js 4 scatter charts living in the same HyperDiv plugin
 shadow root. The overview chart hosts the brush rectangle; the main chart shows
-only the sessions inside the current window.
+only the workouts inside the current window.
 
 **Why two canvases rather than one?**  The brush rectangle must always span the
 full dataset extent while the focused view must have independent axis limits.
 Two independent Chart.js instances are the cleanest way to achieve this.
 
 **HyperDiv integration:** The component is a `hd.Plugin` subclass
-(`SessionsChart`, in `components/sessions_chart_plugin.py`). Data flows
+(`WorkoutsChart`, in `components/workouts_chart_plugin.py`). Data flows
 Python → JS via `ctx.initialProps` and `ctx.onPropUpdate`; user interactions
 (brush drags) are reported back via `ctx.updateProp`.
 
@@ -73,11 +73,11 @@ workouts with _power_spread_score, _hr_spread_score, _quality fields attached
     │
     └──▶  prepare_points(color_mode=…)  → list of point dicts (with `id` for click-to-open)
               │
-              └──▶  SessionsChart(points=…)   HyperDiv plugin → JS
+              └──▶  WorkoutsChart(points=…)   HyperDiv plugin → JS
 ```
 
 Session-level filters (10k+, Intervals Only, Continuous, plus the Power Spread,
-HR Spread, and Quality legend chips) are applied in `sessions_chart()` **after**
+HR Spread, and Quality legend chips) are applied in `workouts_chart()` **after**
 the outlier filter and **before** SB detection and point preparation, so the SB
 set is always consistent with the visible data.
 
@@ -86,14 +86,14 @@ set is always consistent with the visible data.
 The h1 header includes a `header_dropdown(...)` (the same component used on the
 Race page) that toggles between two color modes via `state.color_mode`:
 
-- `"gander"` — **Take a Gander at** (default). Sessions are coloured by a
-  deterministic palette indexed off the session id.
-- `"quality"` — **Scrutinize the Quality of**. Each session is coloured by its
+- `"gander"` — **Take a Gander at** (default). Workouts are coloured by a
+  deterministic palette indexed off the workout id.
+- `"quality"` — **Scrutinize the Quality of**. Each workout is coloured by its
   workout-quality category using `services.workout_quality.QUALITY_STYLE`.
   Workouts without a resolvable quality value get a neutral grey.
 
 `prepare_points(color_mode=…)` derives the per-point HSL triple from the chosen
-mode; switching modes only changes colour, not which sessions are drawn.
+mode; switching modes only changes colour, not which workouts are drawn.
 
 ### Spread + Quality legend
 
@@ -108,8 +108,8 @@ filtering applies to both the chart points and the in-window table.
 Clicking a dot in the main chart opens that workout's detail page. The JS plugin
 attaches a `click` handler to the main canvas that resolves the nearest point via
 `getElementsAtEventForMode(...)` and writes its `id` back to Python via the
-`clicked_workout_id` and `click_seq` props. `sessions_chart()` watches
-`chart.click_seq` for changes and calls `hd.location().go(path=f"/session/{id}")`
+`clicked_workout_id` and `click_seq` props. `workouts_chart()` watches
+`chart.click_seq` for changes and calls `hd.location().go(path=f"/workout/{id}")`
 on a new click. The cursor switches to a pointer while hovering an interactive
 dot.
 
@@ -139,12 +139,12 @@ otherwise balloon the y-axis or visually mislead.
 2. Fit the CP model via `fit_critical_power()` (≥ 5 ranked bests required).
 3. Solve numerically (Brent's method) for the predicted 2 000m time using the
    fitted curve.
-4. Drop any session whose pace > 1.75× the predicted 2k pace.
+4. Drop any workout whose pace > 1.75× the predicted 2k pace.
 
 **Fallback:** if the CP fit is unavailable (too few ranked bests, poor R², etc.),
-keep every session ≥ 500m.
+keep every workout ≥ 500m.
 
-**Constants** (all in `sessions_chart_builder.py`):
+**Constants** (all in `workouts_chart_builder.py`):
 
 | Name | Value | Meaning |
 |---|---|---|
@@ -156,7 +156,7 @@ keep every session ≥ 500m.
 
 ## Season-best detection
 
-Only **non-interval** sessions at a **ranked event** (distance or duration) are
+Only **non-interval** workouts at a **ranked event** (distance or duration) are
 eligible.  Ranked events are defined in `services/rowing_utils.py` as
 `RANKED_DIST_SET` and `RANKED_TIME_SET`.
 
@@ -192,13 +192,13 @@ total_m = work_m + rest_m
 Outer radius (px) = `0.25 × √total_meters`  (the "½√m rule" in the code).
 
 This keeps circles area-proportional to distance while keeping them visually
-compact. Small sessions (e.g., a 2k at ~16px radius) and marathon rows (large
+compact. Small workouts (e.g., a 2k at ~16px radius) and marathon rows (large
 radius) span a reasonable range.
 
 ### color assignment
 
-color is **deterministic and session-stable**: `hashlib.md5(str(id)).hexdigest()`
-mod 12 selects a palette entry.  The same session always gets the same color
+color is **deterministic and workout-stable**: `hashlib.md5(str(id)).hexdigest()`
+mod 12 selects a palette entry.  The same workout always gets the same color
 regardless of filter state.
 
 The 12-entry palette uses hand-tuned HSL triples balanced for readability on
@@ -226,10 +226,10 @@ border opacities can be tuned independently in future.
 
 ## Visual encoding
 
-### Regular (non-interval) sessions
+### Regular (non-interval) workouts
 
 - Filled circle, radius = `r`.
-- Fill: `c33` (33% opacity of the session color).
+- Fill: `c33` (33% opacity of the workout color).
 - Border: `c` (full opacity, 1px).
 
 ### Season-best halos
@@ -238,7 +238,7 @@ Rendered as a separate dataset (layer 3, drawn first = behind everything else):
 - Transparent fill, gold ring (`rgba(255,210,50,0.90)`), 2px border.
 - Radius = `r + 4` px (slightly larger than the dot).
 
-### Interval sessions
+### Interval workouts
 
 A single Chart.js circle encodes both **work extent** and **rest extent**:
 
@@ -283,7 +283,7 @@ canvas allocation.
 
 ---
 
-## Interval session display
+## Interval workout display
 
 ### Concept2 interval data structure
 
@@ -351,13 +351,13 @@ has no y-axis labels and a minimal x-axis).
 
 ## Y-axis range calculation
 
-**Goal:** show all sessions without wasting whitespace, while ensuring the
-slowest (largest) session circle is not clipped at the top.
+**Goal:** show all workouts without wasting whitespace, while ensuring the
+slowest (largest) workout circle is not clipped at the top.
 
 ```javascript
 function yRange() {
   // 1. Scan all points for fastest pace (lo), slowest pace (hi), and the
-  //    radius of the slowest session (hiR).
+  //    radius of the slowest workout (hiR).
   // 2. Compute provisional range = hi − yMin.
   // 3. Convert hiR from pixels to pace units using the actual plot height.
   // 4. yMax = hi + (hiR + 4) × pacePerPx   (one radius + 4px breathing room)
@@ -439,7 +439,7 @@ permissive so the chart shows everything on first load.
 Radio buttons: **Week | Month | Quarter | Season | Year**
 
 Changing the window size snaps `window_end_ms = 0`, which causes `window_bounds_ms()`
-to default to the latest session.
+to default to the latest workout.
 
 | Option | Days |
 |---|---|
@@ -459,9 +459,9 @@ Uses `r.get("workout_type") in INTERVAL_WORKOUT_TYPES` (set from `rowing_utils.p
 
 ### 10k+ filter
 
-Checkbox (off by default).  Keeps sessions where
+Checkbox (off by default).  Keeps workouts where
 `distance + rest_distance >= 10 000m` — uses both fields so that interval
-sessions with significant rest distance are correctly included.
+workouts with significant rest distance are correctly included.
 
 ### Filter application order
 
@@ -470,7 +470,7 @@ sessions with significant rest distance are correctly included.
 2. 10k+ filter.
 3. Interval type filter.
 4. `compute_sb_ids(filtered)` — SBs are computed from the filtered set, so
-   filtered-out sessions cannot claim SB status.
+   filtered-out workouts cannot claim SB status.
 5. `prepare_points(filtered, sb_ids)`.
 
 ---
@@ -518,7 +518,7 @@ Avg pace  2:04.7 / 500m
 ```
 
 Each line in `ivl_desc` corresponds to one structural block as described in the
-[Interval session display](#interval-session-display) section.  `rest_desc` is
+[Interval workout display](#interval-workout-display) section.  `rest_desc` is
 the totals footer.
 
 ---
@@ -574,9 +574,9 @@ the totals footer.
 
 | File | Role |
 |---|---|
-| `components/sessions_chart_builder.py` | Data prep, outlier filter, SB detection, interval parsing, point serialisation, HyperDiv component |
-| `components/sessions_chart_plugin.py` | HyperDiv `Plugin` subclass — prop definitions, JS asset registration |
-| `components/rowing_chart_assets/sessions_chart.js` | Chart.js plugin, brush logic, hatch pattern generator, tooltip callbacks |
-| `components/sessions_page.py` | Tab entry point; loads workouts, calls `sessions_chart()` |
+| `components/workouts_chart_builder.py` | Data prep, outlier filter, SB detection, interval parsing, point serialisation, HyperDiv component |
+| `components/workouts_chart_plugin.py` | HyperDiv `Plugin` subclass — prop definitions, JS asset registration |
+| `components/rowing_chart_assets/workouts_chart.js` | Chart.js plugin, brush logic, hatch pattern generator, tooltip callbacks |
+| `components/workouts_page.py` | Tab entry point; loads workouts, calls `workouts_chart()` |
 | `services/rowing_utils.py` | `INTERVAL_WORKOUT_TYPES`, `RANKED_DIST_SET`, `RANKED_TIME_SET`, `compute_pace` |
 | `services/critical_power_model.py` | `fit_critical_power()`, `critical_power_model()` |

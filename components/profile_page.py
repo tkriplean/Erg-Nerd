@@ -4,7 +4,7 @@ heart-rate zone calculations.
 
 Profile lives on ``AppContext.profile``. The combined ``app_session``
 localStorage key (see ``components.app_context``) carries it across browser
-sessions; ``write_session_ls`` re-serializes the dict whenever a field is
+workouts; ``write_profile_ls`` re-serializes the dict whenever a field is
 edited here.
 
 Editable values are buffered in ``hd.state()`` so re-renders during typing
@@ -36,7 +36,7 @@ from services import public_profiles
 from components.app_context import (
     AppContext,
     get_profile,
-    write_session_ls,
+    write_profile_ls,
     _PROFILE_DEFAULTS,
     _USER_EDITABLE_FIELDS,
 )
@@ -76,7 +76,7 @@ def _persist_profile(new_user_inputs: dict) -> dict:
         "user_edited": edited,
     }
     ctx.profile = merged
-    write_session_ls(ctx.user_id, merged)
+    write_profile_ls(ctx.user_id, merged)
     return merged
 
 
@@ -406,7 +406,7 @@ def _public_profile_section(state, publish_action, display_name: str) -> None:
 
 def _save_via_state(state) -> None:
     """Persist the current buffered state to ``ctx.profile`` and the combined
-    session LS key. Mirrors the inner ``_save`` closure in ``profile_page``
+    profile LS key. Mirrors the inner ``_save`` closure in ``profile_page``
     but usable from helper scope."""
     try:
         weight_val = float(state.weight) if state.weight else 0.0

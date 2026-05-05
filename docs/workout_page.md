@@ -2,13 +2,13 @@
 
 This document covers how the per-workout detail view works in Erg Nerd:
 how it is opened, what it displays, how the workout chart is built, how
-custom splits work, and how similar sessions are found.
+custom splits work, and how similar workouts are found.
 
 ---
 
 ## 1. Overview
 
-Any result table in the app (Performance, Sessions, or Intervals tab) has a
+Any result table in the app (Performance, Workouts, or Intervals tab) has a
 small **⬡ view icon** at the right edge of each row.  Clicking it opens a
 full-screen detail view for that workout.  The detail view replaces the tab
 content until the user navigates away (e.g. by clicking a nav tab or using
@@ -20,7 +20,7 @@ The detail view is composed of five sections rendered top-to-bottom:
 2. **Summary cards** — wrapping grid of key metrics
 3. **Workout chart** — pace/watts vs. elapsed time with SPM and HR overlays
 4. **Splits / intervals table** — per-split or per-interval breakdown, with an optional custom-split editor
-5. **Similar sessions** — a clickable result table of the most similar past workouts
+5. **Similar workouts** — a clickable result table of the most similar past workouts
 
 ---
 
@@ -30,23 +30,23 @@ The detail view is composed of five sections rendered top-to-bottom:
 
 Every result table in the app includes a **view** link in its rightmost column
 (rendered by `COL_LINK` → `_link_cell()` in `workout_table.py`).  Clicking
-it navigates the browser to `/session/{id}`.
+it navigates the browser to `/workout/{id}`.
 
-`_dashboard_view()` in `app.py` detects `in_session = loc.path.startswith("/session/")`,
-extracts the integer ID from the path, and calls `workout_page(session_id, client, user_id)`
+`_dashboard_view()` in `app.py` detects `in_workout = loc.path.startswith("/workout/")`,
+extracts the integer ID from the path, and calls `workout_page(workout_id, client, user_id)`
 instead of the normal tab content.
 
 ### Closing the view
 
-Clicking any tab in the nav bar navigates away from the `/session/…` path,
+Clicking any tab in the nav bar navigates away from the `/workout/…` path,
 which returns the user to that tab.  The browser's own back button also works.
 There is no explicit "Back" button in the UI — it was removed; navigation
 relies entirely on tab clicks or browser-native navigation.
 
-### Chaining sessions
+### Chaining workouts
 
-The **Similar sessions** table at the bottom uses the same `COL_LINK` column,
-so clicking a row there navigates directly to `/session/{id}` for that workout.
+The **Similar workouts** table at the bottom uses the same `COL_LINK` column,
+so clicking a row there navigates directly to `/workout/{id}` for that workout.
 
 ---
 
@@ -113,7 +113,7 @@ mid-rest.  Genuine interval-boundary resets always drop `t` back near zero.
 For interval workouts the API resets `t` to 0 at the start of each work
 interval.  `_stitch_interval_times()` in `workout_chart_builder.py` detects
 each backward jump and adds a running offset so the final `t` values are
-monotonically increasing across the whole session.  The offset is advanced
+monotonically increasing across the whole workout.  The offset is advanced
 by the canonical interval duration (work time + rest time) from the interval
 metadata rather than by `prev_t`, so rest periods are correctly represented
 even when the last stroke arrives a few tenths before the interval ends.
@@ -157,7 +157,7 @@ An additional row of per-series visibility switches appears below the chart:
 
 ### Controls — compare mode
 
-Ticking any **Compare** checkbox in the Similar sessions table overlays that
+Ticking any **Compare** checkbox in the Similar workouts table overlays that
 workout's pace (or watts), SPM, and HR series on the main chart.  Any number
 of rows can be compared at once; each is drawn as a solid line in a distinct
 HSL color, with a Chart.js legend showing the workout date and label.  The
@@ -174,7 +174,7 @@ disabled.  The same per-series visibility switches that appear in stacked
 mode (**Pace/Watts**, **SPM**, **HR**) appear below the chart in compare mode
 and default to **off** for SPM and HR.
 
-Compared-workout selections are session-only — they are not persisted to
+Compared-workout selections are workout-only — they are not persisted to
 localStorage and reset when the detail view is closed.  Compared workouts
 must have stroke data; rows without stroke data show a muted "—" in the
 Compare column instead of a checkbox.
@@ -283,11 +283,11 @@ workout is opened.
 
 ---
 
-## 6. Similar Sessions
+## 6. Similar Workouts
 
-The similar sessions table at the bottom of the page shows up to 8 workouts
-from the user's history that are most similar to the current session.  Each
-row is clickable and navigates directly to that session's detail view.
+The similar workouts table at the bottom of the page shows up to 8 workouts
+from the user's history that are most similar to the current workout.  Each
+row is clickable and navigates directly to that workout's detail view.
 
 Each row also has a **Compare** checkbox (to the left of the **view** link).
 Ticking it overlays that workout on the main chart — see
@@ -303,7 +303,7 @@ Results are sorted by date descending (most recent first).
 
 **Non-interval workouts** — matched by exact `workout_type` and distance
 within ±20%.  Results are sorted by |pace delta| ascending (closest pace
-first), so the most performance-comparable sessions appear at the top.
+first), so the most performance-comparable workouts appear at the top.
 When pace cannot be computed, results fall back to date descending.
 
 ---
@@ -312,28 +312,28 @@ When pace cannot be computed, results fall back to date descending.
 
 | File | Responsibility |
 |---|---|
-| `components/workout_page.py` | Top-level overlay component; all sections; custom-split recalculation; similar-session logic |
+| `components/workout_page.py` | Top-level overlay component; all sections; custom-split recalculation; similar-workout logic |
 | `components/concept2_sync.py` | Ensures workouts are synced from the API before the detail view loads |
 | `components/workout_chart_builder.py` | `build_stroke_chart_config()` — pure Python Chart.js config builder |
 | `components/workout_chart_plugin.py` | `StrokeChart` HyperDiv plugin class |
 | `components/chart_assets/workout_chart_plugin.js` | Chart.js rendering, band click-to-zoom, stacked mode, dual Y-axis setup |
 | `components/workout_table.py` | `WorkoutTable()` — CSS Grid sortable table; `COL_LINK` / `_link_cell()` renders the per-row view link |
 | `services/concept2.py` | `Concept2Client.get_strokes()` — fetches and sanitises the `/strokes` list for a result |
-| `app.py` | URL routing via `loc.path`; dispatches `workout_page()` for `/session/{id}` paths |
+| `app.py` | URL routing via `loc.path`; dispatches `workout_page()` for `/workout/{id}` paths |
 
 ### Entry point
 
 ```python
 # app.py — _dashboard_view()
-if in_session:
-    session_id = int(loc.path.split("/")[2])
-    workout_page(session_id, client, user_id)
+if in_workout:
+    workout_id = int(loc.path.split("/")[2])
+    workout_page(workout_id, client, user_id)
 ```
 
 ### Clickable result tables
 
 Every table that should support drill-in includes `COL_LINK` in its column list.
-`COL_LINK` uses `_link_cell()`, which renders an `hd.link("view", href=f"/session/{id}")`.
+`COL_LINK` uses `_link_cell()`, which renders an `hd.link("view", href=f"/workout/{id}")`.
 Navigating to that URL triggers the routing logic in `_dashboard_view()`.
 
 ---

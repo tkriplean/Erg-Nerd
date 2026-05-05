@@ -50,7 +50,7 @@ from components.race_page import race_page
 from components.rank_page import rank_page
 from components.ergnerd_animation import ergnerd_animation
 from components.workout_page import workout_page
-from components.sessions_page import sessions_page
+from components.workouts_page import workouts_page
 from components.volume_page import volume_page
 from components.concept2_sync import concept2_sync
 from components.indexed_db import mount_indexed_db, IDB_STORES
@@ -60,8 +60,8 @@ from components.app_context import (
     populate_owner,
     populate_public,
     refresh_profile_if_stale,
-    write_session_ls,
-    clear_session_ls,
+    write_profile_ls,
+    clear_profile_ls,
     _SESSION_LS_KEY,
 )
 from components.public_banner import public_banner
@@ -203,7 +203,7 @@ def _login_view() -> None:
 
 # Maps page name → URL path and back.  "/" falls back to the default page.
 _PAGES_ROUTES: dict[str, str] = {
-    "Sessions": "/sessions",
+    "Workouts": "/workouts",
     "Volume": "/volume",
     "Intervals": "/intervals",
     "Power Curve": "/power_curve",
@@ -410,7 +410,7 @@ def _app_header(current_page, is_public):
                         except Exception as _exc:
                             print(f"[disconnect] unpublish failed: {_exc}")
                         clear_token(ctx.user_id)
-                        clear_session_ls()
+                        clear_profile_ls()
                         # Drop client-side workout + stroke caches so the next
                         # user logging in on this browser starts clean.
                         from components import indexed_db as _idb
@@ -436,13 +436,13 @@ def _dashboard_view(app_state, path_suffix: str | None = None) -> None:
     loc = hd.location()
 
     # Active path used to dispatch pages. In owner mode we read ``loc.path``
-    # directly; in public mode we get the suffix (e.g. "/sessions") stripped
-    # from "/u/{uid}/sessions" by the caller.
+    # directly; in public mode we get the suffix (e.g. "/workouts") stripped
+    # from "/u/{uid}/workouts" by the caller.
     active_path = path_suffix if path_suffix is not None else loc.path
 
-    # Derive active page from URL; unknown/session paths fall back to default.
-    in_session = active_path.startswith("/session/")
-    current_page = _ROUTES_PAGES.get(active_path, None if in_session else _DEFAULT_PAGE)
+    # Derive active page from URL; unknown/workout paths fall back to default.
+    in_workout = active_path.startswith("/workout/")
+    current_page = _ROUTES_PAGES.get(active_path, None if in_workout else _DEFAULT_PAGE)
 
     public_banner()
 
@@ -467,17 +467,17 @@ def _dashboard_view(app_state, path_suffix: str | None = None) -> None:
             # skip the page dispatch until the snapshot is ready.
             pass
         # ── Session detail overlay ─────────────────────────────────────────
-        elif in_session:
+        elif in_workout:
             try:
-                session_id = int(active_path.split("/")[2])
+                workout_id = int(active_path.split("/")[2])
             except (IndexError, ValueError):
-                session_id = None
-            if session_id is not None:
-                workout_page(session_id)
+                workout_id = None
+            if workout_id is not None:
+                workout_page(workout_id)
         elif current_page == "Volume":
             volume_page()
-        elif current_page == "Sessions":
-            sessions_page()
+        elif current_page == "Workouts":
+            workouts_page()
         elif current_page == "Intervals":
             intervals_page()
         elif current_page == "Power Curve":
@@ -584,41 +584,41 @@ def _main_body() -> None:
         _dashboard_view(app_state, path_suffix=suffix)
         return
 
-    # ── Combined session-key gate ────────────────────────────────────────────
+    # ── Combined profile-key gate ────────────────────────────────────────────
     # One async fetch carries both ``user_id`` and ``profile`` so the boot
     # path doesn't pay for two LS round-trips on every render.
-    ls_session = hd.local_storage.get_item(_SESSION_LS_KEY)
-    if not ls_session.done:
+    ls_profile = hd.local_storage.get_item(_SESSION_LS_KEY)
+    if not ls_profile.done:
         with hd.box(height="100vh", align="center", justify="center"):
             hd.spinner()
         return
 
-    # Flush any pending OAuth-callback result into the combined session key.
-    # If a session already exists for this user (e.g. logged out and back in
+    # Flush any pending OAuth-callback result into the combined profile key.
+    # If a profile already exists for this user (e.g. logged out and back in
     # without clearing the LS), preserve its profile so user-edited values
     # survive the round-trip.
     if app_state.pending_user_id:
         new_uid = app_state.pending_user_id
         new_profile = app_state.pending_profile or {}
-        if ls_session.result:
+        if ls_profile.result:
             try:
-                existing = json.loads(ls_session.result)
+                existing = json.loads(ls_profile.result)
                 if existing.get("user_id") == new_uid and existing.get("profile"):
                     new_profile = existing["profile"]
             except Exception:
                 pass
-        write_session_ls(new_uid, new_profile)
+        write_profile_ls(new_uid, new_profile)
         app_state.pending_user_id = None
         app_state.pending_profile = None
         return  # next render will re-read the combined key
 
-    if not ls_session.result:
+    if not ls_profile.result:
         _login_view()
         return
 
-    # Have session data — parse and populate AppContext.
+    # Have profile data — parse and populate AppContext.
     try:
-        data = json.loads(ls_session.result)
+        data = json.loads(ls_profile.result)
     except Exception:
         data = {}
     user_id = data.get("user_id") or ""
@@ -629,8 +629,8 @@ def _main_body() -> None:
         return
 
     if not populate_owner(user_id, profile=profile):
-        # Token file missing or corrupt — clear stale session and show login
-        clear_session_ls()
+        # Token file missing or corrupt — clear stale profile and show login
+        clear_profile_ls()
         _login_view()
         return
 

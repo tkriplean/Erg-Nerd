@@ -20,7 +20,7 @@ training at once:
 
 Grid is rendered with CSS Grid (row-first) so column widths are set globally
 via grid_template_columns.  Every cell is a full-width button — populated
-cells show the session count on top of the stimulus label, empty cells
+cells show the workout count on top of the stimulus label, empty cells
 show only the label.
 
 Each populated cell carries its own ``expected_score`` (on the stimulus
@@ -49,7 +49,7 @@ Grid placement rules:
 Legends & filters
 -----------------
 The Power Spread + HR Spread + Quality legend stack is shared with the
-Sessions page; see :mod:`components.spread_quality_legends` for the chip
+Workouts page; see :mod:`components.spread_quality_legends` for the chip
 rendering and tooltip content.  The three legends combine **disjunctively
 (OR) within** themselves and **conjunctively across** with each other and
 with the grid-cell selection.
@@ -65,7 +65,7 @@ from `components.workout_table.COLUMN_REGISTRY`.  The Intervals column is
 the interactive `structure_filter` variant — its button shows the full
 `intervals_label` (e.g. "10×1'/1'") and clicking emits `structure_click`
 with the rep-stripped `structure_key` (e.g. "1'/1'"), which toggles
-`state.structure_filter` so the table narrows to all sessions sharing
+`state.structure_filter` so the table narrows to all workouts sharing
 that interval shape regardless of rep count.
 Sortable headers (▲/▼), default sort: date descending.
 
@@ -83,14 +83,14 @@ render as "—" and sort last.
 
 Time-aware thresholds: each row's Power Spread score is computed
 against the rower's reference watts **on that row's own date** (via
-services/reference_watts.py), so a 2010 session is graded against 2010
+services/reference_watts.py), so a 2010 workout is graded against 2010
 fitness, not today's.  The Quality column uses the same time-aware
 reference watts — see :mod:`services.workout_enrichment`.
 
 The Quality column scores every work interval against the date-matched
 reference watts via :mod:`services.workout_quality`.  Each split accrues
 "quality energy" weighted by ``split_watts / category_reference_watts``
-and discounted (for interval sessions) by the preceding rest ratio;
+and discounted (for interval workouts) by the preceding rest ratio;
 per-category energy is normalized by a reference target and summed.  The
 scalar is bucketed **Low** (<0.5) / **Medium** (<0.75) / **High** (≥0.75).
 Workouts whose reference-watts index is missing anchors show "—"; sort is
@@ -98,7 +98,7 @@ by raw score so ordering is continuous within each bucket.
 
 Structure filter: clicking any Intervals cell sets a filter restricting
 the table to workouts with that same rep-stripped structure key (so
-"10×1'/1'" matches every "1'/1'" session).  Clicking the same cell
+"10×1'/1'" matches every "1'/1'" workout).  Clicking the same cell
 again, or the ×-chip above the table, clears it.
 """
 
@@ -185,7 +185,7 @@ _N_ROWS = len(_RATIO_ROWS)
 # ---------------------------------------------------------------------------
 #
 # Each populated cell in _STIMULUS_INFO carries two numbers describing what a
-# well-executed quality session of that specific stimulus looks like:
+# well-executed quality workout of that specific stimulus looks like:
 #
 #   expected_score  — 0–100 pace-intensity score we'd expect.  Drives:
 #                     (a) the cell's background colour in the grid, and
@@ -194,7 +194,7 @@ _N_ROWS = len(_RATIO_ROWS)
 #
 #   expected_work_s — rough lower bound (seconds of work) for a genuine dose
 #                     at that stimulus.  Used with expected_score to grade
-#                     each session Low / Medium / High in the Quality column.
+#                     each workout Low / Medium / High in the Quality column.
 #
 # Values are conservative ballparks — they shape a 3-state colour chip, not
 # a prescription.  Cells left as None in _STIMULUS_INFO use no expectations:
@@ -326,7 +326,7 @@ _STIMULUS_INFO: list[list[dict | None]] = [
             "description": (
                 "1–3 minute reps with short recovery. The incomplete recovery "
                 "keeps oxygen uptake high across reps, producing a large "
-                "VO₂max stimulus per session."
+                "VO₂max stimulus per workout."
             ),
             "example": '6× 2\' / 30"r, 8× 90" / 30"r.',
             "expected_score": 60,
@@ -595,7 +595,7 @@ def _enrich_workouts(
     max_hr: int | None,
 ) -> list[dict]:
     """
-    Filter to interval workout types (excluding single-rep sessions) and
+    Filter to interval workout types (excluding single-rep workouts) and
     attach the page-specific grid-placement fields.  Spread + quality
     fields come via the central metrics cache.
 
@@ -1013,7 +1013,7 @@ def intervals_page() -> None:
 
     with hd.box(align="center", gap=1, padding=2, min_height="80vh"):
         with hd.box(gap=0.2, align="center"):
-            hd.h1(f"Review {your()} Fondest Interval Sessions")
+            hd.h1(f"Review {your()} Fondest Interval Workouts")
             global_filter_ui()
 
         with hd.box(width="100%", gap=2):

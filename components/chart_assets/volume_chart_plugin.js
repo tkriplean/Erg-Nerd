@@ -1,6 +1,6 @@
 /**
  * VolumeChart — HyperDiv plugin wrapping Chart.js for the stacked-bar
- * volume (meters × pace zone) chart on the Sessions tab.
+ * volume (meters × pace zone) chart on the Workouts page.
  *
  * Props received from Python:
  *   config  — full Chart.js config dict (type, data, options)

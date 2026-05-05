@@ -373,7 +373,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       if (cur != null && String(cur) === String(r.id)) {
         return document.createDocumentFragment();
       }
-      return el("a", { class: "link", href: `/session/${r.id}` }, "view");
+      return el("a", { class: "link", href: `/workout/${r.id}` }, "view");
     },
 
     structure_filter(r, col) {
@@ -420,8 +420,6 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     hr_spread(r, col) {
       const hr = (r.heart_rate && r.heart_rate.average) || null
       const bins = r._hr_bin_meters;
-      console.log("HI", hr, bins)
-
       if (hr == null || bins == null) return emDash();
       return _spreadCell(hr, r._hr_bar_uri, bins, col);
     },
@@ -557,8 +555,8 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     const body = el("div", { class: "tt-body quality" });
     body.appendChild(el("div", { class: "tt-title" }, `${sev} severity`));
     let headline;
-    if (sev === "Low") headline = `Severity ${score.toFixed(2)} — easy / recovery / base session.`;
-    else if (sev === "Moderate") headline = `Severity ${score.toFixed(2)} — solid moderate session.`;
+    if (sev === "Low") headline = `Severity ${score.toFixed(2)} — easy / recovery / base workout.`;
+    else if (sev === "Moderate") headline = `Severity ${score.toFixed(2)} — solid moderate workout.`;
     else if (sev === "High") headline = `Severity ${score.toFixed(2)} — sharp threshold / VO2 / intervals.`;
     else headline = `Severity ${score.toFixed(2)} — race-pace or max effort; high recovery demand.`;
     body.appendChild(el("div", { class: "tt-headline" }, headline));
@@ -571,7 +569,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     const body = el("div", { class: "tt-body quality" });
     body.appendChild(el("div", { class: "tt-title" }, `${q} quality`));
     let headline;
-    if (q === "Low") headline = `Quality score ${score.toFixed(2)} — below the 0.50 threshold for a Medium session.`;
+    if (q === "Low") headline = `Quality score ${score.toFixed(2)} — below the 0.50 threshold for a Medium workout.`;
     else if (q === "Medium") headline = `Quality score ${score.toFixed(2)} — clears the 0.50 Medium threshold, below the 0.75 cutoff for High.`;
     else if (q === "High") headline = `Quality score ${score.toFixed(2)} — clears the 0.75 High threshold.`;
     else headline = `Quality score ${score.toFixed(2)} — beyond reference power.`;

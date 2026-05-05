@@ -73,7 +73,7 @@ For **interval workouts** (`workout_type` in `INTERVAL_WORKOUT_TYPES`):
 - Interval rest distance is taken from the top-level `rest_distance` field if present; otherwise it equals `total_distance − sum(interval_distances)`.
 - All rest distance goes into the **Rest** bin.
 
-For **steady-state workouts**: the session's overall average watts determines the bin (one bin for the entire workout).
+For **steady-state workouts**: the workout's overall average watts determines the bin (one bin for the entire workout).
 
 ---
 
@@ -257,7 +257,7 @@ HR mode uses a 5-zone model exposed as 4 data columns (Z3 is split into two):
 | Threshold (80–90%) | bin 2 | Z4 Threshold |
 | Max (90%+) | bin 1 | Z5 Max |
 
-A **Distribution** column is included. Classification uses the same thresholds as power-intensity mode (Polarized, Pyramidal, etc.) but the percentages are computed over HR-classified meters only — the "No HR" bin (bin 6) is excluded from the denominator so that unmonitored sessions don't dilute zone fractions. Periods with fewer than 500 HR-classified meters receive "—".
+A **Distribution** column is included. Classification uses the same thresholds as power-intensity mode (Polarized, Pyramidal, etc.) but the percentages are computed over HR-classified meters only — the "No HR" bin (bin 6) is excluded from the denominator so that unmonitored workouts don't dilute zone fractions. Periods with fewer than 500 HR-classified meters receive "—".
 
 ---
 

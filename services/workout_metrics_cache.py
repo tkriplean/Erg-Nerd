@@ -3,7 +3,7 @@ services/workout_metrics_cache.py
 
 Process-wide cache for per-workout render-time metrics.
 
-Several pages (Sessions, Volume, Workout, Intervals) ask for the same
+Several pages (Workouts, Volume, Workout, Intervals) ask for the same
 heavy fields every render — power-bin meters, HR-bin meters, the SVG
 bars derived from them, the spread scores, the quality category.  All
 are pure functions of:

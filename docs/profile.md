@@ -17,12 +17,12 @@ dashboard from their perspective.
 
 | Path                                                                      | Auth     | Behavior                                          |
 |---------------------------------------------------------------------------|----------|---------------------------------------------------|
-| `/`, `/sessions`, `/volume`, `/intervals`, `/power_curve`, `/race`, `/profile` | owner    | Authenticated owner dashboard (unchanged)         |
-| `/session/{id}`                                                           | owner    | Authenticated session detail (unchanged)          |
+| `/`, `/workouts`, `/volume`, `/intervals`, `/power_curve`, `/race`, `/profile` | owner    | Authenticated owner dashboard (unchanged)         |
+| `/workout/{id}`                                                           | owner    | Authenticated workout detail (unchanged)          |
 | `/oauth/callback`                                                         | —        | Concept2 OAuth landing                            |
 | `/u/{uid}`                                                                | none     | Public dashboard → default page (Power Curve)     |
-| `/u/{uid}/sessions`, `/volume`, `/intervals`, `/power_curve`, `/race`     | none     | Public dashboard tabs                             |
-| `/u/{uid}/session/{sid}`                                                  | none     | Public workout detail (with strokes when cached)  |
+| `/u/{uid}/workouts`, `/volume`, `/intervals`, `/power_curve`, `/race`     | none     | Public dashboard tabs                             |
+| `/u/{uid}/workout/{sid}`                                                  | none     | Public workout detail (with strokes when cached)  |
 | `/u/{uid}/profile`                                                        | none     | 404 — settings page has no public meaning         |
 | `/u/{uid}` with no published data                                         | none     | Friendly 404 card                                 |
 
@@ -110,9 +110,9 @@ histories. Instead:
   `.public_profiles/{uid}/strokes/{rid}.json` **if** `profile.public = True`.
 - The public viewer reads strokes off disk via `load_public_strokes(...)` —
   no API, no rate limit.
-- A public viewer opening a session the owner has never looked at sees
+- A public viewer opening a workout the owner has never looked at sees
   splits and workout metadata, plus a small inline notice:
-  "Stroke-level data for this session is not yet available."
+  "Stroke-level data for this workout is not yet available."
 - The public race page excludes uncached workouts from its race queue and
   displays a count: "N workouts not yet available — appears after the owner
   views them."
@@ -156,7 +156,7 @@ with a log line (strokes).
 | 6  | Corrupt `profile.json` on disk                      | `load_public_profile` returns `None` → 404 card                    |
 | 7  | Synthetic mode                                      | `concept2_sync` never publishes synthetic data (only real workouts) |
 | 8  | Owner viewing own `/u/{id}`                         | Banner notes "This is how others see your profile"                 |
-| 9  | Public viewer opens session owner hasn't seen       | Splits render; "Stroke-level data not yet available" notice        |
+| 9  | Public viewer opens workout owner hasn't seen       | Splits render; "Stroke-level data not yet available" notice        |
 | 10 | Public race page with uncached workouts             | Uncached workouts excluded; count shown in info card               |
-| 11 | URL tricks (`/u/../..`, `/u/foo/session/../x`)      | `_user_dir` resolve-guard raises; stroke paths coerce to `int`     |
+| 11 | URL tricks (`/u/../..`, `/u/foo/workout/../x`)      | `_user_dir` resolve-guard raises; stroke paths coerce to `int`     |
 | 12 | `/u/{uid}/profile`                                  | 404 card — no public settings                                      |

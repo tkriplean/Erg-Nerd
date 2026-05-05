@@ -2,13 +2,13 @@
 
 ## Overview
 
-The Intervals tab is a dedicated browser for Concept2 interval workouts. Interval workouts are excluded from the Rankings tab (pace is not comparable to steady-state efforts) and appear only as dots in the Sessions chart, so this tab is their primary home.
+The Intervals tab is a dedicated browser for Concept2 interval workouts. Interval workouts are excluded from the Rankings tab (pace is not comparable to steady-state efforts) and appear only as dots in the Workouts chart, so this tab is their primary home.
 
 The tab has three regions:
 
-1. **2D grid browser** — maps every interval workout onto a physiologically meaningful grid so training coverage gaps are immediately visible. Each row is coloured by the *expected* power spread of a quality session at that work:rest ratio, giving an at-a-glance map of what "hard" should look like.
+1. **2D grid browser** — maps every interval workout onto a physiologically meaningful grid so training coverage gaps are immediately visible. Each row is coloured by the *expected* power spread of a quality workout at that work:rest ratio, giving an at-a-glance map of what "hard" should look like.
 2. **Persistent info panel** — sits directly below the grid and describes *every* currently selected stimulus (name, axis coordinates, physiological description, example workout). Useful for comparing several stimuli side by side.
-3. **Sortable data table** — lists individual workouts with full detail; includes a Quality column grading each session against its row's expected intensity/volume; filtered by the grid cells, the Power Spread legend, the HR Spread legend, and any active Structure filter.
+3. **Sortable data table** — lists individual workouts with full detail; includes a Quality column grading each workout against its row's expected intensity/volume; filtered by the grid cells, the Power Spread legend, the HR Spread legend, and any active Structure filter.
 
 ---
 
@@ -22,7 +22,7 @@ The tab has three regions:
 | `services/reference_watts.py` | Time-indexed reference-watts index: `get_reference_watts(when, all_workouts)` and the loader-only `build_reference_watts_index()` |
 | `components/reference_watts_loader.py` | localStorage + progress-bar shell around `reference_watts.py` |
 | `services/heartrate_utils.py` | HR-zone infrastructure: `workout_hr_meters()`, `resolve_max_hr()`, `HR_ZONE_NAMES`, `HR_ZONE_COLORS`, `HR_SPREAD_WEIGHTS`, `hr_spread_score()`, `hr_bin_passes()`, `HR_ZONE_DEFINITION_TEXT`, `HR_ZONE_FILTER_TEXT` |
-| `services/rowing_utils.py` | `INTERVAL_WORKOUT_TYPES` — the set of `workout_type` strings that qualify as interval sessions |
+| `services/rowing_utils.py` | `INTERVAL_WORKOUT_TYPES` — the set of `workout_type` strings that qualify as interval workouts |
 | `services/formatters.py` | Shared formatters: `fmt_date`, `fmt_distance`, `fmt_split`, `format_time` |
 | `components/workout_table.py` | Generic `WorkoutTable` + `ColumnDef` renderer used by the data table |
 | `components/profile_page.py` | `get_profile_from_context(ctx)` — reads the user's profile for max HR |
@@ -39,7 +39,7 @@ get_profile_from_context(ctx) → profile
 resolve_max_hr(profile, all_workouts) → (max_hr, is_estimated)
     ↓
 _enrich_workouts(all_workouts, thresholds, max_hr)
-    → filters to INTERVAL_WORKOUT_TYPES (skipping single-rep sessions)
+    → filters to INTERVAL_WORKOUT_TYPES (skipping single-rep workouts)
     → workout_bin_meters() per workout           (power bins, per-workout thresholds)
     → bin_bar_svg() for power                   (stacked bar SVG)
     → power_spread_score()                   (0–100 weighted score)
@@ -63,9 +63,9 @@ WorkoutTable(filtered, interval_columns, …)
 
 ### Time-aware power thresholds
 
-Each workout row is classified against `compute_bin_thresholds(get_reference_watts(workout_date, all_workouts))` — the rower's *own* reference watts on that workout's date. A 2010 interval session is graded against 2010 fitness, not today's. The quarterly reference-watts index is built once per unique workout-set (first render shows a progress bar), persisted in `localStorage` under `reference_watts_v1`, and interpolated at render time; see `services/reference_watts.py` and `components/reference_watts_loader.py`.
+Each workout row is classified against `compute_bin_thresholds(get_reference_watts(workout_date, all_workouts))` — the rower's *own* reference watts on that workout's date. A 2010 interval workout is graded against 2010 fitness, not today's. The quarterly reference-watts index is built once per unique workout-set (first render shows a progress bar), persisted in `localStorage` under `reference_watts_v1`, and interpolated at render time; see `services/reference_watts.py` and `components/reference_watts_loader.py`.
 
-**Intentional asymmetry** between the row and the cell: each *row's* Power Spread score and chip filter use the workout's own-date thresholds (so old sessions are scored against their era's fitness). Each *cell's* `expected_score` stays anchored to the user's **current** fitness — the grid is a "what should I be hitting now" view. A 2010 threshold session therefore reads as a high-intensity row even though today's stimulus rubric grades it by current standards.
+**Intentional asymmetry** between the row and the cell: each *row's* Power Spread score and chip filter use the workout's own-date thresholds (so old workouts are scored against their era's fitness). Each *cell's* `expected_score` stays anchored to the user's **current** fitness — the grid is a "what should I be hitting now" view. A 2010 threshold workout therefore reads as a high-intensity row even though today's stimulus rubric grades it by current standards.
 
 ---
 
@@ -112,7 +112,7 @@ Meaningful meters exclude Rest (both models) and No HR (HR only). Workouts with 
 
 ## 2D Grid Browser
 
-The grid is the primary navigation tool. It answers "what kinds of interval sessions have I done, and are there gaps?"
+The grid is the primary navigation tool. It answers "what kinds of interval workouts have I done, and are there gaps?"
 
 ### Axes
 
@@ -139,7 +139,7 @@ The grid is the primary navigation tool. It answers "what kinds of interval sess
 
 Rest is summed from two sources: the `rest_time` field on each work interval (C2 API convention — rest is stored on the preceding work interval), plus the `time` field of any intervals whose `type == "rest"`.
 
-If a workout has no `workout.intervals` data, the full session duration is used and it is placed in the Continuous row.
+If a workout has no `workout.intervals` data, the full workout duration is used and it is placed in the Continuous row.
 
 ### Stimulus Matrix (`_STIMULUS_INFO`)
 
@@ -161,7 +161,7 @@ Terminology follows standard endurance literature (Seiler's polarized model, Dan
 
 ### Cell Rendering & Click Semantics
 
-- **Per-cell background colour**: every populated cell carries its own `expected_score` (on the stimulus entry in `_STIMULUS_INFO`) which maps to a power-zone colour via `_cell_background_rgba`. Fartlek reads as aerobic blue; VO₂max intervals as yellow-green; race-pace intervals as red. "Other" (uncommon) cells fall back to a neutral grey so they don't falsely imply an intensity. Colour is independent of the workouts in the cell — empty cells still read as "if you did a quality session here, this is the intensity it would be."
+- **Per-cell background colour**: every populated cell carries its own `expected_score` (on the stimulus entry in `_STIMULUS_INFO`) which maps to a power-zone colour via `_cell_background_rgba`. Fartlek reads as aerobic blue; VO₂max intervals as yellow-green; race-pace intervals as red. "Other" (uncommon) cells fall back to a neutral grey so they don't falsely imply an intensity. Colour is independent of the workouts in the cell — empty cells still read as "if you did a quality workout here, this is the intensity it would be."
 - **Text colour is always white** — both the rep count and the stimulus label use whichever `neutral-*` Shoelace token currently renders white (`neutral-0` in light mode, `neutral-1000` in dark mode), resolved via `hd.theme().is_dark`. Row colours are chosen to maintain contrast with white in both themes.
 - **Selection indicator**: selected cells get a thick (`3px solid white`) border; unselected cells get a hairline translucent border. No colour change on selection, so the row's expected intensity remains legible.
 - **Empty cells** are rendered the same way (row-coloured background, just no rep count), and clicking them toggles selection just like populated cells — selecting an "empty" cell adds nothing to the table but tells the info panel to describe that stimulus.

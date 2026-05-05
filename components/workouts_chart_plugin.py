@@ -1,9 +1,9 @@
 """
-SessionsChart — HyperDiv Plugin for the pace-vs-date scatter with brush navigator.
+WorkoutsChart — HyperDiv Plugin for the pace-vs-date scatter with brush navigator.
 
 Usage:
-    from components.sessions_chart_plugin import SessionsChart
-    chart = SessionsChart(
+    from components.workouts_chart_plugin import WorkoutsChart
+    chart = WorkoutsChart(
         points=pts,
         target_window_start=start_ms,
         target_window_end=end_ms,
@@ -14,19 +14,19 @@ Usage:
         state.last_change_id = chart.change_id
         state.window_end_ms  = chart.brush_end
 
-See sessions_chart.js for the full rendering and interaction logic.
+See workouts_chart.js for the full rendering and interaction logic.
 """
 
 import os
 import hyperdiv as hd
 
 _HERE = os.path.dirname(__file__)
-with open(os.path.join(_HERE, "chart_assets", "sessions_chart_plugin.js")) as _f:
+with open(os.path.join(_HERE, "chart_assets", "workouts_chart_plugin.js")) as _f:
     _SESSIONS_CHART_JS = _f.read()
 
 
-class SessionsChart(hd.Plugin):
-    _name = "SessionsChart"
+class WorkoutsChart(hd.Plugin):
+    _name = "WorkoutsChart"
     _assets_root = os.path.join(_HERE, "chart_assets")
     _assets = [
         # Same Chart.js CDN copy as RowingChart / VolumeChart.
@@ -69,7 +69,7 @@ class SessionsChart(hd.Plugin):
 
     # Click-to-open: id of the most recently clicked dot in the main chart.
     # JS bumps click_seq on every click so Python can detect a new click even
-    # when the same dot is clicked twice.  Python navigates to /session/<id>
+    # when the same dot is clicked twice.  Python navigates to /workout/<id>
     # in response.
     clicked_workout_id = hd.Prop(hd.Int, 0)
     click_seq = hd.Prop(hd.Int, 0)
