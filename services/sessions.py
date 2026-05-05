@@ -4,8 +4,7 @@ Session clustering — pure Python.
 A session is the maximal run of workouts on the same date and machine where
 consecutive entries have a gap below ``SESSION_GAP_S`` between ``prev.end``
 and ``next.start``.  Concept2's ``date`` field is the workout end;
-``start = end − duration``.  This mirrors the legacy semantics of
-:func:`services.erg_stress.find_session` exactly, but the result is now
+``start = end − duration``.  The result is 
 persisted alongside the workouts dict in IndexedDB (and in the public
 profile mirror) so we don't recompute on every render.
 
@@ -28,9 +27,9 @@ Session record shape
 
 Notes
     - Cluster bucketing is by (machine, day) where ``day`` is the end-date
-      prefix (``date[:10]``).  This matches find_session and means a
+      prefix (``date[:10]``).  A
       workout that ends after midnight is grouped with workouts on its
-      *end* day, not its start day — preserving existing behaviour.
+      *end* day, not its start day.
     - Workouts whose ``date`` won't parse become a singleton session — they
       still get a uid so the rest of the pipeline can rely on
       ``workout["session_id"]`` being populated.

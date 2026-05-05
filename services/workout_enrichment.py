@@ -108,7 +108,6 @@ from services.critical_power_model import fit_critical_power
 from services.erg_stress import (
     compute_session_metrics,
     compute_w_prime_estimate,
-    find_session,  # defensive fallback; remove once session_id is universal
 )
 from services.reference_watts import _interp_watts_at_duration
 
@@ -494,10 +493,7 @@ def attach_ess_metrics(
     complete field list.
 
     ``sessions_dict`` is the ``AppContext.sessions_dict`` snapshot —
-    ``{session_id: session_record}``.  Pass ``{}`` if unavailable; the
-    defensive fallback below uses :func:`find_session` for any workout
-    missing a ``session_id`` so the page still renders during the brief
-    cold-start window before the first sync persists clusters.
+    ``{session_id: session_record}``.  Pass ``{}`` if unavailable.
 
     ``profile`` is optional — only ``gender`` is used (for the W' default).
     ``max_hr`` is accepted for signature compatibility with v1 but is
@@ -565,7 +561,8 @@ def attach_ess_metrics(
             if not session:
                 session = [r]
         else:
-            session = find_session(r, all_workouts)
+            raise Exception("can't use sessions_dict")
+
         memo_key = tuple(
             sorted(w.get("id") for w in session if w.get("id") is not None)
         )

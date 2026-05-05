@@ -158,7 +158,9 @@ def profile_page() -> None:
         if publish_action.action_key.startswith("publish_all_"):
 
             def _do_publish_all(uid, prof, dn, wkts):
-                public_profiles.publish_all(uid, prof, wkts, display_name=dn)
+                public_profiles.publish_all(
+                    uid, prof, wkts, ctx.sessions_dict, display_name=dn
+                )
 
             if not pt.running and not pt.done:
                 pt.run(

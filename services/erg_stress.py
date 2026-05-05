@@ -71,7 +71,6 @@ Public API
 ----------
 ``compute_session_metrics(session_workouts, ref_watts_at_duration_fn,
 cp, w_prime)`` — the workhorse.
-``find_session(workout, all_workouts)`` — same-day, gap-aware grouping.
 ``build_segments(workout)`` — split a workout into work/rest segments at
 the highest available resolution (intervals → splits → whole workout).
 ``compute_w_prime_estimate(cp_params, gender)`` — pick W' for a rower.
@@ -378,57 +377,6 @@ def build_segments(workout: dict) -> list[dict]:
         top_hr = _extract_hr(workout.get("heart_rate"))
         segments.append(_segment(0.0, total_time_s, float(watts), top_hr, "work"))
     return segments
-
-
-# ---------------------------------------------------------------------------
-# Session detection
-# ---------------------------------------------------------------------------
-
-
-def find_session(workout: dict, all_workouts: list) -> list[dict]:
-    """Return the chronologically-ordered list of workouts in this workout's session.
-
-    A session is the maximal run of workouts on the same date and machine
-    where consecutive entries have a gap below :data:`SESSION_GAP_S` between
-    ``prev.end`` and ``next.start``.  Concept2's ``date`` field is the
-    workout end; ``start = end − duration``.
-
-    Returns ``[workout]`` (just the input) if its date can't be parsed.
-    """
-    target_day = workout.get("day")
-    machine = workout.get("machine")
-    target_id = workout.get("id")
-    if not target_day:
-        return [workout]
-
-    same_day: list = []
-    for w in all_workouts:
-        if w.get("day") != target_day or w.get("machine") != machine:
-            continue
-        end_dt = _parse_workout_datetime(w.get("date"))
-        if end_dt is None:
-            continue
-        duration_s = _workout_total_duration_s(w)
-        start_dt = end_dt - timedelta(seconds=duration_s)
-        same_day.append((start_dt, end_dt, w))
-
-    if not same_day:
-        return [workout]
-    same_day.sort(key=lambda x: x[0])
-
-    # Greedy session grouping by gap.
-    workouts: list[list] = [[same_day[0]]]
-    for prev, curr in zip(same_day, same_day[1:]):
-        gap = (curr[0] - prev[1]).total_seconds()
-        if gap < SESSION_GAP_S:
-            workouts[-1].append(curr)
-        else:
-            workouts.append([curr])
-
-    for sess in workouts:
-        if any(w.get("id") == target_id for _, _, w in sess):
-            return [w for _, _, w in sess]
-    return [workout]
 
 
 # ---------------------------------------------------------------------------
