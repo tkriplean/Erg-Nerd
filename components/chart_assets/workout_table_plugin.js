@@ -61,11 +61,14 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     .cell.align-center { justify-content: center; text-align: center; }
     .cell.end { padding-right: 24px; }
     .hdr {
-      background: var(--sl-color-neutral-50);
+      background: var(--sl-color-neutral-100);
       border-bottom: 1px solid var(--sl-color-neutral-200);
       color: var(--sl-color-neutral-500);
       padding-top: 0.4rem;
       padding-bottom: 0.4rem;
+      white-space: normal;
+      line-height: 1.15;
+      word-break: break-word;
     }
     .row-cell {
       padding-top: 0.5rem;
@@ -75,6 +78,51 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     }
     .row-cell.alt { background: var(--sl-color-neutral-50); }
     .row-cell.hl  { background: var(--sl-color-primary-50); color: var(--sl-color-primary-700); font-weight: 600; }
+
+    /* Tree mode: alternating session-block tint replaces zebra. */
+    .row-cell.session-tint-a { background: var(--sl-color-neutral-50); }
+    .row-cell.session-tint-b { background: transparent; }
+    /* Suppress the per-row bottom border between a parent and its children
+       and between consecutive children of the same session, so the block
+       reads as one visual unit. */
+    .row-cell.session-internal { border-bottom: 1px solid transparent; }
+
+    /* Date cell: chevron, sub-line, child indent. */
+    .tree-date { display: flex; align-items: flex-start; gap: 0; justify-content: left; }
+    .tree-date .tree-date-text { display: flex; flex-direction: column; }
+    .tree-chevron {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1rem;
+      margin-right: 0.5rem;
+      cursor: pointer;
+      user-select: none;
+      color: var(--sl-color-neutral-500);
+      transition: transform 120ms ease;
+      font-size: 0.7rem;
+      line-height: 1;
+      padding-top: 0.3rem;
+    }
+    .tree-chevron.open { transform: rotate(90deg); }
+    .tree-chevron-spacer {
+      display: inline-block;
+      width: 1rem;
+      margin-right: 0.5rem;
+      flex-shrink: 0;
+    }
+    .row-cell.is-child .tree-date-text { padding-left: 1.4rem; }
+    .tree-date .date-main { font-size: var(--sl-font-size-small); }
+    .tree-date .date-sub  { font-size: var(--sl-font-size-x-small); color: var(--sl-color-neutral-500); }
+    .tree-date .role-label {
+      font-size: var(--sl-font-size-x-small);
+      color: var(--sl-color-neutral-500);
+      font-style: italic;
+    }
+
+    /* Multi-line cell content (e.g. Main Work). */
+    .cell .lines { display: flex; flex-direction: column; align-items: flex-start; gap: 0.1rem; width: 100%; }
+    .cell .lines > div { font-size: var(--sl-font-size-small); }
     .sort-btn {
       background: none; border: none; cursor: pointer;
       font: inherit; color: inherit;
@@ -169,6 +217,8 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     resetToken: ctx.initialProps.reset_token || "",
     defaultSortCol: ctx.initialProps.default_sort_col || "date",
     defaultSortAsc: !!ctx.initialProps.default_sort_asc,
+    treeMode: !!ctx.initialProps.tree_mode,
+    expanded: new Set(),
   };
 
   let eventSeq = 0;
@@ -232,6 +282,34 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
   }
   function pad2(n) { return n < 10 ? "0" + n : "" + n; }
 
+  // Readable duration: "1hr30min37s", "30min", "47s".  Used for the
+  // session date sub-line and the Work Duration column in tree mode.
+  function fmtDurationReadable(secs, drop_seconds_on_long) {
+    if (!secs || secs <= 0) return "—";
+    const total = Math.round(secs);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    const parts = [];
+    if (h) parts.push(`${h}hr`);
+    if (m) parts.push(`${m}min`);
+    if (s && (!drop_seconds_on_long || (m < 20 && h < 1))) parts.push(`${s}s`);
+    return parts.join(" ");
+  }
+
+  // Short slash date: "9/24/26".  Used for the session date main line
+  // (parent rows in tree mode).
+  function fmtShortDate(s) {
+    if (!s) return "—";
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+    if (!m) return s.slice(0, 10);
+    const yy = m[1].slice(2);
+    return `${+m[2]}/${+m[3]}/${yy}`;
+  }
+  function capitalize(s) {
+    return s ? s[0].toUpperCase() + s.slice(1) : "";
+  }
+
   // ── DOM helpers ───────────────────────────────────────────────────────────
   function el(tag, props, children) {
     const e = document.createElement(tag);
@@ -262,11 +340,29 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     type:              (r) => machineLabel(r.type || ""),
     distance:          (r) => fmtDistance(r.distance),
     time:              (r) => r.time_formatted || (r.time ? formatTime(r.time) : "—"),
-    pace:              (r) => fmtSplit(paceTenths(r)),
+    pace:              (r) => fmtSplit(r._row_kind === "session" ? r._pace_tenths : paceTenths(r)),
     watts:             (r) => fmtWatts(r),
-    drag:              (r) => r.drag_factor ? String(r.drag_factor) : "—",
-    spm:               (r) => r.stroke_rate ? String(r.stroke_rate) : "—",
+    drag:              (r) => {
+                          const v = r._row_kind === "session" ? r._drag : r.drag_factor;
+                          return v ? String(Math.round(v)) : "—";
+                       },
+    spm:               (r) => {
+                          const v = r._row_kind === "session" ? r._spm : r.stroke_rate;
+                          return v ? String(Math.round(v)) : "—";
+                       },
     hr:                (r) => fmtHr(r.heart_rate),
+    work_duration:     (r) => fmtDurationReadable(r._row_kind === "session"
+                                ? r._work_duration_s
+                                : (r.time || 0) / 10),
+    work_distance:     (r) => fmtDistance(r._row_kind === "session"
+                                ? r._work_distance_m
+                                : (r.distance || 0)),
+    other_distance:    (r) => {
+                          const m = r._row_kind === "session"
+                            ? r._other_distance_m
+                            : (r.rest_distance || 0);
+                          return m ? fmtDistance(m) : "—";
+                       },
     season:            (r) => r.season || "",
     structure:         (r) => r.is_interval ? (r.intervals_label || "") : "",
     reps:              (r) => r.reps ? String(r.reps) : "—",
@@ -301,10 +397,13 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     type:              (r) => machineLabel(r.type || ""),
     distance:          (r) => r.distance || 0,
     time:              (r) => r.time || 0,
-    pace:              (r) => paceTenths(r) || POS_INF,
+    pace:              (r) => (r._row_kind === "session" ? r._pace_tenths : paceTenths(r)) || POS_INF,
     watts:             (r) => r.watts ?? 0,
-    drag:              (r) => r.drag_factor || 0,
-    spm:               (r) => r.stroke_rate || 0,
+    drag:              (r) => (r._row_kind === "session" ? r._drag : r.drag_factor) || 0,
+    spm:               (r) => (r._row_kind === "session" ? r._spm : r.stroke_rate) || 0,
+    work_duration:     (r) => r._row_kind === "session" ? (r._work_duration_s || 0) : (r.time || 0) / 10,
+    work_distance:     (r) => r._row_kind === "session" ? (r._work_distance_m || 0) : (r.distance || 0),
+    other_distance:    (r) => r._row_kind === "session" ? (r._other_distance_m || 0) : 0,
     //hr:                (r) => (r.heart_rate && r.heart_rate.average) || 0,
     season:            (r) => r.date || "",
     structure:         (r) => r.is_interval ? (r.structure_key || "") : "",
@@ -366,6 +465,18 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     },
 
     link(r, col) {
+      // Tree mode: parent rows link to the most-severe main's workout
+      // page; suppress the link entirely when the session is expanded
+      // (the children's own View links carry the user to the right
+      // place).
+      if (r._row_kind === "session") {
+        if (state.expanded.has(r.session_id)) {
+          return document.createDocumentFragment();
+        }
+        const target = r._view_target_id;
+        if (!target) return document.createDocumentFragment();
+        return el("a", { class: "link", href: `/workout/${target}` }, "view");
+      }
       // Suppress the "view" link for the row that matches the column's
       // current_id option — used by the "all workouts done on this day"
       // table on the workout page so the page doesn't link back to itself.
@@ -374,6 +485,66 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
         return document.createDocumentFragment();
       }
       return el("a", { class: "link", href: `/workout/${r.id}` }, "view");
+    },
+
+    tree_date(r) {
+      const wrap = el("div", { class: "tree-date" });
+      if (r._row_kind === "session" && (r._member_count || 1) > 1) {
+        const open = state.expanded.has(r.session_id);
+        const chev = el("span",
+          { class: "tree-chevron" + (open ? " open" : ""),
+            onClick: (ev) => {
+              ev.stopPropagation();
+              toggleExpand(r.session_id);
+            } },
+          "▶");
+        wrap.appendChild(chev);
+      } else {
+        // Singleton parent OR child row — reserve the chevron's width so
+        // every date cell aligns to the same x-position.
+        wrap.appendChild(el("span", { class: "tree-chevron-spacer" }));
+      }
+      const textWrap = el("div", { class: "tree-date-text" });
+      if (r._row_kind === "session") {
+        const dateLine = `${fmtShortDate(r._session_start_dt || r.date)}${r._session_tod ? ", " + r._session_tod : ""}`;
+        textWrap.appendChild(el("div", { class: "date-main" }, dateLine));
+        if (r._session_total_duration_s) {
+          textWrap.appendChild(el("div", { class: "date-sub" },
+            `${fmtDurationReadable(r._session_total_duration_s, true)}`));
+        }
+      } else {
+        // Child workout row — italic role label.  Skip the literal
+        // "single" since singletons stay parents and never reach here.
+        const role = r._role || "";
+        if (role && role !== "single") {
+          textWrap.appendChild(el("div", { class: "role-label" }, capitalize(role)));
+        }
+      }
+      wrap.appendChild(textWrap);
+      return wrap;
+    },
+
+    main_work_lines(r) {
+      if (r._row_kind === "session") {
+        const lines = r._main_work_lines || [];
+        if (!lines.length) return text("");
+        const wrap = el("div", { class: "lines" });
+        for (const ln of lines) wrap.appendChild(el("div", null, ln));
+        return wrap;
+      }
+      // Child row — show this workout's own one-line description so the
+      // expanded view tells you what each piece was.  For non-interval
+      // rows the role label in the date cell already conveys it; only
+      // interval rows benefit from the explicit label here.
+      if (r.is_interval) return text(r.intervals_label || "");
+      // Non-interval child: show "<dist or time> @ <pace>".
+      const pTen = paceTenths(r);
+      const pace = pTen ? fmtSplit(pTen) : "—";
+      const wt = (r.workout_type || "");
+      const head = wt.indexOf("Time") >= 0
+        ? (r.time ? formatTime(r.time) : "—")
+        : (r.distance ? fmtDistance(r.distance) : "—");
+      return text(`${head} @ ${pace}`);
     },
 
     structure_filter(r, col) {
@@ -590,29 +761,49 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
   }
 
   // ── Sort + visible-rows pipeline ─────────────────────────────────────────
+  function _sortRows(rs) {
+    const col = state.cols.find((c) => c.key === state.sortCol);
+    if (!col) return rs;
+    const keyName = col.sort_key || col.key;
+    const fn = SORT_KEYS[keyName];
+    if (!fn) return rs;
+    const opts = col.opts || {};
+    const dir = state.sortAsc ? 1 : -1;
+    return rs.slice().sort((a, b) => {
+      const ka = fn(a, opts);
+      const kb = fn(b, opts);
+      if (ka < kb) return -1 * dir;
+      if (ka > kb) return  1 * dir;
+      return 0;
+    });
+  }
+
+  // Flat mode: filter by visibleIds, sort, return.
   function visibleAndSorted() {
     let rs = state.rows;
     if (state.visibleIds != null) {
       const allow = new Set(state.visibleIds);
       rs = rs.filter((r) => allow.has(r.id));
     }
-    const col = state.cols.find((c) => c.key === state.sortCol);
-    if (col) {
-      const keyName = col.sort_key || col.key;
-      const fn = SORT_KEYS[keyName];
-      if (fn) {
-        const opts = col.opts || {};
-        const dir = state.sortAsc ? 1 : -1;
-        rs = rs.slice().sort((a, b) => {
-          const ka = fn(a, opts);
-          const kb = fn(b, opts);
-          if (ka < kb) return -1 * dir;
-          if (ka > kb) return  1 * dir;
-          return 0;
-        });
-      }
+    return _sortRows(rs);
+  }
+
+  // Tree mode: sort parents only; expanded children are spliced in
+  // immediately below their parent.  Children are pre-sorted by start
+  // time and stay in that order regardless of the active column sort.
+  function visibleAndSortedTree() {
+    let parents = state.rows;
+    if (state.visibleIds != null) {
+      const allow = new Set(state.visibleIds);
+      parents = parents.filter((r) => allow.has(r.id));
     }
-    return rs;
+    return _sortRows(parents);
+  }
+
+  function toggleExpand(sid) {
+    if (state.expanded.has(sid)) state.expanded.delete(sid);
+    else state.expanded.add(sid);
+    render();
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -627,18 +818,49 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       return;
     }
 
-    const sorted = visibleAndSorted();
-    const total = sorted.length;
-    if (!total) {
-      container.appendChild(el("div", { class: "empty" }, "No results."));
-      return;
-    }
+    // Tree mode paginates parents (sessions) and expands children inline
+    // under each visible parent on the current page.  Flat mode is the
+    // existing behavior — paginate the row list directly.
+    let pageRows;            // the rows actually rendered this turn
+    let total;               // page count denominator
+    let totalPages;
+    let countLabel;          // tail of the pagination bar text
 
-    const perPage = state.paginate ? state.perPage : total;
-    const totalPages = Math.max(1, Math.ceil(total / perPage));
-    if (state.page >= totalPages) state.page = totalPages - 1;
-    if (state.page < 0) state.page = 0;
-    const pageRows = sorted.slice(state.page * perPage, state.page * perPage + perPage);
+    if (state.treeMode) {
+      const parents = visibleAndSortedTree();
+      total = parents.length;
+      if (!total) {
+        container.appendChild(el("div", { class: "empty" }, "No results."));
+        return;
+      }
+      const perPage = state.paginate ? state.perPage : total;
+      totalPages = Math.max(1, Math.ceil(total / perPage));
+      if (state.page >= totalPages) state.page = totalPages - 1;
+      if (state.page < 0) state.page = 0;
+      const pageParents = parents.slice(
+        state.page * perPage, state.page * perPage + perPage);
+      pageRows = [];
+      for (const p of pageParents) {
+        pageRows.push(p);
+        if (state.expanded.has(p.session_id) && Array.isArray(p._children)) {
+          for (const c of p._children) pageRows.push(c);
+        }
+      }
+      countLabel = `${total} session${total === 1 ? "" : "s"}`;
+    } else {
+      const sorted = visibleAndSorted();
+      total = sorted.length;
+      if (!total) {
+        container.appendChild(el("div", { class: "empty" }, "No results."));
+        return;
+      }
+      const perPage = state.paginate ? state.perPage : total;
+      totalPages = Math.max(1, Math.ceil(total / perPage));
+      if (state.page >= totalPages) state.page = totalPages - 1;
+      if (state.page < 0) state.page = 0;
+      pageRows = sorted.slice(state.page * perPage, state.page * perPage + perPage);
+      countLabel = `${total} workouts`;
+    }
 
     // Grid
     const grid = el("div", { class: "grid" });
@@ -664,15 +886,47 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     }
 
     // Rows
+    let sessionTintIdx = 0;
+    let currentTint = "session-tint-b";
     pageRows.forEach((row, i) => {
       const isAlt = i % 2 === 1;
       const isHl = state.highlightIds.has(row.id);
-      idx = 0;
-      col_count = state.cols.length
+      const isChild = state.treeMode && row._row_kind === "workout";
+      const isParent = state.treeMode && row._row_kind === "session";
+
+      // Tree-mode session block tinting: flip on each parent so a parent
+      // and its expanded children share a single tint distinct from
+      // neighboring sessions.
+      if (isParent) {
+        sessionTintIdx += 1;
+        currentTint = (sessionTintIdx % 2 === 0)
+          ? "session-tint-a" : "session-tint-b";
+      }
+
+      // Whether this row's bottom border should be suppressed because
+      // the next row is part of the same session block.
+      const next = pageRows[i + 1];
+      const sameBlockNext = state.treeMode && next != null && (
+        (isParent && next._row_kind === "workout"
+          && next._session_id === row.session_id)
+        || (isChild && (
+          (next._row_kind === "workout" && next._session_id === row._session_id)
+        ))
+      );
+
+      let idx = 0;
+      const colCount = state.cols.length;
       for (const col of state.cols) {
         const align = "align-" + (col.align || "center");
-        isEnd = idx == col_count - 1;
-        const cls = `cell row-cell ${align}` + (isHl ? " hl" : (isAlt ? " alt" : "")) + (isEnd ? " end" : "");
+        const isEnd = idx === colCount - 1;
+        let bgCls;
+        if (isHl) bgCls = " hl";
+        else if (state.treeMode) bgCls = " " + currentTint;
+        else bgCls = isAlt ? " alt" : "";
+        const childCls = isChild ? " is-child" : "";
+        const internalCls = sameBlockNext ? " session-internal" : "";
+        const cls = `cell row-cell ${align}${bgCls}${childCls}${internalCls}`
+          + (isEnd ? " end" : "");
         const cell = el("div", { class: cls });
         const renderer = RENDERERS[col.renderer] || RENDERERS.text;
         const node = renderer(row, col);
@@ -692,7 +946,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
         prev.addEventListener("click", () => { state.page -= 1; render(); });
         bar.appendChild(prev);
       }
-      bar.appendChild(text(`Page ${state.page + 1} of ${totalPages}  (${total} workouts)`));
+      bar.appendChild(text(`Page ${state.page + 1} of ${totalPages}  (${countLabel})`));
       if (state.page < totalPages - 1) {
         const next = el("sl-button", { size: "small", variant: "neutral" }, "Next →");
         next.addEventListener("click", () => { state.page += 1; render(); });
@@ -732,12 +986,17 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
         break;
       case "paginate":        state.paginate = value !== false; break;
       case "rows_per_page":   state.perPage = value || 25; break;
+      case "tree_mode":       state.treeMode = !!value; break;
       case "reset_token":
         if (value !== state.resetToken) {
           state.resetToken = value;
           state.page = 0;
           state.sortCol = state.defaultSortCol;
           state.sortAsc = state.defaultSortAsc;
+          // Filter changes that fire reset_token also collapse all
+          // expanded sessions, so children aren't stranded under a
+          // since-filtered-out parent.
+          state.expanded.clear();
         }
         break;
       default: return;

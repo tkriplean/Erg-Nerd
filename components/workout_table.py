@@ -124,7 +124,7 @@ class ColumnDef:
 
 COLUMN_REGISTRY: dict[str, ColumnDef] = {
     # ── Workout columns ─────────────────────────────────────────────────
-    "date": ColumnDef("date", "Date", "10rem", format="date"),
+    "date": ColumnDef("date", "Date", "10rem", format="date", align="start"),
     "type": ColumnDef("type", "Type", "7rem", format="type"),
     "distance": ColumnDef(
         "distance", "Distance", "7rem", format="distance", align="end"
@@ -134,6 +134,36 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
     "watts": ColumnDef("watts", "Watts", "5rem", format="watts"),
     "drag": ColumnDef("drag", "Drag", "5rem", format="drag"),
     "spm": ColumnDef("spm", "SPM", "4rem", format="spm"),
+    # ── Session-tree columns (only used when tree_mode=True) ────────────
+    "main_work": ColumnDef(
+        "main_work",
+        "Main Work",
+        "minmax(10rem,1.5fr)",
+        renderer="main_work_lines",
+        align="start",
+        sortable=False,
+    ),
+    "work_duration": ColumnDef(
+        "work_duration",
+        "Work Duration",
+        "7rem",
+        format="work_duration",
+        align="center",
+    ),
+    "work_distance": ColumnDef(
+        "work_distance",
+        "Work Distance",
+        "7rem",
+        format="work_distance",
+        align="center",
+    ),
+    "other_distance": ColumnDef(
+        "other_distance",
+        "Other Distance",
+        "7rem",
+        format="other_distance",
+        align="center",
+    ),
     # "hr": ColumnDef("hr", "HR", "8rem", format="hr"),
     "season": ColumnDef("season", "Season", "6rem", format="season"),
     "link": ColumnDef("link", "", "2.5rem", renderer="link", sortable=False),
@@ -369,6 +399,7 @@ class _WorkoutTablePlugin(hd.Plugin):
     paginate = hd.Prop(hd.Bool, True)
     rows_per_page = hd.Prop(hd.Int, _DEFAULT_ROWS_PER_PAGE)
     reset_token = hd.Prop(hd.String, "")
+    tree_mode = hd.Prop(hd.Bool, False)
     event_out = hd.Prop(hd.Any, None)
 
 
@@ -464,17 +495,43 @@ def _row_for_js(r: dict) -> dict:
     Heavy Python-only enrichment fields (see :data:`_TABLE_IRRELEVANT_KEYS`)
     are skipped — they bloat the JS payload without ever being read.  Cost
     is paid once per render.
+
+    Tree-mode parent rows carry an ``_children`` list of workout dicts;
+    the same key-strip is applied to each child so per-workout
+    ``_ess_segments`` / ``_ess_session_summary`` / ``_ess_timeline``
+    don't leak into the JS payload.
     """
-    return {k: _json_safe(v) for k, v in r.items() if k not in _TABLE_IRRELEVANT_KEYS}
+    out = {}
+    for k, v in r.items():
+        if k in _TABLE_IRRELEVANT_KEYS:
+            continue
+        if k == "_children" and isinstance(v, list):
+            out[k] = [
+                {
+                    ck: _json_safe(cv)
+                    for ck, cv in child.items()
+                    if ck not in _TABLE_IRRELEVANT_KEYS
+                }
+                for child in v
+            ]
+        else:
+            out[k] = _json_safe(v)
+    return out
 
 
-def _compile_column(entry) -> dict:
+def _compile_column(entry, *, tree_mode: bool = False) -> dict:
     if isinstance(entry, str):
         entry = {"key": entry}
     key = entry["key"]
     base = COLUMN_REGISTRY[key]
     layout = {k: entry[k] for k in entry if k in _LAYOUT_KEYS}
     opts = {k: v for k, v in entry.items() if k != "key" and k not in _LAYOUT_KEYS}
+
+    # In tree mode, the date column needs the chevron + time-of-day +
+    # duration-sub-line rendering; route it through a dedicated JS renderer.
+    renderer = base.renderer
+    if tree_mode and key == "date":
+        renderer = "tree_date"
 
     return {
         "key": key,
@@ -483,7 +540,7 @@ def _compile_column(entry) -> dict:
         "align": layout.get("align", base.align),
         "sortable": layout.get("sortable", base.sortable),
         "default_asc": layout.get("default_asc", base.default_asc),
-        "renderer": base.renderer,
+        "renderer": renderer,
         "format": base.format or base.key,
         "sort_key": base.sort_key or base.key,
         "opts": _enrich_opts(key, opts),
@@ -507,6 +564,8 @@ def WorkoutTable(
     on_event: dict | None = None,
     visible_ids: list | None = None,
     reset_token: str = "",
+    tree_mode: bool = False,
+    sessions_dict: dict | None = None,
 ) -> None:
     """Render a sortable, paginated table.  See module docstring for column
     entry shape and event names.
@@ -531,12 +590,27 @@ def WorkoutTable(
     reset_token      String that, when changed, causes the JS plugin to
                      reset sort + page back to defaults.  Replaces the
                      ``hd.scope(filter_key)`` reset trick.
+    tree_mode        Group rows into expandable session blocks (Workouts
+                     page).  When True, ``results`` is fed into
+                     :func:`services.session_rollup.build_session_rows` and
+                     the resulting parent rows (with embedded ``_children``)
+                     are shipped to the JS plugin.  ``sessions_dict`` is
+                     required.
+    sessions_dict    AppContext sessions dict.  Used only when ``tree_mode``.
     """
     if not results:
         hd.text("No results.", font_color="neutral-500", font_size="small")
         return
 
-    column_configs = [_compile_column(c) for c in columns]
+    if tree_mode:
+        from services.session_rollup import build_session_rows
+
+        results = build_session_rows(results, sessions_dict or {})
+        if not results:
+            hd.text("No results.", font_color="neutral-500", font_size="small")
+            return
+
+    column_configs = [_compile_column(c, tree_mode=tree_mode) for c in columns]
 
     if highlight is not None:
         highlight_ids = [r["id"] for r in results if "id" in r and highlight(r)]
@@ -553,6 +627,7 @@ def WorkoutTable(
         paginate=paginate,
         rows_per_page=rows_per_page,
         reset_token=reset_token,
+        tree_mode=tree_mode,
     )
 
     # ── Event dispatch ───────────────────────────────────────────────────
