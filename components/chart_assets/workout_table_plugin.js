@@ -203,13 +203,13 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     .sort-btn .sort-arrow {
       font-size: 0.6rem;
       flex-shrink: 0;
-      line-height: 1;
+      padding-top: 0.3rem;
       align-self: center;
     }
     .sort-btn .sort-arrow.hidden { visibility: hidden; }
     .sort-btn:hover { color: var(--sl-color-neutral-900); }
     .sort-btn.active { color: var(--sl-color-neutral-900); }
-    .sort-btn.active .sort-arrow { color: var(--sl-color-primary-600); }
+    .sort-btn.active .sort-arrow { color: var(--sl-color-neutral-600); }
     .empty {
       padding: 1rem;
       color: var(--sl-color-neutral-500);
@@ -1068,6 +1068,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
           class: "sort-btn" + (isActive ? " active" : ""),
           onClick: () => onSortClick(col),
         }, [
+          el("span", { class: "sort-arrow hidden" }, arrow), // so header remains aligned over data          
           el("span", { class: "sort-label" }, col.header),
           el("span", { class: "sort-arrow" + (isActive ? "" : " hidden") }, arrow),
         ]);
