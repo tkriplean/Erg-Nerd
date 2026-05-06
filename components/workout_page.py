@@ -291,16 +291,16 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
         # ── ESS row: ESS, IF eff, Severity, W' Used ────────────────────
         if has_ess:
             with hd.hbox(wrap="wrap", gap=0):
-                _stat("ESS", f"{workout['_ess']:.1f}")
-                if workout.get("_if_eff") is not None:
-                    _stat("IF eff", f"{workout['_if_eff']:.2f}")
+                # _stat("ESS", f"{workout['_ess']:.1f}")
+                # if workout.get("_if_eff") is not None:
+                #     _stat("IF eff", f"{workout['_if_eff']:.2f}")
                 if workout.get("_severity"):
                     _stat("Severity", workout["_severity"])
-                if workout.get("_anaerobic_strain") is not None:
-                    _stat(
-                        "W' Used",
-                        f"{round(workout['_anaerobic_strain'] * 100)}%",
-                    )
+                # if workout.get("_anaerobic_strain") is not None:
+                #     _stat(
+                #         "W' Used",
+                #         f"{round(workout['_anaerobic_strain'] * 100)}%",
+                #     )
 
         with hd.hbox(wrap="wrap", gap=0):
             if workout.get("distance"):
@@ -952,9 +952,9 @@ def _intervals_table(
     if has_hr:
         col_w.append(5.5)
         headers.append("HR")
-    if has_if:
-        col_w.append(4.5)
-        headers.append("IF eff")
+    # if has_if:
+    #     col_w.append(4.5)
+    #     headers.append("IF eff")
 
     _table_frame(
         rows,
@@ -965,7 +965,7 @@ def _intervals_table(
         focused_idx=focused_idx,
         on_focus=on_focus,
         row_renderer=lambda i, r, cw: _interval_row(
-            i, r, cw, ts, has_hr, ess_segments if has_if else None
+            i, r, cw, ts, has_hr, ess_segments if False and has_if else None
         ),
     )
 
