@@ -103,6 +103,17 @@ from services.volume_bins import (
     workout_bin_meters,
 )
 from services.workout_metrics_cache import get_or_compute
+
+
+# Process-wide critical-power fit cache.  ``fit_critical_power`` (scipy
+# ``curve_fit`` over a 4-parameter 2-component CP model) costs ~3.5 ms
+# per call but fires once per distinct refs-content per render.  The
+# refs dict is purely a function of the rower's PB index, so two renders
+# with the same PBs produce the same fit — caching by content here
+# survives across renders (the per-render ``cp_memo`` inside
+# ``attach_ess_metrics`` only collapses fits within one render).
+_CP_FIT_CACHE: dict[tuple, tuple] = {}
+_CP_FIT_CACHE_MAX = 4096
 from services.workout_quality import compute_workout_quality
 from services.critical_power_model import fit_critical_power
 from services.erg_stress import (
@@ -482,6 +493,7 @@ def attach_ess_metrics(
     thresholds_for: Optional[Callable] = None,
     ref_watts_for: Optional[Callable] = None,
     reference_pbs_for: Optional[Callable] = None,
+    with_timeline: bool = True,
 ) -> None:
     """Attach ESS / Severity / Anaerobic-Strain fields to each workout in-place.
 
@@ -534,16 +546,30 @@ def attach_ess_metrics(
     session_memo: dict = {}
     cp_memo: dict = {}
 
+    gender_key = (gender or "").lower()
+
     def _cached_cp_w_prime(refs: Optional[dict]) -> tuple:
-        """Memoised wrapper around :func:`_cp_w_prime_for_refs`."""
+        """Memoised wrapper around :func:`_cp_w_prime_for_refs`.
+
+        Two-tier: per-render ``cp_memo`` for hot reuse, then process-wide
+        ``_CP_FIT_CACHE`` so a re-render (or a different page that lands
+        on the same refs profile) skips the scipy ``curve_fit``.
+        """
         if not refs:
             return _cp_w_prime_for_refs(refs, gender)
         # Sorted-items tuple is hashable and identical when refs content matches.
-        key = tuple(sorted([(d, round(w)) for d, w in refs.items()]))
-        cached = cp_memo.get(key)
+        content_key = tuple(sorted((d, round(w)) for d, w in refs.items()))
+        cached = cp_memo.get(content_key)
+        if cached is not None:
+            return cached
+        global_key = (content_key, gender_key)
+        cached = _CP_FIT_CACHE.get(global_key)
         if cached is None:
             cached = _cp_w_prime_for_refs(refs, gender)
-            cp_memo[key] = cached
+            if len(_CP_FIT_CACHE) >= _CP_FIT_CACHE_MAX:
+                _CP_FIT_CACHE.clear()
+            _CP_FIT_CACHE[global_key] = cached
+        cp_memo[content_key] = cached
         return cached
 
     for r in workouts:
@@ -570,7 +596,11 @@ def attach_ess_metrics(
 
         if sm is None:
             cache_key_workout_id = memo_key  # tuple of ids — hashable
-            cache_extra = {"gender": (gender or "").lower(), "model": "v2"}
+            cache_extra = {
+                "gender": (gender or "").lower(),
+                "model": "v2",
+                "tl": "1" if with_timeline else "0",
+            }
 
             def _compute(_session=session, _r=r):
                 ref_watts = ref_watts_for(_r)
@@ -580,6 +610,7 @@ def attach_ess_metrics(
                     rwd_fn,
                     cp=cp,
                     w_prime=w_prime,
+                    with_timeline=with_timeline,
                 )
 
             sm = get_or_compute(

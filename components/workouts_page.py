@@ -510,7 +510,20 @@ def workouts_page() -> None:
 
     max_hr, _ = resolve_max_hr(profile, workouts)
     attach_spread_and_quality(workouts, workouts, max_hr)
-    attach_ess_metrics(workouts, workouts, AppContext().sessions_dict or {}, profile, max_hr)
+    # ``with_timeline=False`` skips the per-second timeline build inside
+    # ``compute_session_metrics``: the workouts table never reads
+    # ``_ess_timeline`` (it's stripped from the JS row payload via
+    # ``_TABLE_IRRELEVANT_KEYS``), so the ~1.8 M dict allocations are pure
+    # waste here.  The workout detail page calls ``attach_ess_metrics``
+    # again with the default and renders the chart from that scope.
+    attach_ess_metrics(
+        workouts,
+        workouts,
+        AppContext().sessions_dict or {},
+        profile,
+        max_hr,
+        with_timeline=False,
+    )
 
     # ── Apply filters ──────────────────────────────────────────────────────────
 

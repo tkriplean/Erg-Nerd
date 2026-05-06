@@ -80,7 +80,25 @@ the highest available resolution (intervals → splits → whole workout).
 ``ZONE_BANDS_S`` — the six band time-constants (= τ_d), in seconds.
 ``ZONE_BAND_LABELS`` — short human labels matching the bands.
 
-This module is pure Python (no HyperDiv, no I/O).
+Implementation notes
+--------------------
+The hot per-second loops vectorise via numpy and ``scipy.signal.lfilter``:
+the six-band EMA in :func:`_calculate_intensity` and the per-workout EMA
+in :func:`_attach_per_workout_records` both run as ``lfilter`` recurrences
+against ``P_arr`` (zero-init), and the cube-and-sum intensity fold is one
+elementwise pass.  ESS attribution to overlapping workouts is preserved
+via ``np.bincount`` over a ``wid_idx_arr`` painted by per-segment slice
+assignment.  Only :func:`_compute_wbal` keeps a Python integration loop
+(the recursive clamp/branch doesn't map to lfilter); it operates on a
+preallocated ``np.ndarray``.
+
+:func:`compute_session_metrics` accepts ``with_timeline=False`` to skip
+the per-second sub-sampled timeline build — the Workouts list view
+strips ``_ess_timeline`` from the JS payload, so building it there is
+~1.8 M wasted dict allocations.  The Workout detail page uses the
+default and renders the chart from that scope.
+
+No HyperDiv, no I/O.
 """
 
 from __future__ import annotations
@@ -88,6 +106,9 @@ from __future__ import annotations
 import math
 from datetime import datetime, timedelta
 from typing import Callable, Optional
+
+import numpy as np
+from scipy.signal import lfilter
 
 from services.rowing_utils import (
     PACE_MAX,
@@ -484,25 +505,25 @@ def _empty_metrics() -> dict:
     }
 
 
-def _peak_rolling_mean(arr: list[float], window: int) -> float:
-    """Maximum rolling-mean over ``window`` of a numeric list.
+def _peak_rolling_mean(arr, window: int) -> float:
+    """Maximum rolling-mean over ``window`` of a numeric sequence.
 
-    For ``window > len(arr)``, returns the mean of the whole array (so a
-    short session reports its overall mean as its 5-min peak).
+    Accepts a Python list or a 1-D numpy array.  For ``window >= len(arr)``,
+    returns the mean of the whole array (so a short session reports its
+    overall mean as its 5-min peak).  Implemented via cumulative-sum so the
+    cost is O(N) numpy elementwise, not O(N) Python.
     """
-    if not arr:
+    a = np.asarray(arr, dtype=np.float64)
+    n = a.size
+    if n == 0:
         return 0.0
-    w = min(window, len(arr))
+    w = min(window, n)
     if w <= 0:
         return 0.0
-    s = sum(arr[:w])
-    best = s / w
-    for i in range(w, len(arr)):
-        s += arr[i] - arr[i - w]
-        avg = s / w
-        if avg > best:
-            best = avg
-    return best
+    if w >= n:
+        return float(a.mean())
+    cs = np.concatenate(([0.0], np.cumsum(a)))
+    return float(((cs[w:] - cs[:-w]) / w).max())
 
 
 def _attach_per_workout_records(
@@ -515,7 +536,7 @@ def _attach_per_workout_records(
     inv_rws,
     inv_amp,
     kind_arr,
-    wid_arr,
+    wid_idx_arr,
     ess_per_second,
 ):
     # ----- Per-workout records -----
@@ -536,59 +557,58 @@ def _attach_per_workout_records(
     # session-state I(t), so ``Σ ESS_workout = ESS_session`` exactly.
     n_bands = len(ZONE_BANDS_S)
 
-    # Per-workout ESS attribution
-    ess_by_workout: dict = {wid: 0.0 for wid in workout_windows}
-    for t in range(total_session_s):
-        wid = wid_arr[t]
-        if wid is not None:
-            ess_by_workout[wid] += ess_per_second[t]
+    # Per-workout ESS attribution.  ``wid_idx_arr`` (built in
+    # :func:`_calculate_intensity` via vectorised slice assignment) maps
+    # each second to a workout index in iteration order of
+    # ``workout_windows`` (-1 for gap seconds).  Last-painter-wins for
+    # overlapping segments falls out of the slice-assignment order.
+    n_w = len(workout_windows)
+    if n_w and total_session_s:
+        mask = wid_idx_arr >= 0
+        if mask.any():
+            sums = np.bincount(
+                wid_idx_arr[mask], weights=ess_per_second[mask], minlength=n_w
+            )
+        else:
+            sums = np.zeros(n_w, dtype=np.float64)
+        ess_by_workout = {
+            wid: float(sums[i]) for i, wid in enumerate(workout_windows)
+        }
+    else:
+        ess_by_workout = {wid: 0.0 for wid in workout_windows}
 
     per_workout_records: list = []
     for wid, (t_start, t_end) in workout_windows.items():
         n = max(1, t_end - t_start)
 
-        # Workout-isolated EMA simulation — uses the same flat-list /
-        # ``r*r*r`` hot-path as the session-level loop above.  Reuses the
-        # already-computed ``inv_taus`` and ``inv_rws``.
-        ema_w = [0.0] * n_bands
-        I_w_arr: list[float] = []
-        if SIGNAL_AMPLIFIER == 3:
-            for t in range(t_start, t_end):
-                P = P_arr[t]
-                sum_amp_w = 0.0
-                for i in range(n_bands):
-                    e = ema_w[i]
-                    e += (P - e) * inv_taus[i]
-                    ema_w[i] = e
-                    r = e * inv_rws[i]
-                    sum_amp_w += r * r * r
-                I_w_arr.append(INTENSITY_SCALE * (sum_amp_w**inv_amp))
+        # Workout-isolated EMA: lfilter zero-inits, so each per-workout
+        # filter run starts from rest — semantically equivalent to the
+        # original ``ema_w = [0.0] * n_bands`` reset.
+        P_w = P_arr[t_start:t_end]
+        kind_w = kind_arr[t_start:t_end]
+        if P_w.size:
+            Z_w = np.empty((n_bands, P_w.size), dtype=np.float64)
+            for i in range(n_bands):
+                a = inv_taus[i]
+                Z_w[i] = lfilter([a], [1.0, a - 1.0], P_w) * inv_rws[i]
+            if SIGNAL_AMPLIFIER == 3:
+                sum_amp_w = (Z_w * Z_w * Z_w).sum(axis=0)
+            else:
+                sum_amp_w = np.power(Z_w, SIGNAL_AMPLIFIER).sum(axis=0)
+            I_w_arr = INTENSITY_SCALE * np.power(sum_amp_w, inv_amp)
         else:
-            amp = SIGNAL_AMPLIFIER
-            for t in range(t_start, t_end):
-                P = P_arr[t]
-                sum_amp_w = 0.0
-                for i in range(n_bands):
-                    e = ema_w[i]
-                    e += (P - e) * inv_taus[i]
-                    ema_w[i] = e
-                    r = e * inv_rws[i]
-                    sum_amp_w += r**amp
-                I_w_arr.append(INTENSITY_SCALE * (sum_amp_w**inv_amp))
+            I_w_arr = np.zeros(0, dtype=np.float64)
 
-        # Workout intensity is the arithmetic mean of the workout-isolated
-        # I(t) across this workout's *work-only* seconds.  Excluding rest
-        # seconds keeps the workout-level number aligned with per-segment
-        # values shown in the splits/intervals table.
-        work_intensity_vals = [
-            I_w_arr[t - t_start] for t in range(t_start, t_end) if kind_arr[t] == "work"
-        ]
-        intensity_w = (
-            sum(work_intensity_vals) / len(work_intensity_vals)
-            if work_intensity_vals
-            else 0.0
-        )
-        slc = I_w_arr or [0.0]
+        # Workout intensity: mean over work-only seconds in this window.
+        if I_w_arr.size:
+            work_w_mask = (kind_w == "work")
+            intensity_w = (
+                float(I_w_arr[work_w_mask].mean()) if work_w_mask.any() else 0.0
+            )
+        else:
+            intensity_w = 0.0
+
+        slc = I_w_arr if I_w_arr.size else np.zeros(1, dtype=np.float64)
         pk5 = _peak_rolling_mean(slc, 300)
         pk60 = _peak_rolling_mean(slc, 60)
         pk20 = _peak_rolling_mean(slc, 20)
@@ -600,9 +620,13 @@ def _attach_per_workout_records(
         # drains a fresh reserve to 0 reads 100%.
         if w_bal_curve is not None and w_prime:
             wb_slc = w_bal_curve[t_start:t_end]
-            if wb_slc:
-                wb_start = w_bal_curve[t_start - 1] if t_start > 0 else w_prime
-                strain_w = max(0.0, min(1.0, (wb_start - min(wb_slc)) / w_prime))
+            if wb_slc.size:
+                wb_start = (
+                    float(w_bal_curve[t_start - 1]) if t_start > 0 else w_prime
+                )
+                strain_w = max(
+                    0.0, min(1.0, (wb_start - float(wb_slc.min())) / w_prime)
+                )
             else:
                 strain_w = 0.0
         else:
@@ -647,17 +671,23 @@ def _build_session_timeline(
     # band traces as percentages on the right axis.
     target_points = 1800
     stride = max(1, total_session_s // target_points)
+    ts = np.arange(0, total_session_s, stride)
+    I_s = I_arr[ts]
+    P_s = P_arr[ts]
+    has_wbal = (w_bal_curve is not None) and bool(w_prime)
+    if has_wbal:
+        wb_s = w_bal_curve[ts] / w_prime
+    bands = list(ZONE_BANDS_S)
+    Z_s = {d: zone_ratio_arr[d][ts] for d in bands}
     timeline = []
-    for t in range(0, total_session_s, stride):
+    for k, t in enumerate(ts):
         timeline.append(
             {
-                "t": t,
-                "intensity": I_arr[t],
-                "P": P_arr[t],
-                "w_bal_pct": (
-                    (w_bal_curve[t] / w_prime) if (w_bal_curve and w_prime) else None
-                ),
-                "zones": {d: zone_ratio_arr[d][t] for d in ZONE_BANDS_S},
+                "t": int(t),
+                "intensity": float(I_s[k]),
+                "P": float(P_s[k]),
+                "w_bal_pct": float(wb_s[k]) if has_wbal else None,
+                "zones": {d: float(Z_s[d][k]) for d in bands},
             }
         )
     return timeline
@@ -668,10 +698,13 @@ def _calculate_intensity(
 ):
     # Build per-second arrays.  Initialised to zero so untouched seconds
     # (gaps within the 30-minute session window where no workout is logged)
-    # contribute neither power nor intensity.
-    P_arr = [0.0] * total_session_s
-    wid_arr: list = [None] * total_session_s
-    kind_arr: list[str] = ["gap"] * total_session_s
+    # contribute neither power nor intensity.  ``wid_idx_arr`` maps each
+    # second to a workout index into ``workout_windows.keys()`` (-1 for
+    # gaps); used by ``_attach_per_workout_records`` for vectorised
+    # last-painter-wins ESS attribution via ``np.bincount``.
+    P_arr = np.zeros(total_session_s, dtype=np.float64)
+    wid_idx_arr = np.full(total_session_s, -1, dtype=np.int64)
+    kind_arr = np.full(total_session_s, "gap", dtype="<U4")
 
     workout_windows: dict = {}  # workout_id → (sess_t_start, sess_t_end)
     per_segment_records: list = []
@@ -682,16 +715,17 @@ def _calculate_intensity(
         wkt_segments = build_segments(w)
         if not wkt_segments:
             continue
+        wkt_idx = len(workout_windows)
         wkt_t_end = wkt_offset_s
         for seg in wkt_segments:
             seg_t = wkt_offset_s + int(seg["t_offset_s"] + 0.5)
             seg_d = max(1, int(seg["duration_s"] + 0.5))
             seg_P = seg["watts"]
             end_t = min(seg_t + seg_d, total_session_s)
-            for i in range(seg_t, end_t):
-                P_arr[i] = seg_P
-                wid_arr[i] = wkt_id
-                kind_arr[i] = seg["kind"]
+            if end_t > seg_t:
+                P_arr[seg_t:end_t] = seg_P
+                kind_arr[seg_t:end_t] = seg["kind"]
+                wid_idx_arr[seg_t:end_t] = wkt_idx
             wkt_t_end = max(wkt_t_end, end_t)
             per_segment_records.append(
                 {
@@ -719,53 +753,30 @@ def _calculate_intensity(
         rw_d[d] = float(rw) if (rw and rw > 0) else 0.0
 
     # ----- Run 6 EMAs forward in lock-step; build I(t) and per-zone traces -----
-    # The inner loop runs ~once per second of session × six bands; in pure
-    # Python that's the dominant cost on the Workouts page (every visible
-    # session triggers it on cache miss).  We flatten band-keyed dicts
-    # into parallel lists indexed by band index so the inner loop sees no
-    # dict lookups, and we specialise for the common SIGNAL_AMPLIFIER=3
-    # case (cube via ``r*r*r`` is ~3× faster than ``math.pow(r, 3)`` since
-    # the latter pays C-FFI + log/exp cost).
+    # The recursion ``e[t] = e[t-1] + (P[t] - e[t-1]) * α`` is algebraically
+    # ``e[t] = α·P[t] + (1-α)·e[t-1]``, which maps to
+    # ``lfilter([α], [1, α-1], P)`` (zero-init).  scipy runs this in C, so
+    # the dominant per-second cost collapses to six BLAS-y kernel launches
+    # plus one elementwise cube + sum + power for the intensity fold.
     n_bands = len(ZONE_BANDS_S)
-    ema = [0.0] * n_bands
-    taus_list = [_tau(d) for d in ZONE_BANDS_S]
     rws_list = [rw_d[d] for d in ZONE_BANDS_S]
     inv_rws = [(1.0 / rw if rw > 0 else 0.0) for rw in rws_list]
-    inv_taus = [1.0 / tau for tau in taus_list]
-    I_arr = [0.0] * total_session_s
-    # Per-band zone-ratio time-series.  Kept as a list-of-lists so the
-    # inner loop can index without hashing.  We re-key by band-seconds
-    # at the end of the function for the existing return shape.
-    zone_arrs = [[0.0] * total_session_s for _ in ZONE_BANDS_S]
+    inv_taus = [1.0 / _tau(d) for d in ZONE_BANDS_S]
     inv_amp = 1.0 / SIGNAL_AMPLIFIER
 
+    Z = np.empty((n_bands, total_session_s), dtype=np.float64)
+    for i in range(n_bands):
+        a = inv_taus[i]
+        Z[i] = lfilter([a], [1.0, a - 1.0], P_arr) * inv_rws[i]
+
     if SIGNAL_AMPLIFIER == 3:
-        # Hot-path specialisation: cube via plain multiplication.
-        for t in range(total_session_s):
-            P = P_arr[t]
-            sum_amp = 0.0
-            for i in range(n_bands):
-                e = ema[i]
-                e += (P - e) * inv_taus[i]
-                ema[i] = e
-                r = e * inv_rws[i]
-                zone_arrs[i][t] = r
-                sum_amp += r * r * r
-            I_arr[t] = INTENSITY_SCALE * (sum_amp**inv_amp)
+        sum_amp = (Z * Z * Z).sum(axis=0)
     else:
-        # General-case fallback for any SIGNAL_AMPLIFIER value.
-        amp = SIGNAL_AMPLIFIER
-        for t in range(total_session_s):
-            P = P_arr[t]
-            sum_amp = 0.0
-            for i in range(n_bands):
-                e = ema[i]
-                e += (P - e) * inv_taus[i]
-                ema[i] = e
-                r = e * inv_rws[i]
-                zone_arrs[i][t] = r
-                sum_amp += r**amp
-            I_arr[t] = INTENSITY_SCALE * (sum_amp**inv_amp)
+        sum_amp = np.power(Z, SIGNAL_AMPLIFIER).sum(axis=0)
+    # ``sum_amp`` is non-negative (cube of a non-negative ratio is
+    # non-negative; for general amplifier zone_ratio is always ≥ 0).
+    I_arr = INTENSITY_SCALE * np.power(sum_amp, inv_amp)
+    zone_arrs = list(Z)  # per-band views, in ZONE_BANDS_S order
 
     return (
         I_arr,
@@ -776,49 +787,57 @@ def _calculate_intensity(
         zone_arrs,
         P_arr,
         kind_arr,
-        wid_arr,
+        wid_idx_arr,
         per_segment_records,
     )
 
 
 def _compute_wbal(cp, w_prime, total_session_s, P_arr, kind_arr):
     # ----- W'bal -----
-    w_bal_curve: Optional[list] = None
+    w_bal_curve: Optional[np.ndarray] = None
     w_bal_trough: Optional[float] = None
     anaerobic_strain = 0.0
     if cp and w_prime and cp > 0 and w_prime > 0:
-        # DCP: mean of P below CP.  When the rower is rarely below CP we
-        # don't have good DCP — use mid-range τ_W'.
-        below_cp_s = 0.0
-        below_cp_p_sum = 0.0
-        for t in range(total_session_s):
-            if kind_arr[t] == "gap":
-                continue
-            P = P_arr[t]
-            if P < cp:
-                below_cp_s += 1
-                below_cp_p_sum += P
-        DCP = (below_cp_p_sum / below_cp_s) if below_cp_s > 0 else cp / 2.0
+        # DCP: mean of P (work seconds only) below CP.  When the rower is
+        # rarely below CP we don't have good DCP — use mid-range τ_W'.
+        non_gap = (kind_arr != "gap")
+        below = non_gap & (P_arr < cp)
+        DCP = float(P_arr[below].mean()) if below.any() else cp / 2.0
         tau_w = 546.0 * math.exp(-0.01 * DCP) + 316.0
         tau_w = max(TAU_W_MIN, min(TAU_W_MAX, tau_w))
 
+        # Pre-decompose into per-second deltas for the recursive update:
+        #   gap second:   dW = (w_prime - w_bal) / tau_w     (recovery)
+        #   work, P>cp:   dW = -(P - cp)                      (depletion)
+        #   work, P≤cp:   dW = (w_prime - w_bal) / tau_w     (recovery)
+        # The recovery term depends on the running ``w_bal``, so we keep
+        # the loop in Python — but on a preallocated numpy array.
+        is_gap = (kind_arr == "gap")
+        is_above = (~is_gap) & (P_arr > cp)
+        # Depletion magnitude is constant per-second: store it once.
+        depletion = np.where(is_above, P_arr - cp, 0.0)
+        # ``recover_mask[t]`` is True iff this second is a recovery
+        # (i.e. either a gap, or a work second with P ≤ cp).
+        recover_mask = ~is_above
+        inv_tau_w = 1.0 / tau_w
+
         w_bal = w_prime
         w_bal_trough = w_prime
-        w_bal_curve = [w_prime] * total_session_s
+        w_bal_curve = np.empty(total_session_s, dtype=np.float64)
         for t in range(total_session_s):
-            if kind_arr[t] == "gap":
-                # No rowing during the gap — pure recovery toward W'.
-                dW = (w_prime - w_bal) / tau_w
+            if recover_mask[t]:
+                dW = (w_prime - w_bal) * inv_tau_w
             else:
-                P = P_arr[t]
-                if P > cp:
-                    dW = -(P - cp)
-                else:
-                    dW = (w_prime - w_bal) / tau_w
-            w_bal = max(0.0, min(w_prime, w_bal + dW))
-            w_bal_curve[t] = w_bal
-            if w_bal < w_bal_trough:
-                w_bal_trough = w_bal
+                dW = -depletion[t]
+            new_w = w_bal + dW
+            if new_w < 0.0:
+                new_w = 0.0
+            elif new_w > w_prime:
+                new_w = w_prime
+            w_bal = new_w
+            w_bal_curve[t] = new_w
+            if new_w < w_bal_trough:
+                w_bal_trough = new_w
         anaerobic_strain = max(0.0, min(1.0, 1.0 - w_bal_trough / w_prime))
     return anaerobic_strain, w_bal_curve, w_bal_trough
 
@@ -828,6 +847,8 @@ def compute_session_metrics(
     ref_watts_at_duration_fn: Callable,
     cp: Optional[float],
     w_prime: Optional[float],
+    *,
+    with_timeline: bool = True,
 ) -> dict:
     """Compute ESS / Severity / Anaerobic Strain across a session timeline.
 
@@ -849,14 +870,21 @@ def compute_session_metrics(
     w_prime:
         Rower's anaerobic capacity (joules).  ``None`` disables the
         W'bal track.
+    with_timeline:
+        When False, ``timeline`` is returned as ``None`` and the per-second
+        sub-sampling step is skipped entirely.  The Workouts page list view
+        never reads ``_ess_timeline`` (table renderer drops it via
+        ``_TABLE_IRRELEVANT_KEYS``); skipping the build there saves ~1.8 M
+        Python dict allocations per page render.
 
     Returns
     -------
     dict matching :func:`_empty_metrics`'s shape.  ``timeline`` is a list of
     sub-sampled per-second records ``{t, intensity, P, w_bal_pct, zones}``
-    where ``zones`` is a dict mapping band-seconds → ratio.  ``per_workout``
-    attributes session ESS to each constituent workout so summing the
-    column yields the session value exactly.
+    where ``zones`` is a dict mapping band-seconds → ratio (or ``None``
+    when ``with_timeline=False``).  ``per_workout`` attributes session
+    ESS to each constituent workout so summing the column yields the
+    session value exactly.
     """
     # Annotate (start_dt, end_dt, w) per workout.
     annotated: list = []
@@ -887,7 +915,7 @@ def compute_session_metrics(
         zone_arrs,
         P_arr,
         kind_arr,
-        wid_arr,
+        wid_idx_arr,
         per_segment_records,
     ) = _calculate_intensity(
         annotated, total_session_s, session_start, start_dt, ref_watts_at_duration_fn
@@ -899,8 +927,8 @@ def compute_session_metrics(
     zone_ratio_arr = {d: zone_arrs[i] for i, d in enumerate(ZONE_BANDS_S)}
 
     # ----- ESS -----
-    ess_per_second = [(I_arr[t] * I_arr[t]) * C_ESS for t in range(total_session_s)]
-    ess_total = sum(ess_per_second)
+    ess_per_second = (I_arr * I_arr) * C_ESS
+    ess_total = float(ess_per_second.sum())
 
     # Fill per-segment intensity_avg / ESS now that the I_arr exists.
     for rec in per_segment_records:
@@ -908,9 +936,8 @@ def compute_session_metrics(
         d = max(1, int(rec["duration_s"] + 0.5))
         e = min(s + d, total_session_s)
         if e > s:
-            slc = I_arr[s:e]
-            rec["intensity_avg"] = sum(slc) / len(slc) if slc else 0.0
-            rec["ess"] = sum(ess_per_second[s:e])
+            rec["intensity_avg"] = float(I_arr[s:e].mean())
+            rec["ess"] = float(ess_per_second[s:e].sum())
 
     # ----- Peak rolling I(t) (session-level) -----
     peak_5min = _peak_rolling_mean(I_arr, 300)
@@ -939,7 +966,7 @@ def compute_session_metrics(
         inv_rws,
         inv_amp,
         kind_arr,
-        wid_arr,
+        wid_idx_arr,
         ess_per_second,
     )
 
@@ -947,23 +974,20 @@ def compute_session_metrics(
     # Same convention as per-workout intensity: arithmetic mean over
     # work-only seconds in the session.  Includes carryover state across
     # workouts.
-    work_intensity_session = [
-        I_arr[t] for t in range(total_session_s) if kind_arr[t] == "work"
-    ]
-    intensity_session = (
-        sum(work_intensity_session) / len(work_intensity_session)
-        if work_intensity_session
-        else 0.0
-    )
+    work_mask = (kind_arr == "work")
+    intensity_session = float(I_arr[work_mask].mean()) if work_mask.any() else 0.0
 
-    timeline = _build_session_timeline(
-        total_session_s,
-        zone_ratio_arr,
-        w_bal_curve,
-        w_prime,
-        I_arr,
-        P_arr,
-    )
+    if with_timeline:
+        timeline = _build_session_timeline(
+            total_session_s,
+            zone_ratio_arr,
+            w_bal_curve,
+            w_prime,
+            I_arr,
+            P_arr,
+        )
+    else:
+        timeline = None
 
     return {
         "ess": ess_total,
