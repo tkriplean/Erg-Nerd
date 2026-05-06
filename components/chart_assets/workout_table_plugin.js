@@ -45,8 +45,6 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       box-sizing: border-box;
       border: 1px solid var(--sl-color-neutral-200);
       border-radius: var(--sl-border-radius-medium, 0.25rem);
-      overflow-x: auto;
-
     }
     .cell {
       padding: 0.4rem 0.75rem;
@@ -60,15 +58,18 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     .cell.align-end    { justify-content: flex-end; text-align: right; }
     .cell.align-center { justify-content: center; text-align: center; }
     .cell.end { padding-right: 24px; }
+    /* Sticky header — sticks to top of viewport as the table scrolls past. */
     .hdr {
+      position: sticky;
+      top: 0;
+      z-index: 2;
       background: var(--sl-color-neutral-100);
       border-bottom: 1px solid var(--sl-color-neutral-200);
-      color: var(--sl-color-neutral-500);
+      color: var(--sl-color-neutral-900);
       padding-top: 0.4rem;
       padding-bottom: 0.4rem;
-      white-space: normal;
       line-height: 1.15;
-      word-break: break-word;
+      box-shadow: 0 1px 0 var(--sl-color-neutral-200);
     }
     .row-cell {
       padding-top: 0.5rem;
@@ -87,8 +88,8 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
        reads as one visual unit. */
     .row-cell.session-internal { border-bottom: 1px solid transparent; }
 
-    /* Date cell: chevron, sub-line, child indent. */
-    .tree-date { display: flex; align-items: flex-start; gap: 0; justify-content: left; }
+    /* Date cell: chevron, child indent. */
+    .tree-date { display: flex; align-items: center; gap: 0; justify-content: flex-start; }
     .tree-date .tree-date-text { display: flex; flex-direction: column; }
     .tree-chevron {
       display: inline-flex;
@@ -102,7 +103,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       transition: transform 120ms ease;
       font-size: 0.7rem;
       line-height: 1;
-      padding-top: 0.3rem;
+      flex-shrink: 0;
     }
     .tree-chevron.open { transform: rotate(90deg); }
     .tree-chevron-spacer {
@@ -112,25 +113,103 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       flex-shrink: 0;
     }
     .row-cell.is-child .tree-date-text { padding-left: 1.4rem; }
-    .tree-date .date-main { font-size: var(--sl-font-size-small); }
-    .tree-date .date-sub  { font-size: var(--sl-font-size-x-small); color: var(--sl-color-neutral-500); }
-    .tree-date .role-label {
+    .tree-date .date-main {
+      font-size: var(--sl-font-size-small);
+      font-family: var(--sl-font-mono, ui-monospace, monospace);
+    }
+
+    /* Time-of-day column — colloquial period above session duration. */
+    .tod-cell { display: flex; flex-direction: column; align-items: center; gap: 0.05rem; line-height: 1.1; }
+    .tod-cell .tod-main { font-size: var(--sl-font-size-small); color: var(--sl-color-neutral-700); }
+    .tod-cell .tod-sub  {
       font-size: var(--sl-font-size-x-small);
       color: var(--sl-color-neutral-500);
+      font-family: var(--sl-font-mono, ui-monospace, monospace);
+    }
+    .tod-cell.child .tod-main {
+      font-family: var(--sl-font-mono, ui-monospace, monospace);
+      color: var(--sl-color-neutral-500);
+      font-size: var(--sl-font-size-x-small);
+    }
+
+    /* Role labels on child rows (warmup/main/recovery/cooldown).  Main
+       gets a filled pill; the rest get subtle tinted badges so the
+       visual hierarchy reads as "main = the work, others = context". */
+    .role-label {
+      display: inline-block;
+      font-size: 0.62rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      font-weight: 600;
+      padding: 0.05rem 0.4rem;
+      border-radius: 999px;
+      line-height: 1.4;
+    }
+    .role-label.role-main {
+      background: var(--sl-color-primary-600);
+      color: #fff;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+      letter-spacing: 0.08em;
+    }
+    .role-label.role-warmup {
+      background: var(--sl-color-warning-100, rgba(255, 200, 100, 0.25));
+      color: var(--sl-color-warning-700, #b8651e);
+    }
+    .role-label.role-cooldown {
+      background: rgba(120, 180, 220, 0.22);
+      color: #2c6a92;
+    }
+    .role-label.role-recovery {
+      background: var(--sl-color-success-100, rgba(120, 200, 130, 0.2));
+      color: var(--sl-color-success-700, #2f7a3a);
+    }
+
+    /* Gap rows — the slim italic spacer between consecutive workouts in
+       an expanded session, showing how much wall-clock time elapsed. */
+    .row-cell.gap-cell {
+      padding-top: 0.15rem;
+      padding-bottom: 0.15rem;
+      border-bottom: 1px solid transparent;
+    }
+    .gap-text {
+      font-size: var(--sl-font-size-x-small);
       font-style: italic;
+      color: var(--sl-color-neutral-500);
     }
 
     /* Multi-line cell content (e.g. Main Work). */
-    .cell .lines { display: flex; flex-direction: column; align-items: flex-start; gap: 0.1rem; width: 100%; }
+    .cell .lines { display: flex; flex-direction: column; center: flex-start; gap: 0.1rem; width: 100%; }
     .cell .lines > div { font-size: var(--sl-font-size-small); }
+    /* Sort header — always reserve space for the arrow so toggling sort
+       direction (or moving the active sort to a different column) never
+       changes line count or column width.  Active state is signalled via
+       color contrast only — switching to a bold weight would change the
+       label's metrics and ripple a width change through the grid. */
     .sort-btn {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 0.2rem;
+      flex-wrap: nowrap;
       background: none; border: none; cursor: pointer;
-      font: inherit; color: inherit;
+      font: inherit;
+      color: var(--sl-color-neutral-900);
       padding: 0; margin: 0;
       font-size: var(--sl-font-size-small);
+      font-weight: 500;
+      text-align: inherit;
+      line-height: inherit;
     }
-    .sort-btn:hover { color: var(--sl-color-neutral-700); }
-    .sort-btn.active { font-weight: bold; color: var(--sl-color-neutral-600); }
+    .sort-btn .sort-label { white-space: normal; }
+    .sort-btn .sort-arrow {
+      font-size: 0.6rem;
+      flex-shrink: 0;
+      line-height: 1;
+      align-self: center;
+    }
+    .sort-btn .sort-arrow.hidden { visibility: hidden; }
+    .sort-btn:hover { color: var(--sl-color-neutral-900); }
+    .sort-btn.active { color: var(--sl-color-neutral-900); }
+    .sort-btn.active .sort-arrow { color: var(--sl-color-primary-600); }
     .empty {
       padding: 1rem;
       color: var(--sl-color-neutral-500);
@@ -310,6 +389,26 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     return s ? s[0].toUpperCase() + s.slice(1) : "";
   }
 
+  // Workout start time as "h:mm am/pm".  ``r.date`` is the workout end
+  // (Concept2 convention); ``r.time`` is duration in tenths of a second.
+  // Returns "" when either is missing or unparseable.
+  function workoutStartHHMM(r) {
+    const dateStr = r.date;
+    if (!dateStr || dateStr.length < 16) return "";
+    const tenths = r.time || 0;
+    // Tolerate either "YYYY-MM-DD HH:MM:SS" or ISO "YYYY-MM-DDTHH:MM:SS".
+    const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/.exec(dateStr);
+    if (!m) return "";
+    const end = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0));
+    if (isNaN(end.getTime())) return "";
+    const start = new Date(end.getTime() - Math.round(tenths * 100));
+    let h = start.getHours();
+    const mm = pad2(start.getMinutes());
+    const ampm = h >= 12 ? "pm" : "am";
+    h = h % 12 || 12;
+    return `${h}:${mm}${ampm}`;
+  }
+
   // ── DOM helpers ───────────────────────────────────────────────────────────
   function el(tag, props, children) {
     const e = document.createElement(tag);
@@ -334,6 +433,14 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
   function text(s) { return document.createTextNode(s ?? ""); }
   function emDash() { return el("span", { class: "em-dash" }, "—"); }
 
+  // Tree-mode role classification: a child is "non-main" when it's a
+  // warmup, cooldown, or recovery piece — its meters belong in Other
+  // Distance rather than Work Distance.  ``main`` and ``single`` are
+  // the only roles whose distance counts as work.
+  function _isNonMainRole(role) {
+    return role === "warmup" || role === "cooldown" || role === "recovery";
+  }
+
   // ── Format dispatch (text-only renderers) ────────────────────────────────
   const FORMATS = {
     date:              (r) => fmtDate(r.date),
@@ -354,13 +461,32 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     work_duration:     (r) => fmtDurationReadable(r._row_kind === "session"
                                 ? r._work_duration_s
                                 : (r.time || 0) / 10),
-    work_distance:     (r) => fmtDistance(r._row_kind === "session"
-                                ? r._work_distance_m
-                                : (r.distance || 0)),
+    work_distance:     (r) => {
+                          if (r._row_kind === "session") {
+                            return fmtDistance(r._work_distance_m);
+                          }
+                          // Tree-mode child: warmup/cooldown/recovery
+                          // workouts contribute their distance to Other,
+                          // not Work — even if they're themselves
+                          // intervals.  The parent already accounts for
+                          // this in its rollup.
+                          if (_isNonMainRole(r._role)) return "—";
+                          return fmtDistance(r.distance || 0);
+                       },
     other_distance:    (r) => {
-                          const m = r._row_kind === "session"
-                            ? r._other_distance_m
-                            : (r.rest_distance || 0);
+                          let m;
+                          if (r._row_kind === "session") {
+                            m = r._other_distance_m;
+                          } else if (_isNonMainRole(r._role)) {
+                            // Non-main child: every meter (work + rest)
+                            // counts as Other.
+                            m = (r.distance || 0) + (r.rest_distance || 0);
+                          } else {
+                            // Main / singleton child: work distance is
+                            // displayed in Work Distance; only the rest
+                            // distance lands here.
+                            m = r.rest_distance || 0;
+                          }
                           return m ? fmtDistance(m) : "—";
                        },
     season:            (r) => r.season || "",
@@ -434,26 +560,52 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
   };
 
   // ── Tooltip: lazy-arming Shoelace tooltip on first hover ─────────────────
+  // We use ``trigger="manual"`` and drive show/hide ourselves from the
+  // trigger's mouseenter / mouseleave events.  Shoelace's built-in hover
+  // tracking misses our reparented trigger when the cursor moves quickly
+  // (the original mouseenter fires before the sl-tooltip exists), which
+  // leaves the tooltip stuck visible.  Manual mode + our own state flag
+  // is reliable: we *know* when the cursor is over the trigger, so we
+  // *know* when the tooltip should hide.
   function lazyTooltipWrap(triggerNode, buildBody, placement) {
-    let armed = false;
-    const arm = () => {
-      if (armed) return;
-      armed = true;
-      const tt = document.createElement("sl-tooltip");
+    let tt = null;
+    let isOver = false;
+    const ensureTooltip = () => {
+      if (tt) return;
+      tt = document.createElement("sl-tooltip");
       tt.setAttribute("placement", placement || "top");
       tt.setAttribute("hoist", "");
-      // Reparent the trigger into the tooltip (preserves its position in flow).
+      tt.setAttribute("trigger", "manual");
       const slot = triggerNode.parentNode;
-      const idx = Array.from(slot.children).indexOf(triggerNode);
       slot.insertBefore(tt, triggerNode);
       tt.appendChild(triggerNode);
       const body = buildBody();
       body.setAttribute("slot", "content");
       tt.appendChild(body);
-      requestAnimationFrame(() => { try { tt.show(); } catch (e) {} });
     };
-    triggerNode.addEventListener("mouseenter", arm, { once: true });
-    triggerNode.addEventListener("focusin", arm, { once: true });
+    triggerNode.addEventListener("mouseenter", () => {
+      isOver = true;
+      ensureTooltip();
+      // Defer to next frame so the tooltip is in the DOM before we show.
+      requestAnimationFrame(() => {
+        if (isOver && tt) {
+          try { tt.show(); } catch (e) {}
+        }
+      });
+    });
+    triggerNode.addEventListener("mouseleave", () => {
+      isOver = false;
+      if (tt) { try { tt.hide(); } catch (e) {} }
+    });
+    triggerNode.addEventListener("focusin", () => {
+      isOver = true;
+      ensureTooltip();
+      if (tt) { try { tt.show(); } catch (e) {} }
+    });
+    triggerNode.addEventListener("focusout", () => {
+      isOver = false;
+      if (tt) { try { tt.hide(); } catch (e) {} }
+    });
   }
 
   // ── Cell renderers ────────────────────────────────────────────────────────
@@ -506,26 +658,58 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       }
       const textWrap = el("div", { class: "tree-date-text" });
       if (r._row_kind === "session") {
-        const dateLine = `${fmtShortDate(r._session_start_dt || r.date)}${r._session_tod ? ", " + r._session_tod : ""}`;
-        textWrap.appendChild(el("div", { class: "date-main" }, dateLine));
-        if (r._session_total_duration_s) {
-          textWrap.appendChild(el("div", { class: "date-sub" },
-            `${fmtDurationReadable(r._session_total_duration_s, true)}`));
-        }
+        textWrap.appendChild(el("div", { class: "date-main" },
+          fmtShortDate(r._session_start_dt || r.date)));
       } else {
-        // Child workout row — italic role label.  Skip the literal
-        // "single" since singletons stay parents and never reach here.
+        // Child workout row — role badge.  Singletons stay parents and
+        // never reach here, so "single" is a defensive skip.
         const role = r._role || "";
         if (role && role !== "single") {
-          textWrap.appendChild(el("div", { class: "role-label" }, capitalize(role)));
+          textWrap.appendChild(el("span",
+            { class: "role-label role-" + role },
+            capitalize(role)));
         }
       }
       wrap.appendChild(textWrap);
       return wrap;
     },
 
+    time_of_day(r) {
+      // Parent (session) row: colloquial period above total session duration.
+      if (r._row_kind === "session") {
+        const wrap = el("div", { class: "tod-cell" });
+        if (r._session_tod) {
+          wrap.appendChild(el("div", { class: "tod-main" }, r._session_tod));
+        }
+        if (r._session_total_duration_s) {
+          wrap.appendChild(el("div", { class: "tod-sub" },
+            fmtDurationReadable(r._session_total_duration_s, true)));
+        }
+        if (!wrap.children.length) return emDash();
+        return wrap;
+      }
+      // Child workout row — its precise start time so the user can see
+      // the rhythm of the session.
+      const start = workoutStartHHMM(r);
+      if (!start) return document.createDocumentFragment();
+      return el("div", { class: "tod-cell child" },
+        el("div", { class: "tod-main" }, start));
+    },
+
+    gap(r, col) {
+      // Render content only in the Main Work column; every other cell
+      // for a gap row is empty (cells still exist so the grid lines up).
+      if (col.key !== "main_work") return null;
+      return el("span", { class: "gap-text" },
+        `${fmtDurationReadable(r._gap_seconds, false)} recovery`);
+    },
+
     main_work_lines(r) {
       if (r._row_kind === "session") {
+        // When the session is expanded, the children (with gap rows in
+        // between) tell the full story — the parent's main-work summary
+        // becomes redundant noise, so hide it.
+        if (state.expanded.has(r.session_id)) return document.createDocumentFragment();
         const lines = r._main_work_lines || [];
         if (!lines.length) return text("");
         const wrap = el("div", { class: "lines" });
@@ -870,13 +1054,23 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     for (const col of state.cols) {
       const align = "align-" + (col.align || "center");
       const cell = el("div", { class: `cell hdr ${align}` });
+
+      // In tree mode, the date column needs a chevron-spacer prefix in its
+      // header so the "Date" label aligns with the chevroned content below.
+      if (state.treeMode && col.key === "date") {
+        cell.appendChild(el("span", { class: "tree-chevron-spacer" }));
+      }
+
       if (col.sortable && col.header) {
         const isActive = state.sortCol === col.key;
-        const indicator = isActive ? (state.sortAsc ? " ▲" : " ▼") : "";
+        const arrow = state.sortAsc ? "▲" : "▼";
         const btn = el("button", {
           class: "sort-btn" + (isActive ? " active" : ""),
           onClick: () => onSortClick(col),
-        }, col.header + indicator);
+        }, [
+          el("span", { class: "sort-label" }, col.header),
+          el("span", { class: "sort-arrow" + (isActive ? "" : " hidden") }, arrow),
+        ]);
         cell.appendChild(btn);
       } else if (col.header) {
         cell.appendChild(text(col.header));
@@ -893,6 +1087,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       const isHl = state.highlightIds.has(row.id);
       const isChild = state.treeMode && row._row_kind === "workout";
       const isParent = state.treeMode && row._row_kind === "session";
+      const isGap    = state.treeMode && row._row_kind === "gap";
 
       // Tree-mode session block tinting: flip on each parent so a parent
       // and its expanded children share a single tint distinct from
@@ -906,13 +1101,11 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       // Whether this row's bottom border should be suppressed because
       // the next row is part of the same session block.
       const next = pageRows[i + 1];
-      const sameBlockNext = state.treeMode && next != null && (
-        (isParent && next._row_kind === "workout"
-          && next._session_id === row.session_id)
-        || (isChild && (
-          (next._row_kind === "workout" && next._session_id === row._session_id)
-        ))
-      );
+      const nextSid = next && (next._row_kind === "session"
+        ? next.session_id : next._session_id);
+      const thisSid = row._row_kind === "session" ? row.session_id : row._session_id;
+      const sameBlockNext = state.treeMode && next != null
+        && next._row_kind !== "session" && nextSid === thisSid;
 
       let idx = 0;
       const colCount = state.cols.length;
@@ -924,11 +1117,14 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
         else if (state.treeMode) bgCls = " " + currentTint;
         else bgCls = isAlt ? " alt" : "";
         const childCls = isChild ? " is-child" : "";
-        const internalCls = sameBlockNext ? " session-internal" : "";
-        const cls = `cell row-cell ${align}${bgCls}${childCls}${internalCls}`
+        const gapCls = isGap ? " gap-cell session-internal" : "";
+        const internalCls = (!isGap && sameBlockNext) ? " session-internal" : "";
+        const cls = `cell row-cell ${align}${bgCls}${childCls}${gapCls}${internalCls}`
           + (isEnd ? " end" : "");
         const cell = el("div", { class: cls });
-        const renderer = RENDERERS[col.renderer] || RENDERERS.text;
+        const renderer = isGap
+          ? RENDERERS.gap
+          : (RENDERERS[col.renderer] || RENDERERS.text);
         const node = renderer(row, col);
         if (node != null) cell.appendChild(node);
         grid.appendChild(cell);

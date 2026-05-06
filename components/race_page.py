@@ -570,9 +570,7 @@ def race_page() -> None:
     # (rower / skierg), and the user has enabled the toggle.
     # 30 r20 has no Concept2 world record, so the ghost lane is suppressed.
     _wr_available = (
-        profile_complete(profile)
-        and not is_r20_event
-        and wr_machine_supported(machine)
+        profile_complete(profile) and not is_r20_event and wr_machine_supported(machine)
     )
 
     # Compute the profile key regardless of toggle state so UI status text
@@ -595,9 +593,7 @@ def race_page() -> None:
         if state.wr_records_key != _wr_key:
             _wr_task = hd.task()
             if not _wr_task.running and not _wr_task.done:
-                _wr_task.run(
-                    get_age_group_records, _g_api, _wr_age, _wr_wt_kg, machine
-                )
+                _wr_task.run(get_age_group_records, _g_api, _wr_age, _wr_wt_kg, machine)
             if _wr_task.done and not _wr_task.error:
                 print("WORLD RECORDS LOADED")
                 state.wr_records = _wr_task.result

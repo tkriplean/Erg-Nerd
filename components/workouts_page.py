@@ -696,12 +696,13 @@ def workouts_page() -> None:
                 in_window_by_id = {str(r["id"]): r for r in in_window}
 
 
-                with hd.box(padding=(2, 0, 0, 0), align="center"):
+                with hd.box(padding=(2, 0, 0, 0), align="center", width="100%"):
                     hd.h2(f"Workouts in View  ({len(in_window)})")
                     WorkoutTable(
                         in_window,
                         [
                             "date",
+                            "time_of_day",
                             "main_work",
                             "work_duration",
                             "pace",

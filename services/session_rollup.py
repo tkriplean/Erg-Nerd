@@ -38,13 +38,21 @@ Each member of a multi-workout session is tagged ``"warmup"`` /
 * singletons → ``"single"``
 * all-zero scores (no power data) → every workout marked main, so the
   parent row aggregates over everything rather than nothing
+
+Gap rows
+--------
+``_children`` interleaves synthetic ``{"_row_kind": "gap"}`` rows between
+consecutive workouts so the expanded view shows how much wall-clock time
+elapsed between pieces.  Gaps under ``_GAP_MIN_S`` (30 s) collapse — the
+threshold filters out trivial pauses (settings menu, water sip) that
+would only add visual noise.
 """
 
 from __future__ import annotations
 
 from typing import Optional
 
-from services.erg_stress import _parse_workout_datetime
+from services.erg_stress import _parse_workout_datetime, _workout_total_duration_s
 from services.formatters import (
     fmt_distance,
     fmt_split,
@@ -247,6 +255,56 @@ def _session_total_duration_s(start_dt_str: str, end_dt_str: str) -> float:
     return max(0.0, (end - start).total_seconds())
 
 
+def _workout_start_end(w: dict):
+    """Return (start_dt, end_dt) for a workout, or (None, None) when the
+    end timestamp doesn't parse.  ``date`` is the workout end (Concept2
+    convention); start = end - total_duration."""
+    end_dt = _parse_workout_datetime(w.get("date"))
+    if end_dt is None:
+        return None, None
+    duration_s = _workout_total_duration_s(w)
+    return end_dt - _td_seconds(duration_s), end_dt
+
+
+def _td_seconds(secs: float):
+    from datetime import timedelta
+    return timedelta(seconds=secs)
+
+
+def _build_children_with_gaps(roles, sid: str) -> list[dict]:
+    """Interleave gap rows between consecutive workouts.
+
+    A gap row is a synthetic dict with ``_row_kind="gap"`` carrying the
+    elapsed wall-clock seconds between the previous workout's end and
+    the next workout's start.  Gaps under ``_GAP_MIN_S`` collapse — there's
+    no point telling the user about a 12-second pause that's just the
+    rower's settings menu.
+    """
+    out: list[dict] = []
+    prev_end = None
+    for i, (role, w) in enumerate(roles):
+        start, end = _workout_start_end(w)
+        if prev_end is not None and start is not None:
+            gap_s = (start - prev_end).total_seconds()
+            if gap_s >= _GAP_MIN_S:
+                out.append({
+                    "_row_kind": "gap",
+                    "_session_id": sid,
+                    "_gap_seconds": gap_s,
+                    "id": f"__gap__{sid}__{i}",
+                })
+        out.append({
+            **w, "_row_kind": "workout", "_session_id": sid, "_role": role,
+        })
+        prev_end = end
+    return out
+
+
+#: Gap rows under this threshold collapse — too short to be interesting
+#: and just adds visual noise between back-to-back workouts.
+_GAP_MIN_S = 30.0
+
+
 def _parent_from_session(
     sid: str,
     session_rec: Optional[dict],
@@ -258,10 +316,7 @@ def _parent_from_session(
     that case we derive start/end from the visible members.
     """
     roles = _classify_roles(workouts)
-    children = [
-        {**w, "_row_kind": "workout", "_session_id": sid, "_role": role}
-        for role, w in roles
-    ]
+    children = _build_children_with_gaps(roles, sid)
     mains = [w for role, w in roles if role in ("main", "single")]
 
     # Most-severe main — used for spread placeholders and View link target.

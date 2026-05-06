@@ -124,7 +124,7 @@ class ColumnDef:
 
 COLUMN_REGISTRY: dict[str, ColumnDef] = {
     # ── Workout columns ─────────────────────────────────────────────────
-    "date": ColumnDef("date", "Date", "10rem", format="date", align="start"),
+    "date": ColumnDef("date", "Date", "115px", format="date", align="start"),
     "type": ColumnDef("type", "Type", "7rem", format="type"),
     "distance": ColumnDef(
         "distance", "Distance", "7rem", format="distance", align="end"
@@ -140,7 +140,15 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
         "Main Work",
         "minmax(10rem,1.5fr)",
         renderer="main_work_lines",
-        align="start",
+        align="center",
+        sortable=False,
+    ),
+    "time_of_day": ColumnDef(
+        "time_of_day",
+        "Time",
+        "6rem",
+        renderer="time_of_day",
+        align="center",
         sortable=False,
     ),
     "work_duration": ColumnDef(
@@ -527,8 +535,9 @@ def _compile_column(entry, *, tree_mode: bool = False) -> dict:
     layout = {k: entry[k] for k in entry if k in _LAYOUT_KEYS}
     opts = {k: v for k, v in entry.items() if k != "key" and k not in _LAYOUT_KEYS}
 
-    # In tree mode, the date column needs the chevron + time-of-day +
-    # duration-sub-line rendering; route it through a dedicated JS renderer.
+    # In tree mode, the date column needs chevron + role-badge rendering;
+    # route it through a dedicated JS renderer.  (Time-of-day and total
+    # session duration live in the separate ``time_of_day`` column.)
     renderer = base.renderer
     if tree_mode and key == "date":
         renderer = "tree_date"
