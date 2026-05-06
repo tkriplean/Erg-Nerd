@@ -78,6 +78,84 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
   }
 
   // -----------------------------------------------------------------------
+  // Pixel-density binning
+  //
+  // Collapses dense data to a target visual density.  Adjacent points
+  // within `binSec` of each other (chosen so each bin spans roughly
+  // TARGET_PX_PER_POINT pixels at the current canvas width) are averaged
+  // into one output point.  When the natural sample spacing is already
+  // wider than a bin, every input point gets its own bin and the input
+  // is effectively returned unchanged — so a 100m TT keeps every stroke
+  // while a 2k race or longer piece is collapsed to a clean trace.
+  //
+  // smoothPoints() splits the input on y=null gap markers — Python inserts
+  // these at rest-span boundaries (see _apply_rest_gaps), so each contiguous
+  // run is one work interval (or the whole piece for non-interval pieces).
+  // Bins are reseeded per run so they don't span across rests.  For SPM,
+  // leading/trailing y=0 points within each run are dropped before binning
+  // so warm-up/cool-down idle strokes don't drag the value to 0.
+  // -----------------------------------------------------------------------
+
+  const TARGET_PX_PER_POINT = 2;
+
+  // Convert a chart x-range (seconds) into the bin width (seconds) that
+  // would map to TARGET_PX_PER_POINT pixels at the current canvas width.
+  function binSecondsForRange(xRangeSec) {
+    if (!(xRangeSec > 0)) return 0;
+    const widthPx = canvas.clientWidth || 800;
+    return TARGET_PX_PER_POINT * xRangeSec / widthPx;
+  }
+
+  function binByDensity(points, binSec) {
+    if (!points.length || !(binSec > 0)) return points;
+    const out = [];
+    let binStart = points[0].x;
+    let sumX = 0, sumY = 0, count = 0;
+    for (const p of points) {
+      if (count > 0 && (p.x - binStart) >= binSec) {
+        out.push({ x: sumX / count, y: sumY / count });
+        sumX = 0; sumY = 0; count = 0;
+        binStart = p.x;
+      }
+      sumX += p.x;
+      sumY += p.y;
+      count++;
+    }
+    if (count > 0) out.push({ x: sumX / count, y: sumY / count });
+    return out;
+  }
+
+  function smoothPoints(points, binSec, opts) {
+    if (!points || !points.length || !(binSec > 0)) return points;
+    const trimZeros = !!(opts && opts.trimZeros);
+    const out = [];
+    let buf = [];
+    const flush = () => {
+      if (!buf.length) return;
+      let seg = buf;
+      if (trimZeros) {
+        let s = 0;
+        while (s < seg.length && seg[s].y <= 0) s++;
+        let e = seg.length - 1;
+        while (e >= s && seg[e].y <= 0) e--;
+        seg = seg.slice(s, e + 1);
+      }
+      if (seg.length) out.push(...binByDensity(seg, binSec));
+      buf = [];
+    };
+    for (const p of points) {
+      if (p.y == null) {
+        flush();
+        out.push({ x: p.x, y: null });
+      } else {
+        buf.push(p);
+      }
+    }
+    flush();
+    return out;
+  }
+
+  // -----------------------------------------------------------------------
   // Band click detection — zoom to interval on click
   // -----------------------------------------------------------------------
 
@@ -159,6 +237,26 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
       const intervals = cfg.stackedIntervals || [];
       const paceYMin = showFullRange ? paceMinFull : paceMinCapped;
       const paceYMax = showFullRange ? paceMaxFull : paceMaxCapped;
+      // Bin to target pixel density.  All intervals share the same x axis
+      // (each starts at 0), so the displayed range is the longest interval.
+      if (cfg.smoothen) {
+        let xMax = 0;
+        intervals.forEach((iv) => {
+          for (const arr of [iv.pacePoints, iv.spmPoints, iv.hrPoints]) {
+            if (!arr || !arr.length) continue;
+            const last = arr[arr.length - 1];
+            if (last && last.x > xMax) xMax = last.x;
+          }
+        });
+        const binSec = binSecondsForRange(xMax);
+        if (binSec > 0) {
+          intervals.forEach((iv) => {
+            iv.pacePoints = smoothPoints(iv.pacePoints, binSec, { trimZeros: false });
+            iv.spmPoints  = smoothPoints(iv.spmPoints,  binSec, { trimZeros: false });
+            iv.hrPoints   = smoothPoints(iv.hrPoints,   binSec, { trimZeros: false });
+          });
+        }
+      }
 
       const datasets = [];
 
@@ -329,8 +427,33 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
     // and SPM series.  Compare-overlay datasets are flagged isCompare so
     // we leave their borderColor/borderWidth untouched — each compared
     // workout keeps its own distinct color.
+    // Bin to target pixel density.  Use the displayed x-range (zoomed if
+    // xMin/xMax are set, otherwise the full data extent) so binning adapts
+    // when the user clicks into a single interval.
+    let binSec = 0;
+    if (cfg.smoothen) {
+      let xRange = 0;
+      if (xMin != null && xMax != null) {
+        xRange = xMax - xMin;
+      } else {
+        let dataMin = Infinity, dataMax = -Infinity;
+        for (const ds of (cfg.datasets || [])) {
+          if (!ds.data) continue;
+          for (const p of ds.data) {
+            if (p.y == null) continue;
+            if (p.x < dataMin) dataMin = p.x;
+            if (p.x > dataMax) dataMax = p.x;
+          }
+        }
+        if (isFinite(dataMin) && isFinite(dataMax)) xRange = dataMax - dataMin;
+      }
+      binSec = binSecondsForRange(xRange);
+    }
     const datasets = (cfg.datasets || []).map(ds => {
       const d = Object.assign({}, ds);
+      if (binSec > 0 && d.data && d.data.length) {
+        d.data = smoothPoints(d.data, binSec, { trimZeros: d.yAxisID === "yspm" });
+      }
       if (d.isCompare) return d;
       if (d.borderDash) return d;
       if (d.yAxisID === "y") {

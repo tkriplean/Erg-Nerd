@@ -465,6 +465,7 @@ def _build_stacked_config(
     spm_color: str,
     hr_color: str,
     is_dark: bool,
+    smoothen: bool,
 ) -> dict:
     """
     Build the stacked-intervals config dict.
@@ -534,6 +535,7 @@ def _build_stacked_config(
         "spmColor": spm_color,
         "hrColor": hr_color,
         "isDark": is_dark,
+        "smoothen": smoothen,
     }
 
 
@@ -704,6 +706,7 @@ def build_stroke_chart_config(
     compare_series: Optional[list] = None,
     primary_color: Optional[str] = None,
     primary_label: Optional[str] = None,
+    smoothen: bool = True,
 ) -> dict:
     """
     Return a Chart.js config dict for the stroke time-series.
@@ -725,6 +728,7 @@ def build_stroke_chart_config(
         When provided and stack=False, each entry is drawn as an additional
         dashed line on the primary chart.  x-axis expands to fit the longest
         compared workout.
+    smoothen : should the series be smoothed based on point to pixel density.
     """
     if not strokes:
         return {}
@@ -993,6 +997,7 @@ def build_stroke_chart_config(
             spm_color=spm_color,
             hr_color=hr_color,
             is_dark=is_dark,
+            smoothen=smoothen,
         )
 
     # ── x-axis zoom ──────────────────────────────────────────────────────────
@@ -1052,4 +1057,5 @@ def build_stroke_chart_config(
         "hrColor": hr_color,
         "isDark": is_dark,
         "showLegend": has_compares,
+        "smoothen": smoothen,
     }
