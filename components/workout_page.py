@@ -860,9 +860,6 @@ def _splits_table(
     if not has_hr:
         col_w = col_w[:-1]
         headers = headers[:-1]
-    if has_if:
-        col_w.append(4.5)
-        headers.append("IF eff")
 
     _table_frame(
         splits_data,
@@ -918,10 +915,6 @@ def _split_row(i, sp, col_w, ts, has_hr, ess_segments=None):
     ]
     if has_hr:
         cells.append((hr_str, col_w[6], None))
-    if ess_segments is not None:
-        seg = ess_segments[i] if i < len(ess_segments) else None
-        if_eff = seg.get("IF_eff_avg") if seg else None
-        cells.append((f"{if_eff:.2f}" if if_eff else "—", col_w[-1], None))
 
     for idx, (val, w, color) in enumerate(cells):
         with hd.scope(f"{idx}"):
@@ -1292,6 +1285,97 @@ def _chart_controls(
                         state.show_hr = hr_sw.checked
 
 
+def _render_similar_workouts(workout, all_workouts, max_hr, profile, state):
+    similar = _find_similar(workout, all_workouts)
+    if similar:
+        try:
+            attach_spread_and_quality(similar, all_workouts, max_hr)
+        except Exception:
+            pass
+        try:
+            attach_ess_metrics(
+                similar,
+                all_workouts,
+                AppContext().sessions_dict or {},
+                profile,
+                max_hr,
+            )
+        except Exception:
+            pass
+        with hd.box(align="center"):
+            hd.h2(
+                "Similar workouts",
+                font_weight="semibold",
+                font_size="x-large",
+                font_color="neutral-800",
+            )
+            is_interval_workout = workout["is_interval"]
+            compare_col_entry = {
+                "key": "compare",
+                "compared_ids": list(state.compared_workouts),
+                "stack_active": state.stack,
+            }
+            if is_interval_workout:
+                # Similar workouts are mostly intervals — show the interval
+                # structure (which already encodes the rep count when present).
+                cols = [
+                    "date",
+                    "workout_structure",
+                    "distance",
+                    "time",
+                    "pace",
+                    "watts",
+                    "spm",
+                    "hr",
+                    "quality",
+                    "ess",
+                    "if_eff",
+                    "severity",
+                    "anaerobic_strain",
+                    "similarity",
+                    compare_col_entry,
+                    "link",
+                ]
+            else:
+                # Non-interval: show standard performance columns
+                cols = [
+                    "date",
+                    "distance",
+                    "time",
+                    "pace",
+                    "watts",
+                    "drag",
+                    "spm",
+                    "hr",
+                    "quality",
+                    "ess",
+                    "if_eff",
+                    "severity",
+                    "anaerobic_strain",
+                    "similarity",
+                    compare_col_entry,
+                    "link",
+                ]
+
+            def _on_compare_toggle(payload):
+                wid = payload["workout_id"]
+                current = set(state.compared_workouts)
+                if payload["checked"]:
+                    current.add(wid)
+                    state.stack = False
+                else:
+                    current.discard(wid)
+                state.compared_workouts = tuple(sorted(current))
+
+            WorkoutTable(
+                similar,
+                cols,
+                default_sort_col="similarity",
+                default_sort_asc=False,
+                on_event={"compare_toggle": _on_compare_toggle},
+            )
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -1593,97 +1677,6 @@ def workout_page(workout_id: int) -> None:
                 )
                 EffortStressChart(config=ess_cfg, height=220)
 
-        # ── Similar workouts ─────────────────────────────────────────────
-
-        similar = _find_similar(workout, all_workouts)
-        if similar:
-            try:
-                attach_spread_and_quality(similar, all_workouts, max_hr)
-            except Exception:
-                pass
-            try:
-                attach_ess_metrics(
-                    similar,
-                    all_workouts,
-                    AppContext().sessions_dict or {},
-                    profile,
-                    max_hr,
-                )
-            except Exception:
-                pass
-            with hd.box(align="center"):
-                hd.h2(
-                    "Similar workouts",
-                    font_weight="semibold",
-                    font_size="x-large",
-                    font_color="neutral-800",
-                )
-                is_interval_workout = workout["is_interval"]
-                compare_col_entry = {
-                    "key": "compare",
-                    "compared_ids": list(state.compared_workouts),
-                    "stack_active": state.stack,
-                }
-                if is_interval_workout:
-                    # Similar workouts are mostly intervals — show the interval
-                    # structure (which already encodes the rep count when present).
-                    cols = [
-                        "date",
-                        "workout_structure",
-                        "distance",
-                        "time",
-                        "pace",
-                        "watts",
-                        "spm",
-                        "hr",
-                        "quality",
-                        "ess",
-                        "if_eff",
-                        "severity",
-                        "anaerobic_strain",
-                        "similarity",
-                        compare_col_entry,
-                        "link",
-                    ]
-                else:
-                    # Non-interval: show standard performance columns
-                    cols = [
-                        "date",
-                        "distance",
-                        "time",
-                        "pace",
-                        "watts",
-                        "drag",
-                        "spm",
-                        "hr",
-                        "quality",
-                        "ess",
-                        "if_eff",
-                        "severity",
-                        "anaerobic_strain",
-                        "similarity",
-                        compare_col_entry,
-                        "link",
-                    ]
-
-                def _on_compare_toggle(payload):
-                    wid = payload["workout_id"]
-                    current = set(state.compared_workouts)
-                    if payload["checked"]:
-                        current.add(wid)
-                        state.stack = False
-                    else:
-                        current.discard(wid)
-                    state.compared_workouts = tuple(sorted(current))
-
-                WorkoutTable(
-                    similar,
-                    cols,
-                    default_sort_col="similarity",
-                    default_sort_asc=False,
-                    on_event={"compare_toggle": _on_compare_toggle},
-                )
-
         # ── All workouts done on this day ────────────────────────────────
         same_day = [w for w in all_workouts if w.get("day") == workout.get("day")]
         if len(same_day) > 1:
@@ -1761,3 +1754,6 @@ def workout_page(workout_id: int) -> None:
                     paginate=False,
                     highlight=lambda r: str(r.get("id")) == str(workout["id"]),
                 )
+
+        # ── Similar workouts ─────────────────────────────────────────────
+        _render_similar_workouts(workout, all_workouts, max_hr, profile, state)

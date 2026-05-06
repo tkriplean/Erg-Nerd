@@ -7,10 +7,10 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
     canvas { display: block; width: 100% !important; }
     .range-btn {
       position: absolute;
-      top: 4px;
-      right: 6px;
+      top: 2px;
+      right: 57px;
       z-index: 2;
-      background: transparent;
+      background: var(--sl-color-neutral-50);
       border: 1px solid rgba(128,128,128,0.35);
       border-radius: 4px;
       font-size: 11px;
@@ -18,8 +18,9 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
       line-height: 1.4;
       cursor: pointer;
       color: inherit;
-      opacity: 0.55;
+      opacity: 0.8;
       transition: opacity 120ms ease;
+      display: none;
     }
     .range-btn:hover { opacity: 1; }
     .range-btn[hidden] { display: none !important; }
