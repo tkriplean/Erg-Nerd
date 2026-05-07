@@ -22,7 +22,7 @@ Exported:
     estimate_max_hr(workouts)       → int | None
     resolve_max_hr(profile, workouts) → (int | None, bool)  # (max_hr, is_estimated)
     hr_zone_idx(avg_hr, max_hr)     → int 1–5
-    workout_hr_meters(workout, max_hr) → list[float]  (7 bins, same shape as workout_bin_meters)
+    workout_hr_meters(workout, max_hr) → list[float]  (7 bins, same shape as workout_zone_meters)
     hr_spread_score(_hr_bin_meters) → float | None  (0–100 weighted average)
     hr_bin_passes(_hr_bin_meters, idx) → bool  (filter-threshold test)
     hr_coverage(workouts)           → (int, int)  # (with_hr, total)
@@ -246,7 +246,7 @@ def workout_hr_meters(workout: dict, max_hr: int) -> tuple[float]:
     """
     Return a 7-element HR-zone bin vector for a single workout.
 
-    Shape matches volume_bins.workout_bin_meters() so it can be passed as
+    Shape matches volume_bins.workout_zone_meters() so it can be passed as
     bin_fn to aggregate_workouts().
 
     Resolution priority:

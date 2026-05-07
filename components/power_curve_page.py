@@ -1165,7 +1165,6 @@ def power_curve_page() -> None:
                 "drag",
                 "spm",
                 "hr",
-                "power_spread",
                 "ess",
                 "if_eff",
                 "severity",

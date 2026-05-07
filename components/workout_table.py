@@ -131,7 +131,9 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
     ),
     "time": ColumnDef("time", "Time", "7rem", format="time", align="end"),
     "pace": ColumnDef("pace", "Pace /500m", "7rem", format="pace", default_asc=True),
-    "watts": ColumnDef("watts", "Watts", "5rem", format="watts"),
+    # Watts cell renders the watts number on top with a small Zone-Spread
+    # stacked bar below — bar widths come from ``_zone_bin_fractions``.
+    "watts": ColumnDef("watts", "Watts", "6rem", renderer="watts_zones"),
     "drag": ColumnDef("drag", "Drag", "5rem", format="drag"),
     "spm": ColumnDef("spm", "SPM", "4rem", format="spm"),
     # ── Session-tree columns (only used when tree_mode=True) ────────────
@@ -201,9 +203,6 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
         align="start",
     ),
     "similarity": ColumnDef("similarity", "Similarity", "6rem", format="similarity"),
-    "power_spread": ColumnDef(
-        "power_spread", "Power Spread", "8rem", renderer="power_spread"
-    ),
     "hr": ColumnDef("hr", "HR", "8rem", renderer="hr_spread"),
     "quality": ColumnDef("quality", "Quality", "6rem", renderer="quality"),
     # ── ESS family (services/erg_stress.py) ─────────────────────────────
@@ -294,6 +293,7 @@ def render_spread_cell(
     is_dark: bool,
     *,
     skip_indices: tuple[int, ...] = (0,),
+    show_meters: bool = True,
 ) -> None:
     """
     Score + zone-bar + per-zone breakdown tooltip.  Used by workout_page's
@@ -301,6 +301,11 @@ def render_spread_cell(
     plugin).  The stacked zone-bar is built in the LazyTooltip JS plugin
     from ``_bin_meters`` + ``bar_colors`` — the SVG is no longer round-
     tripped through Python as a base64 data URI.
+
+    ``_bin_meters`` may be an array of meter counts (HR-spread case) or
+    time fractions summing to 1.0 (Zone-Spread case).  Set
+    ``show_meters=False`` for the latter so the tooltip drops the meters
+    column and shows only zone-name + percentage.
     """
     from components.lazy_tooltip_plugin import LazyTooltip
 
@@ -323,14 +328,14 @@ def render_spread_cell(
             continue
 
         color_str = zone_colors[idx][0 if is_dark else 1]
-        items.append(
-            {
-                "swatch_uri": swatch_svg(color_str, size=10, radius=2),
-                "name": zone_names[idx],
-                "pct_text": f"{pct:.0%}",
-                "meters_text": fmt_distance(int(round(meters))),
-            }
-        )
+        item = {
+            "swatch_uri": swatch_svg(color_str, size=10, radius=2),
+            "name": zone_names[idx],
+            "pct_text": f"{pct:.0%}",
+        }
+        if show_meters:
+            item["meters_text"] = fmt_distance(int(round(meters)))
+        items.append(item)
 
     LazyTooltip(
         config={
@@ -341,6 +346,7 @@ def render_spread_cell(
             "bar_w": _SPREAD_BAR_WIDTH,
             "bar_h": _SPREAD_BAR_HEIGHT,
             "items": items,
+            "show_meters": show_meters,
         },
         placement="top",
     )
@@ -443,7 +449,7 @@ def _theme_bar_colors(zone_colors, is_dark: bool) -> list[str]:
 
 def _enrich_opts(key: str, opts: dict) -> dict:
     """Add theme-dependent or constant resources to a column's opts."""
-    if key == "power_spread":
+    if key == "watts":
         is_dark = hd.theme().is_dark
         return {
             **opts,

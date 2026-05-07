@@ -182,7 +182,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     }
 
     /* Multi-line cell content (e.g. Main Work). */
-    .cell .lines { display: flex; flex-direction: column; center: flex-start; gap: 0.1rem; width: 100%; }
+    .cell .lines { display: flex; flex-direction: column; flex-align: center; gap: 0.1rem; width: 100%; }
     .cell .lines > div { font-size: var(--sl-font-size-small); }
     /* Sort header — always reserve space for the arrow so toggling sort
        direction (or moving the active sort to a different column) never
@@ -234,6 +234,9 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     .spread { display: flex; flex-direction: column; align-items: center; gap: 0.2rem; cursor: default; }
     .spread .score { font-weight: bold; font-size: var(--sl-font-size-medium); line-height: 1.1; }
     .spread img.bar { display: block; }
+    .watts-cell { display: flex; flex-direction: column; align-items: center; gap: 0.15rem; cursor: default; }
+    .watts-cell .watts-num { font-size: var(--sl-font-size-medium); line-height: 1.1; }
+    .watts-cell img.bar { display: block; }
     .em-dash { color: var(--sl-color-neutral-400); font-size: var(--sl-font-size-medium); }
 
     .quality-pill {
@@ -534,7 +537,6 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     work_spm:          (r) => r.work_spm || 0,
     workout_structure: (r) => r.is_interval ? (r.structure_key || "") : "",
     similarity:        (r) => r._similarity != null ? r._similarity : -1,
-    power_spread:      (r) => r._power_spread_score != null ? r._power_spread_score : -1,
     hr:                (r) => r._hr_spread_score != null ? ((r.heart_rate && r.heart_rate.average) || 0) + r._hr_spread_score : -1,
     quality:           (r) => r._quality_score != null ? r._quality_score : -1,
     ess:               (r) => r._ess != null ? r._ess : -1,
@@ -795,11 +797,52 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       return cb;
     },
 
-    power_spread(r, col) {
-      const score = r._power_spread_score;
-      const bins = r._bin_meters;
-      if (score == null || bins == null) return emDash();
-      return _spreadCell(score, bins, col);
+    // Watts cell: watts number on top, small Zone-Spread stacked bar
+    // below.  Bar widths come from ``_zone_bin_fractions`` (a 7-element
+    // list aligned to BIN_NAMES — index 0 is Rest, indices 1-6 are
+    // Sprint/Anaerobic/VO2max/Threshold/Tempo/Endurance time fractions).
+    // Tooltip on hover shows the per-band breakdown.
+    watts_zones(r, col) {
+      const wattsText = fmtWatts(r);
+      const fractions = r._zone_bin_fractions;
+      const wrap = el("div", { class: "watts-cell" });
+      wrap.appendChild(el("div", { class: "watts-num" }, wattsText));
+      if (Array.isArray(fractions) && fractions.length) {
+        // Render the stacked bar inline; reuse _spreadCell tooltip body
+        // but skip its score row (the watts number plays that role here).
+        const opts = col.opts || {};
+        const bar = _buildSpreadBar(
+          fractions, opts.bar_colors || [], opts.bar_w || 5, opts.bar_h || 0.5);
+        if (bar) {
+          wrap.appendChild(bar);
+          // Lazy tooltip: per-band fraction breakdown.
+          const skip = new Set(opts.skip_indices || [0]);
+          const swatches = opts.swatch_uris || [];
+          const zoneNames = opts.zone_names || [];
+          const buildBody = () => {
+            const total = fractions.reduce(
+              (acc, m, idx) => skip.has(idx) ? acc : acc + (m > 0 ? m : 0), 0);
+            const body = el("div", { class: "tt-body" });
+            body.appendChild(el("div", { class: "tt-title" }, "Zone Spread"));
+            for (let idx = 0; idx < swatches.length; idx++) {
+              if (skip.has(idx)) continue;
+              const v = fractions[idx] || 0;
+              if (v <= 0) continue;
+              const pct = total > 0 ? v / total : 0;
+              if (pct < 0.005) continue;
+              const row = el("div", { class: "row" }, [
+                el("img", { src: swatches[idx] }),
+              ]);
+              row.appendChild(el("span", { class: "zname" }, zoneNames[idx] || ""));
+              row.appendChild(el("span", { class: "pct" }, Math.round(pct * 100) + "%"));
+              body.appendChild(row);
+            }
+            return body;
+          };
+          lazyTooltipWrap(wrap, buildBody, "top");
+        }
+      }
+      return wrap;
     },
 
     hr_spread(r, col) {
@@ -941,8 +984,13 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
   }
 
   // ── Spread cell (score + bar + lazy tooltip with zone breakdown) ─────
+  // ``score`` is a number rendered as the headline; ``binMeters`` is the
+  // per-bin numeric weights driving the stacked bar.  When opts.show_meters
+  // is false, the tooltip drops the meters column (Zone-Spread case where
+  // binMeters are time fractions, not actual meter counts).
   function _spreadCell(score, binMeters, col) {
     const opts = col.opts || {};
+    const showMeters = opts.show_meters !== false;
     const trigger = el("div", { class: "spread" });
     const scoreEl = el("div", { class: "score" }, score.toFixed(0));
     trigger.appendChild(scoreEl);
@@ -971,12 +1019,13 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
         if (meters <= 0) continue;
         const pct = total > 0 ? meters / total : 0;
         if (pct < 0.005) continue;
-        items.push({
+        const item = {
           uri: swatches[idx],
           name: zoneNames[idx] || "",
           pctText: Math.round(pct * 100) + "%",
-          metersText: fmtMeters(meters),
-        });
+        };
+        if (showMeters) item.metersText = fmtMeters(meters);
+        items.push(item);
       }
       const body = el("div", { class: "tt-body" });
       for (const it of items) {
@@ -987,7 +1036,9 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
           row.appendChild(el("span", { class: "zname" }, it.name));
         }
         row.appendChild(el("span", { class: "pct" }, it.pctText));
-        row.appendChild(el("span", { class: "meters" }, it.metersText));
+        if (showMeters) {
+          row.appendChild(el("span", { class: "meters" }, it.metersText));
+        }
         body.appendChild(row);
       }
       return body;

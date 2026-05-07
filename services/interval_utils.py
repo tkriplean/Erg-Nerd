@@ -6,7 +6,7 @@ computation.
 
 No HyperDiv dependency — safe to import anywhere.
 Energy-system classification is handled by services/volume_bins.py
-(workout_bin_meters, Z1/Z2/Z3_BINS).
+(workout_zone_meters, Z1/Z2/Z3_BINS).
 
 Exported:
   fmt_tenths(tenths)                → "M:SS" string

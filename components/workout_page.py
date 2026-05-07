@@ -238,25 +238,28 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
     rest_time = workout.get("rest_time")
 
     is_dark = hd.theme().is_dark
-    has_power_spread = workout.get("_power_spread_score") is not None
+    has_intensity = workout.get("_if_eff") is not None and workout.get(
+        "_zone_bin_fractions"
+    ) is not None
     has_hr_spread = workout.get("_hr_spread_score") is not None
     has_quality = workout.get("_quality") is not None
     has_ess = workout.get("_ess") is not None
 
     with hd.box(grow=True, gap=0.25):
-        # ── Top row: Power Spread, HR Spread, Quality ─────────────────────
-        if has_power_spread or has_hr_spread or has_quality:
+        # ── Top row: Intensity (with Zone Spread bar), HR Spread, Quality ─
+        if has_intensity or has_hr_spread or has_quality:
             with hd.hbox(wrap="wrap", gap=0):
-                if has_power_spread:
+                if has_intensity:
                     _spread_stat(
-                        "Power Spread",
+                        "Intensity",
                         lambda: render_spread_cell(
-                            score=workout.get("_power_spread_score"),
-                            _bin_meters=workout.get("_bin_meters"),
+                            score=round((workout.get("_if_eff") or 0.0) * 100),
+                            _bin_meters=workout.get("_zone_bin_fractions"),
                             zone_names=BIN_NAMES,
                             zone_colors=BIN_COLORS,
                             is_dark=is_dark,
                             skip_indices=(0,),
+                            show_meters=False,
                         ),
                     )
                 if has_hr_spread:

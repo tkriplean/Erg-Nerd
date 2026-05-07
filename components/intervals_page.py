@@ -580,8 +580,8 @@ def _compute_grid_placement(r: dict) -> tuple[int, int]:
 # fetch-time enrichment (``reps``, ``structure_key``, ``work_pace``,
 # ``work_spm`` — see ``services.workout_enrichment.enrich_for_storage``)
 # or Stage-3 render-time metrics that route through
-# ``services.workout_metrics_cache`` (``_bin_meters``,
-# ``_power_spread_score``, ``_hr_*``, ``_quality*``).  This loop only adds
+# ``services.workout_metrics_cache`` (``_zone_time_fractions``,
+# ``_zone_bin_fractions``, ``_hr_*``, ``_quality*``).  This loop only adds
 # the page-specific grid placement (``_z3``, ``_grid_col``, ``_grid_row``,
 # ``_stimulus``) — derived from already-cached primitives, so no local
 # memoization layer is needed.
@@ -601,10 +601,10 @@ def _enrich_workouts(
 
     Fields attached on top of Stage-2 enrichment:
 
-      _bin_meters, _power_spread_score             (central cache)
+      _zone_time_fractions, _zone_bin_fractions    (central cache)
       _hr_bin_meters, _hr_spread_score             (central cache)
       _quality, _quality_score, _quality_energy    (central cache)
-      _z3       float          Fraction of work meters in Z3 (grid colour)
+      _z3       float          Fraction of work time in Z3 bands (grid colour)
       _grid_col int            Column index in the 2D grid
       _grid_row int            Row index in the 2D grid
       _stimulus str            Short stimulus name for the cell
@@ -624,9 +624,11 @@ def _enrich_workouts(
 
     for r in interval_workouts:
         r = dict(r)  # shallow copy so per-page fields don't leak back to AppContext
-        bm = r["_bin_meters"]
-        work_total = sum(bm[1:])
-        r["_z3"] = sum(bm[i] for i in Z3_BINS) / work_total if work_total else 0.0
+        # Z3 fraction = time argmax-classified to a Z3 band (Sprint /
+        # Anaerobic / VO2max).  Drives the grid colouring.  ``Z3_BINS`` are
+        # the BIN_NAMES indices for those three bands.
+        bf = r.get("_zone_bin_fractions") or [0.0] * 7
+        r["_z3"] = sum(bf[i] for i in Z3_BINS) if any(bf) else 0.0
         col, row = _compute_grid_placement(r)
         r["_grid_col"] = col
         r["_grid_row"] = row
@@ -979,7 +981,6 @@ def intervals_page() -> None:
             "active_key": state.structure_filter,
         },
         "stimulus",
-        "power_spread",
         "hr",
         "quality",
         {"key": "distance", "header": "Work", "width": "6rem"},
@@ -995,7 +996,7 @@ def intervals_page() -> None:
         all_intervals,
         set(spread_quality_state.active_bins),
         power_bin_passes,
-        "_bin_meters",
+        "_zone_bin_fractions",
     )
     pre_filtered = _filter_disjunctive(
         pre_filtered,

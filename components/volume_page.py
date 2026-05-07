@@ -40,14 +40,13 @@ from components.reference_watts_loader import reference_watts_loader
 from components.app_context import AppContext, your
 from services.formatters import fmt_meters
 from services.rowing_utils import profile_complete
-from services.threshold_cache import make_thresholds_resolver
-from services.workout_enrichment import attach_quality_only
+from services.workout_enrichment import attach_quality_only, attach_spread_and_quality
 
 from services.volume_bins import (
     QUALITY_BIN_NAMES,
     aggregate_workouts,
-    workout_bin_meters,
     workout_quality_bin_meters,
+    workout_zone_meters,
 )
 from services.heartrate_utils import (
     resolve_max_hr,
@@ -533,18 +532,22 @@ def _volume_section(
             )
             rows = _quality_period_rows(aggregated, view)
         else:
-            # Time-aware thresholds: each workout is classified against the
-            # rower's fitness at the workout's own date.  Gate on the
-            # reference-watts loader so the first-time index build shows a
-            # progress bar instead of blocking the render.
+            # Power Spread mode: classify each work-second to its argmax
+            # duration band and distribute meters by the time-fractions.
+            # Gate on the reference-watts loader so the first-time index
+            # build shows a progress bar instead of blocking the render.
             if not reference_watts_loader(all_workouts):
                 return
 
-            _thresholds_for, _, _ = make_thresholds_resolver(all_workouts)
+            # Populate ``_zone_time_fractions`` / ``_zone_bin_fractions`` on
+            # each workout via the central metrics cache; subsequent renders
+            # are O(1).  Pass max_hr=None to skip HR-spread computation —
+            # we don't need it for the Power Spread aggregation.
+            attach_spread_and_quality(all_workouts, all_workouts, None)
 
             aggregated = aggregate_workouts(
                 all_workouts,
-                bin_fn=lambda w: workout_bin_meters(w, _thresholds_for(w)),
+                bin_fn=workout_zone_meters,
             )
             chart_config = build_volume_chart_config(
                 aggregated,

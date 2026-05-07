@@ -411,9 +411,13 @@ def _parent_from_session(
         "_drag": drag_avg,
         "_spm": spm_avg,
 
-        # ── Spread placeholders (most-severe main) ───────────────────
-        "_power_spread_score": most_severe.get("_power_spread_score"),
-        "_bin_meters": most_severe.get("_bin_meters"),
+        # ── Zone Spread placeholders (most-severe main) ──────────────
+        # Carry the most-severe-main's zone time fractions and bin-aligned
+        # list onto the parent row so the JS Watts cell can render the
+        # session-row's stacked Zone Spread bar.
+        "_zone_time_fractions": most_severe.get("_zone_time_fractions"),
+        "_zone_saturations": most_severe.get("_zone_saturations"),
+        "_zone_bin_fractions": most_severe.get("_zone_bin_fractions"),
         "_hr_spread_score": most_severe.get("_hr_spread_score"),
         "_hr_bin_meters": most_severe.get("_hr_bin_meters"),
         "heart_rate": most_severe.get("heart_rate"),

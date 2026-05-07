@@ -42,10 +42,7 @@ from services.heartrate_utils import (
     resolve_max_hr,
 )
 from services.reference_watts import get_reference_watts
-from services.volume_bins import (
-    compute_bin_thresholds,
-    power_bin_passes,
-)
+from services.volume_bins import power_bin_passes
 from services.workout_enrichment import attach_ess_metrics, attach_spread_and_quality
 from services.workout_quality import QUALITY_STYLE
 
@@ -553,7 +550,10 @@ def workouts_page() -> None:
         sel = set(spread_quality_filters.active_bins)
         filtered = [
             r for r in filtered
-            if any(power_bin_passes(r.get("_bin_meters") or [], i) for i in sel)
+            if any(
+                power_bin_passes(r.get("_zone_bin_fractions") or [], i)
+                for i in sel
+            )
         ]
     if spread_quality_filters.active_hr_bins:
         sel = set(spread_quality_filters.active_hr_bins)

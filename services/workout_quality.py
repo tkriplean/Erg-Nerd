@@ -36,10 +36,25 @@ from __future__ import annotations
 from typing import Optional
 
 from services.rowing_utils import compute_watts
-from services.volume_bins import BIN_NAMES, classify_watts
+from services.volume_bins import classify_watts
 
 
-# Category → reference-watts cat_key.  Keys map 1:1 to BIN_NAMES[1:].
+# Watts-classification zone names used internally by the Quality metric.
+# Independent of the duration-band ``BIN_NAMES`` exported by
+# :mod:`services.volume_bins` — these track watts-anchored zones (1k/2k/5k/
+# 60min/marathon midpoints) that the Quality computation has always used.
+# Index 0 is Rest (parallel to BIN_NAMES); indices 1–6 are the watts zones.
+_WATTS_BIN_NAMES: tuple[str, ...] = (
+    "Rest",
+    "Fast",
+    "2k",
+    "5k",
+    "Threshold",
+    "Fast Aerobic",
+    "Slow Aerobic",
+)
+
+# Category → reference-watts cat_key.  Keys map 1:1 to ``_WATTS_BIN_NAMES[1:]``.
 QUALITY_REFERENCE_EVENTS: dict[str, tuple] = {
     "Fast": ("dist", 1000),
     "2k": ("dist", 2000),
@@ -148,8 +163,8 @@ def _category_from_bin(bin_idx: int) -> Optional[str]:
 
     Returns None for bin 0 (Rest) or any out-of-range index.
     """
-    if 1 <= bin_idx < len(BIN_NAMES):
-        return BIN_NAMES[bin_idx]
+    if 1 <= bin_idx < len(_WATTS_BIN_NAMES):
+        return _WATTS_BIN_NAMES[bin_idx]
     return None
 
 

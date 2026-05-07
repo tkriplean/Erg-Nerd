@@ -427,6 +427,102 @@ def compute_w_prime_estimate(
 
 
 # ---------------------------------------------------------------------------
+# Single-workout zone summary (Zone Spread)
+# ---------------------------------------------------------------------------
+
+
+def compute_workout_zone_summary(
+    workout: dict,
+    ref_watts_at_duration_fn: Callable,
+) -> Optional[dict]:
+    """Workout-isolated zone time fractions + per-band saturation means.
+
+    Runs a six-band EMA against the workout's per-second power timeline
+    (built from :func:`build_segments`), then bins each work-second to its
+    argmax band over a stride-sampled subset (~600 samples max).  Returns:
+
+        {
+            "zone_time_fractions": {band_seconds: fraction, ...},
+            "zone_saturations":   {band_seconds: mean_zone_ratio, ...},
+        }
+
+    Both dicts have one entry per :data:`ZONE_BANDS_S`; ``zone_time_fractions``
+    sums to 1.0 over work-only seconds (or 0 if the workout has no work
+    seconds).
+
+    Returns ``None`` when the workout cannot be summarised — no segments,
+    zero duration, or missing reference watts at any band.
+
+    The EMAs seed at zero at the workout's start, so this function reports
+    *workout-isolated* signatures (a cooldown after a race shows the cooldown's
+    own profile, not the inherited race state).  Same convention as the
+    per-workout column values in :func:`compute_session_metrics`.
+    """
+    segments = build_segments(workout)
+    if not segments:
+        return None
+
+    duration_s = int(round(_workout_total_duration_s(workout)))
+    if duration_s <= 0:
+        return None
+
+    when = workout.get("date_dt")
+    rw_d: dict[int, float] = {}
+    for d in ZONE_BANDS_S:
+        rw = ref_watts_at_duration_fn(when, d)
+        if rw is None or rw <= 0:
+            return None
+        rw_d[d] = float(rw)
+
+    P_arr = np.zeros(duration_s, dtype=np.float64)
+    kind_arr = np.empty(duration_s, dtype=object)
+    kind_arr[:] = "rest"
+    for seg in segments:
+        s = int(seg["t_offset_s"])
+        e = min(s + int(round(seg["duration_s"])), duration_s)
+        if e > s:
+            P_arr[s:e] = float(seg["watts"])
+            kind_arr[s:e] = seg["kind"]
+
+    n_bands = len(ZONE_BANDS_S)
+    inv_taus = [1.0 / _tau(d) for d in ZONE_BANDS_S]
+    inv_rws = [1.0 / rw_d[d] for d in ZONE_BANDS_S]
+
+    Z = np.empty((n_bands, duration_s), dtype=np.float64)
+    for i in range(n_bands):
+        a = inv_taus[i]
+        Z[i] = lfilter([a], [1.0, a - 1.0], P_arr) * inv_rws[i]
+
+    work_mask = (kind_arr == "work")
+    if not work_mask.any():
+        zeros = {int(d): 0.0 for d in ZONE_BANDS_S}
+        return {"zone_time_fractions": dict(zeros), "zone_saturations": dict(zeros)}
+
+    work_idx = np.where(work_mask)[0]
+    stride = max(1, work_idx.size // 600)
+    sampled_idx = work_idx[::stride]
+    Z_sampled = Z[:, sampled_idx]
+    argmax_per_sample = Z_sampled.argmax(axis=0)
+    counts = np.bincount(argmax_per_sample, minlength=n_bands)
+    total_count = int(counts.sum())
+    fractions_arr = (
+        counts / total_count
+        if total_count
+        else np.zeros(n_bands, dtype=np.float64)
+    )
+    saturations_arr = Z_sampled.mean(axis=1)
+
+    return {
+        "zone_time_fractions": {
+            int(ZONE_BANDS_S[i]): float(fractions_arr[i]) for i in range(n_bands)
+        },
+        "zone_saturations": {
+            int(ZONE_BANDS_S[i]): float(saturations_arr[i]) for i in range(n_bands)
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # C_ESS calibration
 # ---------------------------------------------------------------------------
 
@@ -600,13 +696,44 @@ def _attach_per_workout_records(
             I_w_arr = np.zeros(0, dtype=np.float64)
 
         # Workout intensity: mean over work-only seconds in this window.
+        # Per-band zone summary (Zone Spread): argmax-band tally and mean
+        # per-band saturation, sampled on a coarse stride (~600 samples max
+        # per workout regardless of length).  EMA values are 1-Hz for τ
+        # correctness; argmax/mean don't need 1-Hz sample density and the
+        # stride drops the tally cost ~10–20× on long sessions.
         if I_w_arr.size:
             work_w_mask = (kind_w == "work")
             intensity_w = (
                 float(I_w_arr[work_w_mask].mean()) if work_w_mask.any() else 0.0
             )
+            if work_w_mask.any():
+                work_idx = np.where(work_w_mask)[0]
+                stride = max(1, work_idx.size // 600)
+                sampled_work_idx = work_idx[::stride]
+                Z_sampled = Z_w[:, sampled_work_idx]
+                argmax_per_sample = Z_sampled.argmax(axis=0)
+                counts = np.bincount(argmax_per_sample, minlength=n_bands)
+                total_count = int(counts.sum())
+                fractions_arr = (
+                    counts / total_count
+                    if total_count
+                    else np.zeros(n_bands, dtype=np.float64)
+                )
+                saturations_arr = Z_sampled.mean(axis=1)
+            else:
+                fractions_arr = np.zeros(n_bands, dtype=np.float64)
+                saturations_arr = np.zeros(n_bands, dtype=np.float64)
         else:
             intensity_w = 0.0
+            fractions_arr = np.zeros(n_bands, dtype=np.float64)
+            saturations_arr = np.zeros(n_bands, dtype=np.float64)
+
+        zone_time_fractions = {
+            int(ZONE_BANDS_S[i]): float(fractions_arr[i]) for i in range(n_bands)
+        }
+        zone_saturations = {
+            int(ZONE_BANDS_S[i]): float(saturations_arr[i]) for i in range(n_bands)
+        }
 
         slc = I_w_arr if I_w_arr.size else np.zeros(1, dtype=np.float64)
         pk5 = _peak_rolling_mean(slc, 300)
@@ -647,6 +774,8 @@ def _attach_per_workout_records(
                 "severity_score": sev_w,
                 "severity_bucket": severity_bucket(sev_w) or "Low",
                 "anaerobic_strain": strain_w,
+                "zone_time_fractions": zone_time_fractions,
+                "zone_saturations": zone_saturations,
             }
         )
     return per_workout_records

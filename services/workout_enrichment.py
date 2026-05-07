@@ -30,19 +30,24 @@ Interval-only fields (when ``is_interval``):
 **Stage 3 (render-time)** — ``attach_spread_and_quality`` / ``attach_quality_only``
 mutate each workout dict in-place to attach the heavier metrics:
 
-  _bin_meters         list[float]    Per-power-bin meter counts (idx 0 = Rest)
-  _power_spread_score float | None   0–100 weighted power spread
+  _zone_time_fractions dict | None   Argmax-band time fractions per duration
+                                     band (sums to 1.0 over the six bands).
+                                     Drives the Zone Spread bar inside the
+                                     Watts cell + the filter chips.
+  _zone_saturations    dict | None   Mean ``zone_ratio_d(t)`` per band over
+                                     work-only seconds.  Diagnostic / tooltip.
   _hr_bin_meters      list | None    Per-HR-bin meter counts when max_hr known
   _hr_spread_score    float | None   0–100 weighted HR spread
   _quality            str | None     "Low"/"Medium"/"High"/"Ultra"
   _quality_score      float | None   Continuous quality score
   _quality_energy     dict | None    Per-category energy breakdown
 
-The stacked spread bar that visualises ``_bin_meters`` / ``_hr_bin_meters``
-is built on demand by the JS plugins (see ``_buildSpreadBar`` in
-``components/chart_assets/workout_table_plugin.js`` and the matching helper
-in ``lazy_tooltip_plugin.js``) — Python ships only the bin-meters and the
-theme-resolved zone colours, never a base64 SVG data URI.
+The stacked spread bar that visualises ``_zone_time_fractions`` /
+``_hr_bin_meters`` is built on demand by the JS plugins (see
+``_buildSpreadBar`` in ``components/chart_assets/workout_table_plugin.js`` and
+the matching helper in ``lazy_tooltip_plugin.js``) — Python ships only the
+per-band fractions and the theme-resolved zone colours, never a base64 SVG
+data URI.
 
 ``attach_ess_metrics`` is an additional Stage-3 attachment that fills the
 Erg Stress Score family of fields (workout-level, session-aware).  The v2
@@ -101,10 +106,7 @@ from services.rowing_utils import (
     workout_cat_key,
 )
 from services.threshold_cache import make_thresholds_resolver
-from services.volume_bins import (
-    power_spread_score,
-    workout_bin_meters,
-)
+from services.volume_bins import zone_fractions_to_bin_list
 from services.workout_metrics_cache import get_or_compute
 
 
@@ -122,6 +124,7 @@ from services.critical_power_model import fit_critical_power
 from services.erg_stress import (
     compute_session_metrics,
     compute_w_prime_estimate,
+    compute_workout_zone_summary,
 )
 from services.reference_watts import _interp_watts_at_duration
 
@@ -273,17 +276,27 @@ def attach_spread_and_quality(
     )
 
     h = input_hash(all_workouts)
+    rw_at_duration = _ref_watts_at_duration_fn(ref_watts_for)
 
     for r in workouts:
         wid = r["id"]
 
-        bm = get_or_compute(
-            "_bin_meters", wid, h, lambda r=r: workout_bin_meters(r, thresholds_for(r))
+        zsum = get_or_compute(
+            "zone_summary_v1",
+            wid,
+            h,
+            lambda r=r: compute_workout_zone_summary(r, rw_at_duration),
         )
-        r["_bin_meters"] = bm
-        r["_power_spread_score"] = get_or_compute(
-            "power_spread_score", wid, h, lambda bm=bm: power_spread_score(bm)
-        )
+        if zsum:
+            r["_zone_time_fractions"] = zsum["zone_time_fractions"]
+            r["_zone_saturations"] = zsum["zone_saturations"]
+            r["_zone_bin_fractions"] = zone_fractions_to_bin_list(
+                zsum["zone_time_fractions"]
+            )
+        else:
+            r["_zone_time_fractions"] = None
+            r["_zone_saturations"] = None
+            r["_zone_bin_fractions"] = None
 
         if max_hr:
             hrm = get_or_compute(
@@ -425,6 +438,9 @@ def _assign_ess(r: dict, sm: Optional[dict], wid) -> None:
             "_ess_session_summary",
         ):
             r[k] = None
+        # Don't blank out zone fields here — attach_spread_and_quality may
+        # have already populated them via the standalone single-workout
+        # path.  Only overwrite when we have a fresh per-workout record.
         return
 
     # Find this workout's per-workout slice
@@ -442,6 +458,15 @@ def _assign_ess(r: dict, sm: Optional[dict], wid) -> None:
     r["_severity"] = pw["severity_bucket"] if pw else None
     r["_severity_score"] = pw["severity_score"] if pw else None
     r["_anaerobic_strain"] = pw["anaerobic_strain"] if pw else None
+    # Zone Spread fields — overwrite anything attach_spread_and_quality
+    # produced.  Same workout-isolated EMA shape, just sharing the loop
+    # that the session pass already runs.
+    if pw and pw.get("zone_time_fractions"):
+        r["_zone_time_fractions"] = pw["zone_time_fractions"]
+        r["_zone_saturations"] = pw["zone_saturations"]
+        r["_zone_bin_fractions"] = zone_fractions_to_bin_list(
+            pw["zone_time_fractions"]
+        )
     # Session-level values for the Workout Page summary / rollup widget.
     r["_ess_session"] = sm.get("ess")
     r["_if_eff_session"] = sm.get("intensity_session")

@@ -44,14 +44,16 @@ from services.workout_quality import (
 from components.workout_table import always_white
 
 
-# Power Spread reference events for the scale tooltip — one per bin index 1–6.
+# Zone Spread duration anchors for the scale tooltip — one per bin index 1–6.
+# Each label is the EMA time-constant of the corresponding band; the chip
+# colour matches the existing six-zone palette in BIN_COLORS.
 _POWER_SCALE_ANCHORS: list[tuple[str | None, tuple | None]] = [
-    ("1k", ("dist", 1000)),  # Fast
-    ("2k", ("dist", 2000)),  # 2k
-    ("5k", ("dist", 5000)),  # 5k
-    ("60'", ("time", 36000)),  # Threshold
-    ("Mara", ("dist", 42195)),  # Fast Aerobic
-    (None, None),  # Slow Aerobic — no anchor
+    ("20s", None),  # Sprint
+    ("1:30", None),  # Anaerobic
+    ("5:00", None),  # VO2max
+    ("20:00", None),  # Threshold
+    ("60:00", None),  # Tempo
+    ("2h", None),  # Endurance
 ]
 
 
@@ -68,11 +70,11 @@ def _parse_rgba(rgba_str: str) -> tuple:
 def _power_scale_tooltip_content(tt, is_dark: bool) -> None:
     """Graphical zone-scale explainer rendered into a tooltip's content slot."""
     with hd.box(slot=tt.content_slot, padding=0.5, gap=0.4, min_width=32):
-        hd.text("Power Spread zones", font_size="small", font_weight="bold")
+        hd.text("Zone Spread bands", font_size="small", font_weight="bold")
         hd.text(
-            "Each band is one zone; the label below names the PR event that "
-            "sits inside it. Boundaries are midpoints between adjacent "
-            "reference watts.",
+            "Each band is the EMA of power with a different time constant. "
+            "Each second of work is classified to whichever band is most "
+            "saturated at that moment; the bar shows the resulting time mix.",
             font_size="x-small",
             font_color="neutral-500",
         )
@@ -93,10 +95,10 @@ def _power_scale_tooltip_content(tt, is_dark: bool) -> None:
                             font_weight="semibold",
                             font_color="neutral-700",
                         )
-                        evt_name, evt_key = _POWER_SCALE_ANCHORS[i - 1]
+                        evt_name, _evt_key = _POWER_SCALE_ANCHORS[i - 1]
                         if evt_name is None:
                             hd.text(
-                                "below",
+                                "—",
                                 font_size="x-small",
                                 font_color="neutral-400",
                                 font_style="italic",
