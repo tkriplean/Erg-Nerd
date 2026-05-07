@@ -158,6 +158,13 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
         format="work_duration",
         align="center",
     ),
+    "distance_combined": ColumnDef(
+        "distance_combined",
+        "Distance",
+        "7rem",
+        renderer="combined_distance",
+        align="center",
+    ),
     "work_distance": ColumnDef(
         "work_distance",
         "Work Distance",
@@ -197,7 +204,7 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
     "power_spread": ColumnDef(
         "power_spread", "Power Spread", "8rem", renderer="power_spread"
     ),
-    "hr": ColumnDef("hr", "HR Spread", "8rem", renderer="hr_spread"),
+    "hr": ColumnDef("hr", "HR", "8rem", renderer="hr_spread"),
     "quality": ColumnDef("quality", "Quality", "6rem", renderer="quality"),
     # ── ESS family (services/erg_stress.py) ─────────────────────────────
     "ess": ColumnDef("ess", "ESS", "5rem", format="ess"),

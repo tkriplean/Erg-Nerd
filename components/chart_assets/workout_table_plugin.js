@@ -114,7 +114,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     }
     .row-cell.is-child .tree-date-text { padding-left: 1.4rem; }
     .tree-date .date-main {
-      font-size: var(--sl-font-size-small);
+      font-size: var(--sl-font-size-medium);
       font-family: var(--sl-font-mono, ui-monospace, monospace);
     }
 
@@ -130,6 +130,11 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       font-family: var(--sl-font-mono, ui-monospace, monospace);
       color: var(--sl-color-neutral-500);
       font-size: var(--sl-font-size-x-small);
+    }
+
+    .cell .lines .distance-sub {
+      font-size: var(--sl-font-size-x-small);
+      color: var(--sl-color-neutral-500);    
     }
 
     /* Role labels on child rows (warmup/main/recovery/cooldown).  Main
@@ -173,7 +178,6 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     }
     .gap-text {
       font-size: var(--sl-font-size-x-small);
-      font-style: italic;
       color: var(--sl-color-neutral-500);
     }
 
@@ -383,7 +387,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
     if (!m) return s.slice(0, 10);
     const yy = m[1].slice(2);
-    return `${+m[2]}/${+m[3]}/${yy}`;
+    return `${m[2]}/${m[3]}/${yy}`;
   }
   function capitalize(s) {
     return s ? s[0].toUpperCase() + s.slice(1) : "";
@@ -462,14 +466,6 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
                                 ? r._work_duration_s
                                 : (r.time || 0) / 10),
     work_distance:     (r) => {
-                          if (r._row_kind === "session") {
-                            return fmtDistance(r._work_distance_m);
-                          }
-                          // Tree-mode child: warmup/cooldown/recovery
-                          // workouts contribute their distance to Other,
-                          // not Work — even if they're themselves
-                          // intervals.  The parent already accounts for
-                          // this in its rollup.
                           if (_isNonMainRole(r._role)) return "—";
                           return fmtDistance(r.distance || 0);
                        },
@@ -673,7 +669,41 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       wrap.appendChild(textWrap);
       return wrap;
     },
+    combined_distance(r) {
+      // if (r._row_kind === "session") {
+      //   return text(fmtDistance(r._work_distance_m));
+      // }
+      // Tree-mode child: warmup/cooldown/recovery
+      // workouts contribute their distance to Other,
+      // not Work — even if they're themselves
+      // intervals.  The parent already accounts for
+      // this in its rollup.
 
+      //if (_isNonMainRole(r._role)) return "—";
+      if (r._row_kind === "session") {
+        wd = r._work_distance_m
+        rd = r._other_distance_m
+      } else {
+        wd = _isNonMainRole(r._role) ? 0 : r.distance
+        rd = (r.rest_distance || 0) + (_isNonMainRole(r._role) ? r.distance : 0)
+      }
+
+      if (wd > 0)
+        wd = fmtDistance(wd)
+      else
+        wd = ""
+      if (rd > 0)
+        rd = fmtDistance(rd)
+      else
+        rd = ""
+
+      wrap = el("div", { class: "lines" }, [
+        el("div", null, wd), 
+        el("div", {class: "distance-sub"}, rd)
+      ]);
+
+      return wrap;
+    },
     time_of_day(r) {
       // Parent (session) row: colloquial period above total session duration.
       if (r._row_kind === "session") {
@@ -701,7 +731,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       // for a gap row is empty (cells still exist so the grid lines up).
       if (col.key !== "main_work") return null;
       return el("span", { class: "gap-text" },
-        `${fmtDurationReadable(r._gap_seconds, false)} recovery`);
+        `${fmtDurationReadable(r._gap_seconds, false)} gap`);
     },
 
     main_work_lines(r) {
