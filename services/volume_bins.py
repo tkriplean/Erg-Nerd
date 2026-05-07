@@ -30,7 +30,6 @@ Exported:
     workout_bin_meters()        — per-bin meter counts for a single workout
     workout_power_spread()      — single-workout score using date-appropriate
                                   thresholds (for the workouts-page hook)
-    bin_bar_svg()               — data-URI SVG stacked bar from bin meters
     swatch_svg()                — data-URI SVG color swatch for legends
     aggregate_workouts()        — group all workouts by week / month / season × bin
 """
@@ -390,59 +389,6 @@ def workout_quality_bin_meters(
         bins[idx] += work_m
 
     return bins
-
-
-def bin_bar_svg(
-    _bin_meters: list,
-    width: int = 160,
-    height: int = 8,
-    is_dark: bool = False,
-    colors: Optional[list] = None,
-) -> str:
-    """
-    Return a ``data:image/svg+xml;base64,…`` URI for a stacked horizontal
-    bar showing work-meter fraction in each zone (bin 0 / Rest excluded).
-
-    Colors default to ``BIN_COLORS`` (power zones).  HR-spread bars must pass
-    ``HR_ZONE_COLORS`` so the rendered bar matches the legend swatches and the
-    tooltip — otherwise the two surfaces disagree on what colour each zone is.
-    Segments smaller than 2 % of work total are omitted to avoid hairlines.
-    """
-    palette = colors if colors is not None else BIN_COLORS
-    work = _bin_meters[1:]  # bins 1-6 only (skip Rest)
-    total = sum(work)
-
-    x = 0
-    rects: list[str] = []
-    if total > 0:
-        for i, m in enumerate(work):
-            if m <= 0:
-                continue
-            f = m / total
-            if f < 0.02:
-                continue
-            w = round(f * width)
-            if w <= 0:
-                continue
-            color = palette[i + 1][0 if is_dark else 1]
-            rects.append(
-                f'<rect x="{x}" y="0" width="{w}" height="{height}"'
-                f' fill="{color}"/>'
-            )
-            x += w
-
-    if not rects:
-        rects = [
-            f'<rect x="0" y="0" width="{width}" height="{height}" fill="#d1d5db"/>'
-        ]
-
-    svg = (
-        f'<svg xmlns="http://www.w3.org/2000/svg"'
-        f' viewBox="0 0 {width} {height}"'
-        f' width="{width}" height="{height}">' + "".join(rects) + "</svg>"
-    )
-    encoded = base64.b64encode(svg.encode("utf-8")).decode("ascii")
-    return f"data:image/svg+xml;base64,{encoded}"
 
 
 def swatch_svg(color: str, size: int = 12, radius: int = 2) -> str:

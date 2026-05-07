@@ -5,8 +5,8 @@ Pure-Python utilities for interval workout parsing, description, and pace
 computation.
 
 No HyperDiv dependency — safe to import anywhere.
-Energy-system classification and breakdown-bar generation are handled by
-services/volume_bins.py (workout_bin_meters, bin_bar_svg, Z1/Z2/Z3_BINS).
+Energy-system classification is handled by services/volume_bins.py
+(workout_bin_meters, Z1/Z2/Z3_BINS).
 
 Exported:
   fmt_tenths(tenths)                → "M:SS" string

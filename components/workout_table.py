@@ -288,7 +288,6 @@ def _rgba_css(rgba: tuple) -> str:
 @hd.cached
 def render_spread_cell(
     score: float | None,
-    bar_uri: str | None,
     _bin_meters: tuple | None,
     zone_names: tuple[str],
     zone_colors: tuple[tuple[str, str]],
@@ -299,7 +298,9 @@ def render_spread_cell(
     """
     Score + zone-bar + per-zone breakdown tooltip.  Used by workout_page's
     summary cards (the in-table version is rendered natively by the JS
-    plugin).
+    plugin).  The stacked zone-bar is built in the LazyTooltip JS plugin
+    from ``_bin_meters`` + ``bar_colors`` — the SVG is no longer round-
+    tripped through Python as a base64 data URI.
     """
     from components.lazy_tooltip_plugin import LazyTooltip
 
@@ -310,6 +311,7 @@ def render_spread_cell(
     skip_set = set(skip_indices)
     total = sum(m for idx, m in enumerate(_bin_meters) if idx not in skip_set)
     items = []
+
     for idx in range(len(zone_names)):
         if idx in skip_set:
             continue
@@ -319,6 +321,7 @@ def render_spread_cell(
         pct = (meters / total) if total > 0 else 0.0
         if pct < 0.005:
             continue
+
         color_str = zone_colors[idx][0 if is_dark else 1]
         items.append(
             {
@@ -333,7 +336,8 @@ def render_spread_cell(
         config={
             "kind": "spread",
             "score": f"{score:.0f}",
-            "bar_uri": bar_uri,
+            "bin_meters": list(_bin_meters),
+            "bar_colors": _theme_bar_colors(zone_colors, is_dark),
             "bar_w": _SPREAD_BAR_WIDTH,
             "bar_h": _SPREAD_BAR_HEIGHT,
             "items": items,
@@ -430,21 +434,32 @@ def _theme_swatches(zone_colors, is_dark: bool) -> list[str]:
     ]
 
 
+def _theme_bar_colors(zone_colors, is_dark: bool) -> list[str]:
+    """Resolve a zone-color table to a flat list of CSS color strings for the
+    active theme.  The JS plugin builds the stacked spread bar inline from
+    these (see ``_buildSpreadBar`` in workout_table_plugin.js)."""
+    return [pair[0 if is_dark else 1] for pair in zone_colors]
+
+
 def _enrich_opts(key: str, opts: dict) -> dict:
     """Add theme-dependent or constant resources to a column's opts."""
     if key == "power_spread":
+        is_dark = hd.theme().is_dark
         return {
             **opts,
-            "swatch_uris": _theme_swatches(BIN_COLORS, hd.theme().is_dark),
+            "swatch_uris": _theme_swatches(BIN_COLORS, is_dark),
+            "bar_colors": _theme_bar_colors(BIN_COLORS, is_dark),
             "zone_names": list(BIN_NAMES),
             "skip_indices": [0],
             "bar_w": _SPREAD_BAR_WIDTH,
             "bar_h": _SPREAD_BAR_HEIGHT,
         }
     if key == "hr":
+        is_dark = hd.theme().is_dark
         return {
             **opts,
-            "swatch_uris": _theme_swatches(HR_ZONE_COLORS, hd.theme().is_dark),
+            "swatch_uris": _theme_swatches(HR_ZONE_COLORS, is_dark),
+            "bar_colors": _theme_bar_colors(HR_ZONE_COLORS, is_dark),
             "zone_names": list(HR_ZONE_NAMES),
             "skip_indices": [0, 6],
             "bar_w": _SPREAD_BAR_WIDTH,

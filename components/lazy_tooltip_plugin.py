@@ -20,7 +20,8 @@ Config shapes (passed as the `config` prop):
 
     {"kind": "spread",
      "score": "120",                       # already formatted
-     "bar_uri": "data:image/svg+xml;…",    # may be None
+     "bin_meters": [0, 1200, 800, …],      # raw work-meter counts per zone
+     "bar_colors": ["rgba(…)", …],         # theme-resolved zone colours
      "bar_w": 5.0, "bar_h": 0.5,           # rem
      "items": [{"swatch_uri": "…", "pct_text": "42%"}, …]}
 

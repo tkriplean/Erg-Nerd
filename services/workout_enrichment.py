@@ -31,14 +31,18 @@ Interval-only fields (when ``is_interval``):
 mutate each workout dict in-place to attach the heavier metrics:
 
   _bin_meters         list[float]    Per-power-bin meter counts (idx 0 = Rest)
-  _bar_uri            str            Data-URI SVG stacked power-zone bar
   _power_spread_score float | None   0–100 weighted power spread
   _hr_bin_meters      list | None    Per-HR-bin meter counts when max_hr known
-  _hr_bar_uri         str | None     Data-URI SVG stacked HR-zone bar
   _hr_spread_score    float | None   0–100 weighted HR spread
   _quality            str | None     "Low"/"Medium"/"High"/"Ultra"
   _quality_score      float | None   Continuous quality score
   _quality_energy     dict | None    Per-category energy breakdown
+
+The stacked spread bar that visualises ``_bin_meters`` / ``_hr_bin_meters``
+is built on demand by the JS plugins (see ``_buildSpreadBar`` in
+``components/chart_assets/workout_table_plugin.js`` and the matching helper
+in ``lazy_tooltip_plugin.js``) — Python ships only the bin-meters and the
+theme-resolved zone colours, never a base64 SVG data URI.
 
 ``attach_ess_metrics`` is an additional Stage-3 attachment that fills the
 Erg Stress Score family of fields (workout-level, session-aware).  The v2
@@ -98,7 +102,6 @@ from services.rowing_utils import (
 )
 from services.threshold_cache import make_thresholds_resolver
 from services.volume_bins import (
-    bin_bar_svg,
     power_spread_score,
     workout_bin_meters,
 )
@@ -242,20 +245,6 @@ def _assign_quality(r: dict, quality: Optional[dict]) -> None:
         r["_quality_energy"] = None
 
 
-def _hr_bar(hrm: list) -> str:
-    """Render the HR bar using classified meters only (bins 0–5); drop
-    bin 6 so 'no HR' doesn't dilute the colour signal.  ``bin_bar_svg``
-    takes a 7-element list and skips index 0 internally, so we pad with a
-    zero in the 'No HR' slot.  Pass ``HR_ZONE_COLORS`` so the bar uses the
-    HR palette rather than the default power-zone palette — without this the
-    cell bar's colours disagreed with the legend swatches and the tooltip."""
-    from services.heartrate_utils import HR_ZONE_COLORS
-
-    hr_for_bar = list(hrm)
-    hr_for_bar[6] = 0
-    return bin_bar_svg(hr_for_bar, colors=list(HR_ZONE_COLORS))
-
-
 def attach_spread_and_quality(
     workouts: list,
     all_workouts: list,
@@ -292,7 +281,6 @@ def attach_spread_and_quality(
             "_bin_meters", wid, h, lambda r=r: workout_bin_meters(r, thresholds_for(r))
         )
         r["_bin_meters"] = bm
-        r["_bar_uri"] = get_or_compute("bar_uri", wid, h, lambda bm=bm: bin_bar_svg(bm))
         r["_power_spread_score"] = get_or_compute(
             "power_spread_score", wid, h, lambda bm=bm: power_spread_score(bm)
         )
@@ -306,13 +294,6 @@ def attach_spread_and_quality(
                 max_hr=max_hr,
             )
             r["_hr_bin_meters"] = hrm
-            r["_hr_bar_uri"] = get_or_compute(
-                "hr_bar_uri",
-                wid,
-                h,
-                lambda hrm=hrm: _hr_bar(hrm),
-                max_hr=max_hr,
-            )
             r["_hr_spread_score"] = get_or_compute(
                 "hr_spread_score",
                 wid,
@@ -322,7 +303,6 @@ def attach_spread_and_quality(
             )
         else:
             r["_hr_bin_meters"] = None
-            r["_hr_bar_uri"] = None
             r["_hr_spread_score"] = None
 
         _assign_quality(

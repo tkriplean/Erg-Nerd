@@ -252,7 +252,6 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
                         "Power Spread",
                         lambda: render_spread_cell(
                             score=workout.get("_power_spread_score"),
-                            bar_uri=workout.get("_bar_uri"),
                             _bin_meters=workout.get("_bin_meters"),
                             zone_names=BIN_NAMES,
                             zone_colors=BIN_COLORS,
@@ -265,7 +264,6 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
                         "HR Spread",
                         lambda: render_spread_cell(
                             score=workout.get("_hr_spread_score"),
-                            bar_uri=workout.get("_hr_bar_uri"),
                             _bin_meters=workout.get("_hr_bin_meters"),
                             zone_names=HR_ZONE_NAMES,
                             zone_colors=HR_ZONE_COLORS,

@@ -799,14 +799,14 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       const score = r._power_spread_score;
       const bins = r._bin_meters;
       if (score == null || bins == null) return emDash();
-      return _spreadCell(score, r._bar_uri, bins, col);
+      return _spreadCell(score, bins, col);
     },
 
     hr_spread(r, col) {
       const hr = (r.heart_rate && r.heart_rate.average) || null
       const bins = r._hr_bin_meters;
       if (hr == null || bins == null) return emDash();
-      return _spreadCell(hr, r._hr_bar_uri, bins, col);
+      return _spreadCell(hr, bins, col);
     },
 
     quality(r, col) {
@@ -877,18 +877,78 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     },
   };
 
-  // ── Spread cell (score + bar img + lazy tooltip with zone breakdown) ─────
-  function _spreadCell(score, barUri, binMeters, col) {
+  // ── Stacked-bar builder (work-meter fraction per zone, bin 0 = Rest skipped) ──
+  // Skips bin 0, drops segments smaller than 2 % of work total, and falls
+  // back to a single grey rect when no work is logged.  Inline SVG instead
+  // of an `<img src=data-uri>` so the bar doesn't have to round-trip through
+  // Python on every render.
+  function _buildSpreadBar(binMeters, colors, widthRem, heightRem) {
+    if (!binMeters) return null;
+    const SVG_NS = "http://www.w3.org/2000/svg";
+    const W = 160;
+    const H = 8;
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("xmlns", SVG_NS);
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    // preserveAspectRatio="none" stretches the rects to fill the CSS box
+    // exactly — same effect the original `<img src=data:…>` bar got from
+    // the <img> element's box.  Without it the default `xMidYMid meet`
+    // letterboxes the 20:1 viewBox inside the 10:1 CSS box and the bar
+    // collapses to a hairline.
+    svg.setAttribute("preserveAspectRatio", "none");
+    svg.setAttribute("class", "bar");
+    svg.style.width = widthRem + "rem";
+    svg.style.height = heightRem + "rem";
+    svg.style.display = "block";
+
+    let total = 0;
+    for (let i = 1; i < binMeters.length; i++) {
+      const m = binMeters[i];
+      if (m > 0) total += m;
+    }
+
+    let x = 0;
+    let drew = false;
+    if (total > 0) {
+      for (let i = 1; i < binMeters.length; i++) {
+        const m = binMeters[i];
+        if (m <= 0) continue;
+        const f = m / total;
+        if (f < 0.02) continue;
+        const w = Math.round(f * W);
+        if (w <= 0) continue;
+        const rect = document.createElementNS(SVG_NS, "rect");
+        rect.setAttribute("x", x);
+        rect.setAttribute("y", 0);
+        rect.setAttribute("width", w);
+        rect.setAttribute("height", H);
+        rect.setAttribute("fill", colors[i] || "#d1d5db");
+        svg.appendChild(rect);
+        x += w;
+        drew = true;
+      }
+    }
+    if (!drew) {
+      const rect = document.createElementNS(SVG_NS, "rect");
+      rect.setAttribute("x", 0);
+      rect.setAttribute("y", 0);
+      rect.setAttribute("width", W);
+      rect.setAttribute("height", H);
+      rect.setAttribute("fill", "#d1d5db");
+      svg.appendChild(rect);
+    }
+    return svg;
+  }
+
+  // ── Spread cell (score + bar + lazy tooltip with zone breakdown) ─────
+  function _spreadCell(score, binMeters, col) {
     const opts = col.opts || {};
     const trigger = el("div", { class: "spread" });
     const scoreEl = el("div", { class: "score" }, score.toFixed(0));
     trigger.appendChild(scoreEl);
-    if (barUri) {
-      const img = el("img", { class: "bar", src: barUri });
-      img.style.width = (opts.bar_w || 5) + "rem";
-      img.style.height = (opts.bar_h || 0.5) + "rem";
-      trigger.appendChild(img);
-    }
+    const bar = _buildSpreadBar(
+      binMeters, opts.bar_colors || [], opts.bar_w || 5, opts.bar_h || 0.5);
+    if (bar) trigger.appendChild(bar);
 
     const skip = new Set(opts.skip_indices || [0]);
     const swatches = opts.swatch_uris || [];

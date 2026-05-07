@@ -81,6 +81,69 @@ window.hyperdiv.registerPlugin("LazyTooltip", (ctx) => {
   let slTooltip = null;
   let armed = false;
 
+  // Stacked-bar builder — same shape as workout_table_plugin's
+  // _buildSpreadBar.  Skips bin 0 (Rest), drops segments smaller than 2 % of
+  // work total, falls back to a grey rect when no work is logged.  Inline
+  // SVG so we don't have to ship a base64 data URI through Python on every
+  // render.
+  function buildSpreadBar(binMeters, colors, widthRem, heightRem) {
+    if (!binMeters) return null;
+    const SVG_NS = "http://www.w3.org/2000/svg";
+    const W = 160;
+    const H = 8;
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("xmlns", SVG_NS);
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    // preserveAspectRatio="none" matches what the original `<img src=data:…>`
+    // bar did via the <img> box: stretch the rects to fill the CSS dimensions
+    // exactly.  Without it the default `xMidYMid meet` would letterbox the
+    // 20:1 viewBox inside a 10:1 (5rem × 0.5rem) CSS box and clip visible
+    // bar height to a hairline.
+    svg.setAttribute("preserveAspectRatio", "none");
+    svg.setAttribute("class", "bar");
+    svg.style.width = widthRem + "rem";
+    svg.style.height = heightRem + "rem";
+    svg.style.display = "block";
+
+    let total = 0;
+    for (let i = 1; i < binMeters.length; i++) {
+      const m = binMeters[i];
+      if (m > 0) total += m;
+    }
+
+    let x = 0;
+    let drew = false;
+    if (total > 0) {
+      for (let i = 1; i < binMeters.length; i++) {
+        const m = binMeters[i];
+        if (m <= 0) continue;
+        const f = m / total;
+        if (f < 0.02) continue;
+        const w = Math.round(f * W);
+        if (w <= 0) continue;
+        const rect = document.createElementNS(SVG_NS, "rect");
+        rect.setAttribute("x", x);
+        rect.setAttribute("y", 0);
+        rect.setAttribute("width", w);
+        rect.setAttribute("height", H);
+        rect.setAttribute("fill", (colors && colors[i]) || "#d1d5db");
+        svg.appendChild(rect);
+        x += w;
+        drew = true;
+      }
+    }
+    if (!drew) {
+      const rect = document.createElementNS(SVG_NS, "rect");
+      rect.setAttribute("x", 0);
+      rect.setAttribute("y", 0);
+      rect.setAttribute("width", W);
+      rect.setAttribute("height", H);
+      rect.setAttribute("fill", "#d1d5db");
+      svg.appendChild(rect);
+    }
+    return svg;
+  }
+
   function buildTrigger(cfg) {
     const el = document.createElement("div");
     el.className = "trigger";
@@ -90,14 +153,9 @@ window.hyperdiv.registerPlugin("LazyTooltip", (ctx) => {
       score.className = "score";
       score.textContent = cfg.score;
       el.appendChild(score);
-      if (cfg.bar_uri) {
-        const bar = document.createElement("img");
-        bar.className = "bar";
-        bar.src = cfg.bar_uri;
-        bar.style.width = (cfg.bar_w || 5) + "rem";
-        bar.style.height = (cfg.bar_h || 0.5) + "rem";
-        el.appendChild(bar);
-      }
+      const bar = buildSpreadBar(
+        cfg.bin_meters, cfg.bar_colors, cfg.bar_w || 5, cfg.bar_h || 0.5);
+      if (bar) el.appendChild(bar);
     } else if (cfg.kind === "quality") {
       const pill = document.createElement("div");
       pill.className = "pill";

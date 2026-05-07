@@ -414,10 +414,8 @@ def _parent_from_session(
         # ── Spread placeholders (most-severe main) ───────────────────
         "_power_spread_score": most_severe.get("_power_spread_score"),
         "_bin_meters": most_severe.get("_bin_meters"),
-        "_bar_uri": most_severe.get("_bar_uri"),
         "_hr_spread_score": most_severe.get("_hr_spread_score"),
         "_hr_bin_meters": most_severe.get("_hr_bin_meters"),
-        "_hr_bar_uri": most_severe.get("_hr_bar_uri"),
         "heart_rate": most_severe.get("heart_rate"),
 
         # ── Session severity / ESS / strain — from _ess_session_summary

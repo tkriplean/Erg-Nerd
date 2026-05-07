@@ -580,7 +580,7 @@ def _compute_grid_placement(r: dict) -> tuple[int, int]:
 # fetch-time enrichment (``reps``, ``structure_key``, ``work_pace``,
 # ``work_spm`` — see ``services.workout_enrichment.enrich_for_storage``)
 # or Stage-3 render-time metrics that route through
-# ``services.workout_metrics_cache`` (``_bin_meters``, ``_bar_uri``,
+# ``services.workout_metrics_cache`` (``_bin_meters``,
 # ``_power_spread_score``, ``_hr_*``, ``_quality*``).  This loop only adds
 # the page-specific grid placement (``_z3``, ``_grid_col``, ``_grid_row``,
 # ``_stimulus``) — derived from already-cached primitives, so no local
@@ -601,8 +601,8 @@ def _enrich_workouts(
 
     Fields attached on top of Stage-2 enrichment:
 
-      _bin_meters, _bar_uri, _power_spread_score   (central cache)
-      _hr_bin_meters, _hr_bar_uri, _hr_spread_score (central cache)
+      _bin_meters, _power_spread_score             (central cache)
+      _hr_bin_meters, _hr_spread_score             (central cache)
       _quality, _quality_score, _quality_energy    (central cache)
       _z3       float          Fraction of work meters in Z3 (grid colour)
       _grid_col int            Column index in the 2D grid

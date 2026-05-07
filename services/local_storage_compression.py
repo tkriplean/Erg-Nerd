@@ -79,10 +79,9 @@ def _compress_one_workout(w: dict) -> dict:
     for k, v in w.items():
         if k in _WORKOUT_PERM_DROP:
             continue
-        # Stage-3 render-time fields (``_bin_meters``, ``_bar_uri``,
-        # ``_quality``, …) are attached by services.workout_enrichment when
-        # a page renders.  They are derived from cached metrics and must
-        # never be persisted.
+        # Stage-3 render-time fields (``_bin_meters``, ``_quality``, …) are
+        # attached by services.workout_enrichment when a page renders.  They
+        # are derived from cached metrics and must never be persisted.
         if isinstance(k, str) and k.startswith("_"):
             continue
         if k in _WORKOUT_DEFAULTS and v == _WORKOUT_DEFAULTS[k]:
