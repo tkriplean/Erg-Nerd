@@ -426,6 +426,13 @@ def _parent_from_session(
         "_severity_score": summary.get("severity_score"),
         "_ess": summary.get("ess"),
         "_anaerobic_strain": summary.get("anaerobic_strain"),
+        # Glycogen Used integrated over the entire session timeline
+        # (additive across workouts — glycogen does not refill in a 30-min
+        # session gap the way W' partially does).  Pulled from the
+        # session-level value computed in :func:`compute_session_metrics`,
+        # not from a per-workout aggregation here.
+        "_glycogen_used": summary.get("glycogen_used"),
+        "_glycogen_kj": summary.get("glycogen_kj"),
         # Session-level intensity factor (parallel to per-workout _if_eff).
         "_if_eff": summary.get("if_eff_session"),
 

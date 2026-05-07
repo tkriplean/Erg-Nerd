@@ -513,6 +513,9 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     anaerobic_strain:  (r) => r._anaerobic_strain != null
                                 ? `${Math.round(r._anaerobic_strain * 100)}%`
                                 : "—",
+    glycogen_used:     (r) => r._glycogen_used != null
+                                ? `${Math.round(r._glycogen_used * 100)}%${r._glycogen_used > 1 ? " ⚠" : ""}`
+                                : "—",
   };
 
   // ── Sort-key dispatch ────────────────────────────────────────────────────
@@ -543,6 +546,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     if_eff:            (r) => r._if_eff != null ? r._if_eff : -1,
     severity:          (r) => r._severity_score != null ? r._severity_score : -1,
     anaerobic_strain:  (r) => r._anaerobic_strain != null ? r._anaerobic_strain : -1,
+    glycogen_used:     (r) => r._glycogen_used != null ? r._glycogen_used : -1,
     rank_event:        (r, opts) => (opts && opts.event_order && opts.event_order[r.event_key]) ?? 99,
     rank_date:         (r) => r.date_iso || "",
     rank_age:          (r) => r.age || 0,

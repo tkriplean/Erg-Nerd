@@ -140,12 +140,17 @@ def build_effort_stress_chart_config(
 
     # Zone-ratio axis bound.  Ratios > 1.0 happen for PB efforts (athlete
     # exceeded their existing reference); cap at the observed max + headroom.
+    # Glycogen Used can also exceed 1.0 (bonk territory) and shares this
+    # axis in percentage form, so include it in the cap calculation.
     zone_max = 0.0
     for p in timeline:
         zones = p.get("zones") or {}
         for v in zones.values():
             if v is not None and v > zone_max:
                 zone_max = v
+        gly = p.get("glycogen_pct")
+        if gly is not None and (gly / 100.0) > zone_max:
+            zone_max = gly / 100.0
     zone_y_max = max(1.2, zone_max + 0.15)
 
     # Theme-aware accents.
@@ -166,8 +171,16 @@ def build_effort_stress_chart_config(
         for d in ZONE_BANDS_S
     ]
 
+    # Glycogen Used curve: present only when the rower's profile has
+    # weight set (otherwise the cumulative curve was never computed).
+    has_glycogen = any(p.get("glycogen_pct") is not None for p in timeline)
+    glycogen_color = (
+        "rgba(225,125,35,0.95)" if not is_dark else "rgba(245,165,75,0.95)"
+    )  # orange — same family as the Anaerobic bin to flag "fuel store"
+
     return {
         "has_w_bal": True,
+        "has_glycogen": has_glycogen,
         "timeline": [
             {
                 "t": float(p.get("t") or 0),
@@ -175,6 +188,15 @@ def build_effort_stress_chart_config(
                 "w_bal_pct": (
                     float(p["w_bal_pct"]) * 100.0
                     if p.get("w_bal_pct") is not None
+                    else None
+                ),
+                # Cumulative glycogen used as a percentage (0 → 100+).
+                # Plotted alongside W'bal — both are session-cumulative
+                # reservoir-state lines, but inverse: W'bal trends down
+                # with depletion, glycogen up.
+                "glycogen_pct": (
+                    float(p["glycogen_pct"]) * 100.0
+                    if p.get("glycogen_pct") is not None
                     else None
                 ),
                 # Pass through the per-band ratios as a flat dict keyed by
@@ -193,6 +215,7 @@ def build_effort_stress_chart_config(
         "intensity_y_max": intensity_y_max,
         "zone_y_max": zone_y_max,
         "intensity_color": intensity_color,
+        "glycogen_color": glycogen_color,
         "is_dark": bool(is_dark),
         "session_duration_s": float(summary.get("duration_s") or 0.0),
     }

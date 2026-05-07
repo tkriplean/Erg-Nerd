@@ -716,6 +716,7 @@ def workouts_page() -> None:
                             # "power_spread",
                             "severity",
                             "ess",
+                            "glycogen_used",
                             "link",
                         ],
                         tree_mode=True,

@@ -212,6 +212,9 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
     "anaerobic_strain": ColumnDef(
         "anaerobic_strain", "W' Used", "5rem", format="anaerobic_strain"
     ),
+    "glycogen_used": ColumnDef(
+        "glycogen_used", "Gly Used", "5rem", format="glycogen_used"
+    ),
     # ── Stateful columns ─────────────────────────────────────────────────
     "structure_filter": ColumnDef(
         "structure_filter",

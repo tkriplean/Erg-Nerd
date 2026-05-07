@@ -39,6 +39,7 @@ content: window.hyperdiv.registerPlugin("EffortStressChart", (ctx) => {
     const tickColor = isDark ? "#9ca3af" : "#6b7280";
     const intensityColor = cfg.intensity_color || "rgba(220,80,80,0.95)";
     const wBalColor = isDark ? "rgba(120,180,240,0.95)" : "rgba(40,140,210,0.85)";
+    const glycogenColor = cfg.glycogen_color || (isDark ? "rgba(245,165,75,0.95)" : "rgba(225,125,35,0.95)");
 
     canvas.style.height = (typeof _height === "number" ? _height + "px" : _height);
 
@@ -77,6 +78,16 @@ content: window.hyperdiv.registerPlugin("EffortStressChart", (ctx) => {
           .map((p) => ({ x: p.t, y: p.w_bal_pct }))
       : [];
 
+    // Optional Glycogen Used trace — dotted (distinct from W'bal's dash),
+    // orange (sibling color of the Anaerobic bin to flag "fuel store").
+    // Inverse direction from W'bal: starts at 0, rises monotonically as
+    // glycogen depletes.
+    const glycogenPoints = cfg.has_glycogen
+      ? cfg.timeline
+          .filter((p) => p.glycogen_pct != null)
+          .map((p) => ({ x: p.t, y: p.glycogen_pct }))
+      : [];
+
     const datasets = [...zoneDatasets];
     if (cfg.has_w_bal && wBalPoints.length) {
       datasets.push({
@@ -90,6 +101,20 @@ content: window.hyperdiv.registerPlugin("EffortStressChart", (ctx) => {
         pointRadius: 0,
         tension: 0.2,
         order: 5,
+      });
+    }
+    if (cfg.has_glycogen && glycogenPoints.length) {
+      datasets.push({
+        label: "Glycogen used (%)",
+        data: glycogenPoints,
+        yAxisID: "y2",
+        borderColor: glycogenColor,
+        backgroundColor: "glycogenColor",
+        borderWidth: 1.4,
+        borderDash: [2, 2],
+        pointRadius: 0,
+        tension: 0.2,
+        order: 4,
       });
     }
     datasets.push({
@@ -168,6 +193,9 @@ content: window.hyperdiv.registerPlugin("EffortStressChart", (ctx) => {
                 }
                 if (item.dataset.label === "W' remaining (%)") {
                   return `W' remaining: ${v.toFixed(0)}%`;
+                }
+                if (item.dataset.label === "Glycogen used (%)") {
+                  return `Glycogen used: ${v.toFixed(0)}%`;
                 }
                 return `${item.dataset.label}: ${v.toFixed(0)}%`;
               },

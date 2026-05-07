@@ -180,6 +180,7 @@ def _session_rollup(workout: dict) -> None:
     sess_ess = summary.get("ess") or 0.0
     sess_if = summary.get("if_eff_session") or 0.0
     strain = summary.get("anaerobic_strain") or 0.0
+    glycogen = summary.get("glycogen_used")
     duration_s = int(summary.get("duration_s") or 0)
     minutes = duration_s // 60
     seconds = duration_s % 60
@@ -202,7 +203,15 @@ def _session_rollup(workout: dict) -> None:
             _stat("Session IF eff", f"{sess_if:.2f}")
             if sev_bucket:
                 _stat("Peak Severity", f"{sev_bucket} ({sev_score:.2f})")
+            # Reservoirs — the two finite-store recovery-debt metrics shown
+            # adjacent so the limiter story is legible at a glance:
+            # W' Used dominates short max efforts; Glycogen Used dominates
+            # long endurance efforts (HM, marathon).
             _stat("W' Used (peak)", f"{round(strain * 100)}%")
+            if glycogen is not None:
+                gly_pct = round(glycogen * 100)
+                gly_warn = " ⚠" if glycogen > 1 else ""
+                _stat("Glycogen Used", f"{gly_pct}%{gly_warn}")
             _stat(
                 "Session Time",
                 f"{minutes}:{seconds:02d}"
@@ -289,19 +298,23 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
                         ),
                     )
 
-        # ── ESS row: ESS, IF eff, Severity, W' Used ────────────────────
+        # ── ESS row: Severity + Reservoirs (W' Used, Glycogen Used) ────
+        # The two reservoirs sit adjacent so the limiter story is legible
+        # at a glance: W' Used dominates short max efforts (2k, sprints),
+        # Glycogen Used dominates long endurance efforts (HM, marathon).
         if has_ess:
             with hd.hbox(wrap="wrap", gap=0):
-                # _stat("ESS", f"{workout['_ess']:.1f}")
-                # if workout.get("_if_eff") is not None:
-                #     _stat("IF eff", f"{workout['_if_eff']:.2f}")
                 if workout.get("_severity"):
                     _stat("Severity", workout["_severity"])
-                # if workout.get("_anaerobic_strain") is not None:
-                #     _stat(
-                #         "W' Used",
-                #         f"{round(workout['_anaerobic_strain'] * 100)}%",
-                #     )
+                if workout.get("_anaerobic_strain") is not None:
+                    _stat(
+                        "W' Used",
+                        f"{round(workout['_anaerobic_strain'] * 100)}%",
+                    )
+                if workout.get("_glycogen_used") is not None:
+                    gly = workout["_glycogen_used"]
+                    gly_warn = " ⚠" if gly > 1 else ""
+                    _stat("Glycogen Used", f"{round(gly * 100)}%{gly_warn}")
 
         with hd.hbox(wrap="wrap", gap=0):
             if workout.get("distance"):
@@ -1333,6 +1346,7 @@ def _render_similar_workouts(workout, all_workouts, max_hr, profile, state):
                     "if_eff",
                     "severity",
                     "anaerobic_strain",
+                    "glycogen_used",
                     "similarity",
                     compare_col_entry,
                     "link",
@@ -1353,6 +1367,7 @@ def _render_similar_workouts(workout, all_workouts, max_hr, profile, state):
                     "if_eff",
                     "severity",
                     "anaerobic_strain",
+                    "glycogen_used",
                     "similarity",
                     compare_col_entry,
                     "link",
@@ -1745,6 +1760,7 @@ def workout_page(workout_id: int) -> None:
                     "if_eff",
                     "severity",
                     "anaerobic_strain",
+                    "glycogen_used",
                     {"key": "link", "current_id": str(workout["id"])},
                 ]
                 WorkoutTable(

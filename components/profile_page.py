@@ -32,6 +32,7 @@ from the profile dict (no per-render API call).
 import hyperdiv as hd
 
 from services.rowing_utils import age_from_dob
+from services.glycogen import RESERVE_KJ_PER_KG, mass_kg_from_profile
 from services import public_profiles
 from components.app_context import (
     AppContext,
@@ -251,6 +252,23 @@ def profile_page() -> None:
                 if rg.changed:
                     state.weight_unit = rg.value
                     _save()
+            # Implied glycogen reserve — read-only, derived from bodyweight.
+            # Drives the Glycogen Used metric on workouts.
+            _mass_kg = mass_kg_from_profile(
+                {
+                    "weight": float(state.weight) if state.weight else 0.0,
+                    "weight_unit": state.weight_unit,
+                }
+            )
+            if _mass_kg:
+                _reserve_kj = int(round(RESERVE_KJ_PER_KG * _mass_kg))
+                hd.text(
+                    f"Implied glycogen reserve ≈ {_reserve_kj:,} kJ "
+                    f"({int(RESERVE_KJ_PER_KG)} kJ/kg × bodyweight). "
+                    "Drives the Glycogen Used metric on the Workouts page.",
+                    font_size="x-small",
+                    font_color="neutral-500",
+                )
         with hd.box():
             # Weight class — radio group; saves immediately
             hd.text("Weight Class", font_weight="semibold", font_size="small")

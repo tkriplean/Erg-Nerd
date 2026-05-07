@@ -1169,6 +1169,7 @@ def power_curve_page() -> None:
                 "if_eff",
                 "severity",
                 "anaerobic_strain",
+                "glycogen_used",
                 "link",
             ]
             try:

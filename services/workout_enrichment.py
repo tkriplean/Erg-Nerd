@@ -128,6 +128,7 @@ from services.erg_stress import (
     compute_w_prime_estimate,
     compute_workout_zone_summary,
 )
+from services.glycogen import mass_kg_from_profile
 from services.reference_watts import _interp_watts_at_duration
 
 
@@ -458,6 +459,8 @@ def _assign_ess(r: dict, sm: Optional[dict], wid) -> None:
     r["_severity"] = pw["severity_bucket"] if pw else None
     r["_severity_score"] = pw["severity_score"] if pw else None
     r["_anaerobic_strain"] = pw["anaerobic_strain"] if pw else None
+    r["_glycogen_used"] = pw.get("glycogen_used") if pw else None
+    r["_glycogen_kj"] = pw.get("glycogen_kj") if pw else None
     # Zone Spread fields — overwrite anything attach_spread_and_quality
     # produced.  Same closest-RW-band classification, just sharing the
     # session pass's per-second power array instead of rebuilding it.
@@ -470,6 +473,8 @@ def _assign_ess(r: dict, sm: Optional[dict], wid) -> None:
     r["_ess_session"] = sm.get("ess")
     r["_if_eff_session"] = sm.get("intensity_session")
     r["_w_bal_trough"] = sm.get("w_bal_trough")
+    r["_glycogen_used_session"] = sm.get("glycogen_used")
+    r["_glycogen_kj_session"] = sm.get("glycogen_kj")
     r["_ess_segments"] = [
         seg for seg in (sm.get("per_segment") or []) if seg.get("workout_id") == wid
     ]
@@ -480,6 +485,8 @@ def _assign_ess(r: dict, sm: Optional[dict], wid) -> None:
         "severity_score": sm.get("severity_score"),
         "duration_s": sm.get("duration_s"),
         "anaerobic_strain": sm.get("anaerobic_strain"),
+        "glycogen_used": sm.get("glycogen_used"),
+        "glycogen_kj": sm.get("glycogen_kj"),
         "w_bal_trough": sm.get("w_bal_trough"),
         "if_eff_session": sm.get("intensity_session"),
         "member_ids": [pw["workout_id"] for pw in (sm.get("per_workout") or [])],
@@ -511,18 +518,21 @@ def attach_ess_metrics(
     ``sessions_dict`` is the ``AppContext.sessions_dict`` snapshot —
     ``{session_id: session_record}``.  Pass ``{}`` if unavailable.
 
-    ``profile`` is optional — only ``gender`` is used (for the W' default).
-    ``max_hr`` is accepted for signature compatibility with v1 but is
-    ignored — the v2 model is power-only (no HR-track), so workouts
-    lacking power will have ``None`` ESS.
+    ``profile`` is optional.  ``gender`` drives the W' default; ``weight``
+    + ``weight_unit`` drive the Glycogen Used reservoir denominator.  When
+    weight is unset, ``_glycogen_used`` / ``_glycogen_kj`` are ``None`` and
+    severity falls back to the 2-term ``peak + 0.5·strain`` formula (no
+    glycogen contribution).  ``max_hr`` is accepted for signature
+    compatibility with v1 but is ignored — the v2 model is power-only.
 
     Uses the central metrics cache keyed by ``("ess_session",
-    sorted_ids_tuple, input_hash, gender, "v2")`` so repeated renders of
-    the same session reuse the result.  Cache identity is the **sorted
-    member-id tuple**, not ``session_id``, so re-clustering that produces
-    a fresh uid for an unchanged member set hits the same cached entry.
-    The ``"v2"`` literal is part of the key to invalidate v1 cached
-    entries on first render after the multi-band rewrite.
+    sorted_ids_tuple, input_hash, gender, mass_round, model, tl)`` so
+    repeated renders of the same session reuse the result.  Cache
+    identity is the **sorted member-id tuple**, not ``session_id``, so
+    re-clustering that produces a fresh uid for an unchanged member set
+    hits the same cached entry.  The ``model="v3"`` literal invalidates
+    pre-glycogen-severity cached entries on first render after the
+    severity-formula update.
     """
     thresholds_for, ref_watts_for, reference_pbs_for = _resolvers(
         all_workouts, thresholds_for, ref_watts_for, reference_pbs_for
@@ -530,6 +540,7 @@ def attach_ess_metrics(
 
     h = input_hash(all_workouts)
     gender = (profile or {}).get("gender")
+    mass_kg = mass_kg_from_profile(profile)
     rwd_fn = _ref_watts_at_duration_fn(ref_watts_for)
     sessions_dict = sessions_dict or {}
     by_id = {str(w.get("id")): w for w in all_workouts if w.get("id") is not None}
@@ -602,7 +613,11 @@ def attach_ess_metrics(
             cache_key_workout_id = memo_key  # tuple of ids — hashable
             cache_extra = {
                 "gender": (gender or "").lower(),
-                "model": "v2",
+                # ``mass_kg`` is rounded for cache stability — small profile
+                # weight tweaks shouldn't bust the cache, but a real change
+                # (kg vs lb, big weight loss, profile fix) should.
+                "mass": str(int(round(mass_kg))) if mass_kg else "0",
+                "model": "v3",  # v3: severity = peak + 0.5·strain + 0.4·gly
                 "tl": "1" if with_timeline else "0",
             }
 
@@ -614,6 +629,7 @@ def attach_ess_metrics(
                     rwd_fn,
                     cp=cp,
                     w_prime=w_prime,
+                    mass_kg=mass_kg,
                     with_timeline=with_timeline,
                 )
 

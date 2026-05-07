@@ -116,6 +116,7 @@ from services.rowing_utils import (
     compute_watts,
 )
 from services.heartrate_utils import _extract_hr
+from services.glycogen import cumulative_glycogen_curve, session_glycogen_used
 
 
 # ---------------------------------------------------------------------------
@@ -579,6 +580,8 @@ def _empty_metrics() -> dict:
         "severity_score": 0.0,
         "severity_bucket": "Low",
         "anaerobic_strain": 0.0,
+        "glycogen_used": None,
+        "glycogen_kj": None,
         "w_bal_trough": None,
         "duration_s": 0.0,
         "per_workout": [],
@@ -621,6 +624,7 @@ def _attach_per_workout_records(
     kind_arr,
     wid_idx_arr,
     ess_per_second,
+    mass_kg,
 ):
     # ----- Per-workout records -----
     # Per-workout severity / intensity use a *workout-isolated* EMA
@@ -735,7 +739,18 @@ def _attach_per_workout_records(
         else:
             strain_w = 0.0
 
-        sev_w = _calc_severity(pk5, pk60, pk20, strain_w)
+        # Per-workout glycogen used: integrate CHO burn rate over the
+        # workout-isolated work-only seconds.  Uses the workout-isolated
+        # I_w_arr (not the session-state I) so a cooldown after a race
+        # reports its own fueling, not the inherited session state.
+        if I_w_arr.size and P_w.size:
+            glycogen_kj_w, glycogen_used_w = session_glycogen_used(
+                P_w, I_w_arr, kind_w == "work", mass_kg
+            )
+        else:
+            glycogen_kj_w, glycogen_used_w = (None, None) if mass_kg else (None, None)
+
+        sev_w = _calc_severity(pk5, pk60, pk20, strain_w, glycogen_used_w)
         per_workout_records.append(
             {
                 "workout_id": wid,
@@ -750,14 +765,45 @@ def _attach_per_workout_records(
                 "severity_score": sev_w,
                 "severity_bucket": severity_bucket(sev_w) or "Low",
                 "anaerobic_strain": strain_w,
+                "glycogen_used": glycogen_used_w,
+                "glycogen_kj": glycogen_kj_w,
                 "zone_time_fractions": zone_time_fractions,
             }
         )
     return per_workout_records
 
 
-def _calc_severity(pk5, pk60, pk20, anaerobic_strain):
-    return max(pk5, pk60, pk20) + 0.50 * anaerobic_strain
+#: Severity-formula weight on Skiba W' depletion (anaerobic strain).
+SEVERITY_W_STRAIN_WEIGHT: float = 0.50
+
+#: Severity-formula weight on glycogen depletion.  Lower than the W'-strain
+#: weight because food refills glycogen faster than rest refills W', and
+#: to dampen double-counting on workouts that drain both reservoirs.  This
+#: is the term that elevates HM/marathon-distance efforts (low W' use,
+#: high glycogen use) into the Maximal severity bucket they deserve.
+SEVERITY_GLYCOGEN_WEIGHT: float = 0.40
+
+
+def _calc_severity(pk5, pk60, pk20, anaerobic_strain, glycogen_used=0.0):
+    """Severity score: peak rolling I(t) + recovery-debt contributions.
+
+    Combines three orthogonal contributions:
+      * ``max(pk5, pk60, pk20)`` — peak rolling intensity over short
+        windows; captures neuromuscular / VO2max-domain stress.
+      * ``0.50 · anaerobic_strain`` — Skiba W' depletion fraction;
+        captures supra-CP recovery debt.
+      * ``0.40 · glycogen_used`` — CHO depletion fraction; captures
+        long-effort fueling debt (the term that correctly elevates
+        HM/marathon efforts into Maximal severity).
+
+    ``glycogen_used`` may be ``None`` (no profile mass available); treated
+    as 0.0.  All weights live in module-level constants.
+    """
+    return (
+        max(pk5, pk60, pk20)
+        + SEVERITY_W_STRAIN_WEIGHT * anaerobic_strain
+        + SEVERITY_GLYCOGEN_WEIGHT * (glycogen_used or 0.0)
+    )
 
 
 def _build_session_timeline(
@@ -767,6 +813,7 @@ def _build_session_timeline(
     w_prime,
     I_arr,
     P_arr,
+    glycogen_curve=None,
 ):
     # ----- Timeline (sub-sampled for chart payload) -----
     # Keep ≤ 1800 points to bound payload size; for workouts ≤ 30 min, full
@@ -781,6 +828,9 @@ def _build_session_timeline(
     has_wbal = (w_bal_curve is not None) and bool(w_prime)
     if has_wbal:
         wb_s = w_bal_curve[ts] / w_prime
+    has_glycogen = glycogen_curve is not None
+    if has_glycogen:
+        gly_s = glycogen_curve[ts]
     bands = list(ZONE_BANDS_S)
     Z_s = {d: zone_ratio_arr[d][ts] for d in bands}
     timeline = []
@@ -791,6 +841,7 @@ def _build_session_timeline(
                 "intensity": float(I_s[k]),
                 "P": float(P_s[k]),
                 "w_bal_pct": float(wb_s[k]) if has_wbal else None,
+                "glycogen_pct": float(gly_s[k]) if has_glycogen else None,
                 "zones": {d: float(Z_s[d][k]) for d in bands},
             }
         )
@@ -953,6 +1004,7 @@ def compute_session_metrics(
     cp: Optional[float],
     w_prime: Optional[float],
     *,
+    mass_kg: Optional[float] = None,
     with_timeline: bool = True,
 ) -> dict:
     """Compute ESS / Severity / Anaerobic Strain across a session timeline.
@@ -975,6 +1027,10 @@ def compute_session_metrics(
     w_prime:
         Rower's anaerobic capacity (joules).  ``None`` disables the
         W'bal track.
+    mass_kg:
+        Rower's body mass in kilograms.  ``None`` disables the Glycogen
+        Used track (per-workout / session-level ``glycogen_used`` and
+        ``glycogen_kj`` are returned as ``None``).
     with_timeline:
         When False, ``timeline`` is returned as ``None`` and the per-second
         sub-sampling step is skipped entirely.  The Workouts page list view
@@ -1054,12 +1110,26 @@ def compute_session_metrics(
         cp, w_prime, total_session_s, P_arr, kind_arr
     )
 
+    # ----- Glycogen Used (session-level) -----
+    # CHO depletion estimate over work-only seconds.  Computed once at
+    # session scope; per-workout values are computed in
+    # :func:`_attach_per_workout_records` from the workout-isolated slices.
+    session_work_mask = kind_arr == "work"
+    glycogen_kj_session, glycogen_used_session = session_glycogen_used(
+        P_arr, I_arr, session_work_mask, mass_kg
+    )
+
     # ----- Severity (session-level) -----
-    # Severity = peak rolling I(t) over short windows + a strain bonus.
-    # The strain term rescues short max-efforts that don't sustain long
-    # enough for the long-band EMAs to climb (e.g. a 2k PB peaks ~1.1 in I
-    # but fully drains W'bal — the +0.5·strain pushes it past 1.4 → Maximal).
-    severity_score = _calc_severity(peak_5min, peak_60s, peak_20s, anaerobic_strain)
+    # Severity = peak rolling I(t) over short windows + recovery-debt
+    # contributions from both anaerobic strain (W' depletion) and glycogen
+    # use.  The strain term rescues short max-efforts that don't sustain
+    # long enough for the long-band EMAs to climb (e.g. a 2k PB peaks
+    # ~1.1 in I but fully drains W'bal).  The glycogen term elevates
+    # HM/marathon-distance efforts (low W' use, high CHO use) into the
+    # Maximal bucket they deserve.
+    severity_score = _calc_severity(
+        peak_5min, peak_60s, peak_20s, anaerobic_strain, glycogen_used_session
+    )
     sev_bucket = severity_bucket(severity_score) or "Low"
 
     per_workout_records = _attach_per_workout_records(
@@ -1075,6 +1145,7 @@ def compute_session_metrics(
         kind_arr,
         wid_idx_arr,
         ess_per_second,
+        mass_kg,
     )
 
     # ----- Session-level intensity -----
@@ -1085,6 +1156,12 @@ def compute_session_metrics(
     intensity_session = float(I_arr[work_mask].mean()) if work_mask.any() else 0.0
 
     if with_timeline:
+        # Cumulative glycogen-used curve, sub-sampled inside
+        # ``_build_session_timeline`` at the same stride as I and W'bal.
+        # ``None`` when no profile mass — the chart line won't render.
+        glycogen_curve = cumulative_glycogen_curve(
+            P_arr, I_arr, session_work_mask, mass_kg
+        )
         timeline = _build_session_timeline(
             total_session_s,
             zone_ratio_arr,
@@ -1092,6 +1169,7 @@ def compute_session_metrics(
             w_prime,
             I_arr,
             P_arr,
+            glycogen_curve=glycogen_curve,
         )
     else:
         timeline = None
@@ -1105,6 +1183,8 @@ def compute_session_metrics(
         "severity_score": severity_score,
         "severity_bucket": sev_bucket,
         "anaerobic_strain": anaerobic_strain,
+        "glycogen_used": glycogen_used_session,
+        "glycogen_kj": glycogen_kj_session,
         "w_bal_trough": w_bal_trough,
         "duration_s": float(total_session_s),
         "per_workout": per_workout_records,

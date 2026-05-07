@@ -399,6 +399,7 @@ def _results_table(workouts: list, etype: str, pb_id: int | None) -> None:
         "if_eff",
         "severity",
         "anaerobic_strain",
+        "glycogen_used",
         "link",
     ]
     WorkoutTable(
