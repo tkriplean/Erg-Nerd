@@ -41,14 +41,17 @@ Constants
 ``GROSS_EFFICIENCY = 0.25`` — mechanical / metabolic ratio for trained
 rowers.  Lit range 0.22–0.27; fixed in v1.
 
-``RESERVE_KJ_PER_KG = 100.0`` — combined muscle + liver glycogen energy
-per kg body mass.  Derived from: 15–25 g/kg *muscle* × 17 kJ/g × ~40 %
-muscle fraction in a trained rower ≈ 100 kJ/kg body mass; plus liver
-glycogen (80–120 g shared with brain / gut).  Lit range maps to roughly
-85–195 kJ/kg body mass; 100 sits at the conservative end and lands the
-HM PB diagnostic case (245 W × 90 min, 75 kg) at ~70 % used and a
-4-hour Z2 cruise at ~120 % (bonk territory).  Affects all readings
-linearly; the load-bearing tunable.
+``RESERVE_KJ_PER_KG = 80.0`` — *functional depletable* glycogen reserve
+per kg body mass.  Trained athletes never deplete to zero (a non-zero
+"floor" of glycogen remains even at the wall); the depletable fraction is
+typically ~70–80 % of total stores.  Total stores ≈ 100–145 kJ/kg
+(15–25 g/kg muscle × 17 kJ/g × ~30–40 % muscle fraction + 80–120 g liver
+glycogen / mass), so depletable reserve ≈ 80 kJ/kg at the conservative
+end.  Calibrated against real-world data points: a bonk-finishing
+marathon PB reads ~95 %, the "wall" / bonk-onset feeling lands around
+75 %, an HM PB finished hard but not bonked reads ~55 %, and a 4-hour
+ultra-aerobic effort tips well over 100 % (bonk territory).  Affects all
+readings linearly; the load-bearing tunable.
 
 Severity contribution
 ---------------------
@@ -79,12 +82,14 @@ import numpy as np
 #: Mechanical / metabolic ratio for trained rowers.  Lit range 0.22–0.27.
 GROSS_EFFICIENCY: float = 0.25
 
-#: Combined muscle + liver glycogen energy per kg body mass (kJ/kg).
-#: Derived from 15–25 g/kg *muscle* × 17 kJ/g × ~40 % muscle fraction +
-#: liver glycogen.  Lit range ~85–195 kJ/kg body mass; 100 sits at the
-#: conservative end and matches the HM PB diagnostic case (~70 % used)
-#: and 4 h Z2 bonk territory (~120 %).  Affects all readings linearly.
-RESERVE_KJ_PER_KG: float = 100.0
+#: Functional depletable glycogen reserve per kg body mass (kJ/kg).
+#: Trained athletes never deplete glycogen to zero — a non-zero floor
+#: remains even at the wall.  Depletable fraction ≈ 70–80 % of total
+#: stores; ~80 kJ/kg sits at the conservative end of that range.
+#: Calibrated against real-world data: bonk-finishing marathon PB reads
+#: ~95 %, bonk-onset (the "wall") ~75 %, HM PB hard-but-not-bonked
+#: ~55 %, 4-hour ultra-aerobic > 100 %.  Affects all readings linearly.
+RESERVE_KJ_PER_KG: float = 80.0
 
 #: CHO fraction of energy expenditure at rest / low intensity (I → 0).
 CHO_FRACTION_FLOOR: float = 0.30

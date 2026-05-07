@@ -617,7 +617,7 @@ def attach_ess_metrics(
                 # weight tweaks shouldn't bust the cache, but a real change
                 # (kg vs lb, big weight loss, profile fix) should.
                 "mass": str(int(round(mass_kg))) if mass_kg else "0",
-                "model": "v3",  # v3: severity = peak + 0.5·strain + 0.4·gly
+                "model": "v4",  # v4: glycogen reserve recalibrated to 80 kJ/kg
                 "tl": "1" if with_timeline else "0",
             }
 
