@@ -180,6 +180,208 @@ def _tau(d: int) -> float:
     return float(d) * EMA_TAU_FACTORS.get(d, 1.0)
 
 
+#: Per-band saturation threshold for *full* stimulus.  When peak
+#: ``zone_ratio_d`` reaches this value, the dose is 1.0 (full stimulus).
+#: Higher peaks scale linearly toward 2.0 (peak = 1.0) up to a 3.0 cap
+#: for super-PB efforts.  Below threshold, dose ramps quadratically from
+#: 0 to ~0.95 as a function of peak, so a near-threshold effort still
+#: reads "almost full."
+#:
+#: Reference watts are PB-anchored, so any non-PB workout has
+#: ``zone_ratio < 1.0``.  Each ``S_thresh`` is chosen so the canonical
+#: stimulus prescription for that system lands at peak ≥ ``S_thresh``:
+#:
+#:   - **Sprint (0.60):** lit prescription is 4–12 efforts of 5–30 s at
+#:     near-max with full recovery (Allen-Coggan).  A 30 s sprint at
+#:     near-PB pace generates ``zone_ratio_20s ≈ 0.85+``; the PB-anchored
+#:     RW often pulls peak down (a strong 1-min PB lifts RW_20s above
+#:     pure-sprint pace), so 0.60 accommodates training-effort sprints.
+#:   - **Anaerobic (0.65):** 3–8 efforts of 30–180 s at supra-threshold
+#:     (Glaister).  90 s @ supra-CP brings ``zone_ratio_90s`` to ~0.85+.
+#:   - **VO2max (0.70):** 4–15 min cumulative at 90–100 % VO2max
+#:     (Buchheit-Laursen, Billat).  4 × 4 min @ VO2max produces peak
+#:     ``zone_ratio_5min ≈ 0.93``; a training-pace 5k at 85 % of PB
+#:     reaches ~0.81.
+#:   - **Threshold (0.80):** 30–60 min cumulative at LT2 / MLSS
+#:     (Seiler-Tønnessen).  2 × 20 min @ threshold yields peak ≈ 0.96–0.98.
+#:   - **Tempo (0.85):** 40+ min sustained at sweet-spot.  60 min @ FTP
+#:     yields peak ``zone_ratio_60min ≈ 0.96``.
+#:   - **Endurance (0.75):** 60+ min LIT.  τ for the 2-hour band is
+#:     ≈ 36 min, so even a 90–120 min workout climbs to ≤ 0.93 peak;
+#:     0.75 is required to accommodate this.
+STIMULUS_S_THRESH: dict[int, float] = {
+    20: 0.60,    # Sprint
+    90: 0.65,    # Anaerobic
+    300: 0.75,   # VO2max     — 0.70 leaks 5 min @ FTP into "full"; 0.75 excludes
+    1200: 0.80,  # Threshold
+    3600: 0.85,  # Tempo
+    7200: 0.75,  # Endurance
+}
+
+#: Per-band minimum total work duration (seconds) to register stimulus.
+#: Workouts whose work-only duration is below this get ``dose = 0``
+#: regardless of peak — filters out brief warmups / sample efforts that
+#: incidentally cross a band's saturation threshold.
+#:
+#: Calibrated to the *shortest* effort in lit prescriptions for each
+#: system, not the typical session length:
+#:
+#:   - **Sprint 10 s** — 100 m PBs (~15 s), 200 m efforts (~30 s) all
+#:     count.  Single explosive sprint registers; sustained 1-second
+#:     samples don't.
+#:   - **Anaerobic 45 s** — 250 m / 500 m PBs (~60–85 s), 1 min PB
+#:     (60 s) all count.  Below 45 s the EMA hasn't filled enough
+#:     for the band to mean anything.
+#:   - **VO2max 180 s** — 3-min reps and beyond.  Single 4 min rep
+#:     counts; 1 min "spike" doesn't.
+#:   - **Threshold 600 s** — 10 min sustained or more.
+#:   - **Tempo 1500 s** — 25 min sustained or more.
+#:   - **Endurance 1800 s** — 30 min LIT or more.
+STIMULUS_MIN_WORK_S: dict[int, float] = {
+    20: 10.0,
+    90: 45.0,
+    300: 180.0,
+    1200: 600.0,
+    3600: 1500.0,
+    7200: 1800.0,
+}
+
+# Backwards-compat aliases.  Earlier versions exposed STIMULUS_PEAK_GATE
+# and STIMULUS_T_TARGET; keep them as read-only mirrors while downstream
+# callers migrate.
+STIMULUS_PEAK_GATE: dict[int, float] = STIMULUS_S_THRESH
+STIMULUS_T_THRESH: dict[int, float] = STIMULUS_MIN_WORK_S
+STIMULUS_T_TARGET: dict[int, float] = STIMULUS_MIN_WORK_S
+
+#: Per-band stimulus filter chip definitions for the Workouts page.
+#: Keyed by band-seconds; values describe the physiological system the
+#: band targets, used in chip-tooltip body text.
+STIMULUS_BAND_DEFINITIONS: dict[int, str] = {
+    20: (
+        "Sprint band — neuromuscular / phosphocreatine power.  "
+        "Stimulated by repeated near-maximal sprints (e.g. 4 × 30 s)."
+    ),
+    90: (
+        "Anaerobic band — supra-threshold work, fast glycolysis.  "
+        "Stimulated by repeated 60–120 s efforts (e.g. 6 × 90 s)."
+    ),
+    300: (
+        "VO2max band — maximal aerobic power.  "
+        "Stimulated by 3–8 min reps near VO2max (e.g. 4 × 4 min)."
+    ),
+    1200: (
+        "Threshold band — lactate / MLSS work.  "
+        "Stimulated by 10–30 min sustained efforts (e.g. 2 × 20 min)."
+    ),
+    3600: (
+        "Tempo band — sustained sub-threshold work.  "
+        "Stimulated by 40+ min continuous at ~FTP (e.g. 60 min @ FTP)."
+    ),
+    7200: (
+        "Endurance band — long aerobic / Z2 base.  "
+        "Stimulated by 60+ min low-intensity volume (LIT)."
+    ),
+}
+
+#: Filter-rule text for the stimulus chip tooltip.  Uniform "≥ 1.0× dose"
+#: rule across all bands.
+STIMULUS_FILTER_TEXT: dict[int, str] = {
+    d: (
+        "Selected: workouts that delivered a full adaptation-grade "
+        "stimulus to this system (dose ≥ 1.0×)."
+    )
+    for d in (20, 90, 300, 1200, 3600, 7200)
+}
+
+
+#: Dose buckets for the stimulus-strip renderer.  Boundaries on the
+#: continuous ``dose`` value: < 0.5 = none, < 1.0 = partial, < 2.0 = full,
+#: ≥ 2.0 = overdose.  Exposed as a constant so the JS plugin can mirror
+#: the cutoffs without hardcoding them.
+STIMULUS_DOSE_BUCKETS: tuple[tuple[str, float], ...] = (
+    ("none", 0.5),
+    ("partial", 1.0),
+    ("full", 2.0),
+    ("overdose", float("inf")),
+)
+
+
+def _compute_stimulus_doses(Z_w: np.ndarray, work_mask: np.ndarray) -> dict[int, float]:
+    """Per-band stimulus dose from the workout-isolated band-saturation matrix.
+
+    ``Z_w`` is the 6×N matrix ``zone_ratio_d(t) = EMA_d(P_w)(t) / RW_d``
+    already computed for the Intensity signal.  ``work_mask`` is the
+    boolean per-second mask of work-only seconds.
+
+    Peak-driven dose model:
+
+      * ``dose = 0`` when total work time < ``STIMULUS_MIN_WORK_S[d]``
+        (workout too short to credit this band).
+      * else when peak < ``STIMULUS_S_THRESH[d]``: partial credit
+        ``dose = (peak / S_thresh)²`` (quadratic ramp, capped just below
+        1.0).  Reaches ~0.6 at peak = 0.78·S, ~0.9 at peak = 0.95·S.
+      * else (peak ≥ S_thresh): full or beyond.
+        ``dose = 1.0 + (peak − S_thresh) / (1 − S_thresh)``, capped at 3.0.
+        Lands at 1.0 right at threshold; 2.0 at peak = 1.0; 3.0 cap for
+        super-PB efforts where zone_ratio exceeds 1.0.
+
+    The user's intuition driving this design: the EMA reaching saturation
+    *already represents* a band-relevant dose of work — we don't require
+    additional sustained-time-at-saturation on top of the EMA fill.  A
+    5 min effort at 5-min reference power generates a peak EMA of ~0.93,
+    which is a full stimulus; a 5k race at 80 % of PB pace generates a
+    peak ~0.80, which is partial; a sustained FTP effort generates a peak
+    ~0.75 in the 5-min band, which gracefully reads as "almost partial"
+    rather than zero.
+
+    Sub-band leakage (e.g., 1-hour FTP triggering Sprint stimulus because
+    sustained 240 W elevates short-EMA seconds) is bounded by the
+    per-band ``S_thresh`` — short-EMA bands need their *peak* to reach
+    threshold, which a sustained moderate effort cannot do.
+
+    Workout-isolated convention (bands seed at zero per workout) — same
+    as Severity / Intensity / Zone Spread.  A cooldown after a race
+    reports its own profile, not inherited session state.
+    """
+    if Z_w.size == 0 or not work_mask.any():
+        return {int(d): 0.0 for d in ZONE_BANDS_S}
+
+    Z_work = Z_w[:, work_mask]   # (6, n_work)
+    work_s = int(Z_work.shape[1])
+    peaks = Z_work.max(axis=1)   # (6,)
+
+    s_thresh_arr = np.array([STIMULUS_S_THRESH[d] for d in ZONE_BANDS_S])
+    min_work_arr = np.array([STIMULUS_MIN_WORK_S[d] for d in ZONE_BANDS_S])
+
+    # Default to zero for every band; selectively populate.
+    dose = np.zeros(len(ZONE_BANDS_S), dtype=np.float64)
+
+    # Mask out bands where total work duration is insufficient.
+    duration_pass = work_s >= min_work_arr   # (6,) boolean
+    # Above-threshold branch.
+    above_thresh = (peaks >= s_thresh_arr) & duration_pass
+    # Below-threshold-but-passing-duration branch.
+    below_thresh = (~above_thresh) & duration_pass & (peaks > 0)
+
+    # Above threshold: 1.0 + overshoot/(1-S), capped at 3.0
+    if above_thresh.any():
+        denom = np.maximum(0.01, 1.0 - s_thresh_arr)
+        dose[above_thresh] = np.minimum(
+            3.0,
+            1.0 + (peaks[above_thresh] - s_thresh_arr[above_thresh])
+            / denom[above_thresh],
+        )
+    # Below threshold: quadratic partial credit
+    if below_thresh.any():
+        ratio = peaks[below_thresh] / s_thresh_arr[below_thresh]
+        dose[below_thresh] = np.minimum(0.99, ratio * ratio)
+
+    return {
+        int(ZONE_BANDS_S[i]): float(dose[i])
+        for i in range(len(ZONE_BANDS_S))
+    }
+
+
 #: The scale factor in
 #: ``I(t) = INTENSITY_SCALE · pow(Σ pow(zone_ratio, SIGNAL_AMPLIFIER), 1/SIGNAL_AMPLIFIER)``.
 #: Calibration knob for fixing at-zone steady-state effort reads ≈ 1.0
@@ -690,6 +892,10 @@ def _attach_per_workout_records(
         # to argmin_d |P − RW_d|, the duration band whose reference watts
         # is closest to the instantaneous power.  Independent of the EMA
         # state above — a duration-aware view lives in I(t).
+        # Training Stimulus: per-band cumulative-time-at-saturation against
+        # the same Z_w matrix.  EMA-based and duration-aware (a 30-min
+        # FTP and a 30-s sprint at the same average watts produce different
+        # stimulus signatures).
         if I_w_arr.size:
             work_w_mask = kind_w == "work"
             intensity_w = (
@@ -707,15 +913,19 @@ def _attach_per_workout_records(
                     if total_count
                     else np.zeros(n_bands, dtype=np.float64)
                 )
+                stimulus_doses = _compute_stimulus_doses(Z_w, work_w_mask)
             else:
                 fractions_arr = np.zeros(n_bands, dtype=np.float64)
+                stimulus_doses = {int(d): 0.0 for d in ZONE_BANDS_S}
         else:
             intensity_w = 0.0
             fractions_arr = np.zeros(n_bands, dtype=np.float64)
+            stimulus_doses = {int(d): 0.0 for d in ZONE_BANDS_S}
 
         zone_time_fractions = {
             int(ZONE_BANDS_S[i]): float(fractions_arr[i]) for i in range(n_bands)
         }
+        stimulus_systems = sorted(d for d, dose in stimulus_doses.items() if dose >= 1.0)
 
         slc = I_w_arr if I_w_arr.size else np.zeros(1, dtype=np.float64)
         pk5 = _peak_rolling_mean(slc, 300)
@@ -768,6 +978,8 @@ def _attach_per_workout_records(
                 "glycogen_used": glycogen_used_w,
                 "glycogen_kj": glycogen_kj_w,
                 "zone_time_fractions": zone_time_fractions,
+                "stimulus_doses": stimulus_doses,
+                "stimulus_systems": stimulus_systems,
             }
         )
     return per_workout_records

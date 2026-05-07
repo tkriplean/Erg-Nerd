@@ -38,6 +38,12 @@ mutate each workout dict in-place to attach the heavier metrics:
                                      second's power.  Drives the Zone
                                      Spread bar inside the Watts cell +
                                      the filter chips.
+  _stimulus_doses     dict | None    Per-band stimulus dose (workout-isolated
+                                     EMA × time-at-saturation).  Attached
+                                     by ``attach_ess_metrics`` only.
+  _stimulus_systems   list | None    Bands with dose ≥ 1.0 (the "stimulated
+                                     systems" set).  Attached by
+                                     ``attach_ess_metrics`` only.
   _hr_bin_meters      list | None    Per-HR-bin meter counts when max_hr known
   _hr_spread_score    float | None   0–100 weighted HR spread
   _quality            str | None     "Low"/"Medium"/"High"/"Ultra"
@@ -461,14 +467,14 @@ def _assign_ess(r: dict, sm: Optional[dict], wid) -> None:
     r["_anaerobic_strain"] = pw["anaerobic_strain"] if pw else None
     r["_glycogen_used"] = pw.get("glycogen_used") if pw else None
     r["_glycogen_kj"] = pw.get("glycogen_kj") if pw else None
+    r["_stimulus_doses"] = pw.get("stimulus_doses") if pw else None
+    r["_stimulus_systems"] = pw.get("stimulus_systems") if pw else None
     # Zone Spread fields — overwrite anything attach_spread_and_quality
     # produced.  Same closest-RW-band classification, just sharing the
     # session pass's per-second power array instead of rebuilding it.
     if pw and pw.get("zone_time_fractions"):
         r["_zone_time_fractions"] = pw["zone_time_fractions"]
-        r["_zone_bin_fractions"] = zone_fractions_to_bin_list(
-            pw["zone_time_fractions"]
-        )
+        r["_zone_bin_fractions"] = zone_fractions_to_bin_list(pw["zone_time_fractions"])
     # Session-level values for the Workout Page summary / rollup widget.
     r["_ess_session"] = sm.get("ess")
     r["_if_eff_session"] = sm.get("intensity_session")
@@ -534,16 +540,18 @@ def attach_ess_metrics(
     pre-glycogen-severity cached entries on first render after the
     severity-formula update.
     """
-    thresholds_for, ref_watts_for, reference_pbs_for = _resolvers(
-        all_workouts, thresholds_for, ref_watts_for, reference_pbs_for
-    )
 
-    h = input_hash(all_workouts)
+    if thresholds_for is None or ref_watts_for is None or reference_pbs_for is None:
+        thresholds_for, ref_watts_for, reference_pbs_for = _resolvers(
+            all_workouts, thresholds_for, ref_watts_for, reference_pbs_for
+        )
+
+    h = input_hash(workouts)
     gender = (profile or {}).get("gender")
     mass_kg = mass_kg_from_profile(profile)
     rwd_fn = _ref_watts_at_duration_fn(ref_watts_for)
     sessions_dict = sessions_dict or {}
-    by_id = {str(w.get("id")): w for w in all_workouts if w.get("id") is not None}
+    by_id = {str(w.get("id")): w for w in workouts if w.get("id") is not None}
 
     # Per-render memos.  Two separate caches:
     #
@@ -617,7 +625,7 @@ def attach_ess_metrics(
                 # weight tweaks shouldn't bust the cache, but a real change
                 # (kg vs lb, big weight loss, profile fix) should.
                 "mass": str(int(round(mass_kg))) if mass_kg else "0",
-                "model": "v4",  # v4: glycogen reserve recalibrated to 80 kJ/kg
+                "model": "v6",  # v6: peak-driven stimulus dose, lower thresholds
                 "tl": "1" if with_timeline else "0",
             }
 

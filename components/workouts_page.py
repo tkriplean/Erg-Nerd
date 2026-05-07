@@ -564,6 +564,14 @@ def workouts_page() -> None:
     if spread_quality_filters.active_quality:
         sel = set(spread_quality_filters.active_quality)
         filtered = [r for r in filtered if r.get("_quality") in sel]
+    if spread_quality_filters.active_stimulus_bands:
+        sel = set(spread_quality_filters.active_stimulus_bands)
+        # Workout passes if dose ≥ 1.0 for *any* selected band.
+        # ``_stimulus_doses`` is a dict keyed by band-seconds (int).
+        def _stim_passes(r: dict) -> bool:
+            doses = r.get("_stimulus_doses") or {}
+            return any(float(doses.get(b, 0.0)) >= 1.0 for b in sel)
+        filtered = [r for r in filtered if _stim_passes(r)]
 
     sb_ids = compute_sb_ids(filtered)
     pts = prepare_points(
@@ -715,6 +723,7 @@ def workouts_page() -> None:
                             "hr",
                             # "power_spread",
                             "severity",
+                            "stimulus",
                             "ess",
                             "glycogen_used",
                             "link",

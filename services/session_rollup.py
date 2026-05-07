@@ -324,6 +324,21 @@ def _parent_from_session(
         mains, key=lambda m: (m.get("_severity_score") or -1.0)
     ) if mains else (workouts[0] if workouts else {})
 
+    # Stimulus aggregate — max dose per band across all mains.  A session
+    # row should flag a system as stimulated if *any* of its workouts hit
+    # full dose (e.g. a session of "warmup + VO2max set + cooldown" should
+    # show VO2max stimulated, not be diluted by the easy bookend pieces).
+    session_stim_doses: dict[int, float] = {}
+    for m in mains:
+        per_workout_doses = m.get("_stimulus_doses") or {}
+        for band, dose in per_workout_doses.items():
+            session_stim_doses[band] = max(
+                session_stim_doses.get(band, 0.0), float(dose)
+            )
+    session_stim_systems = sorted(
+        d for d, dose in session_stim_doses.items() if dose >= 1.0
+    ) if session_stim_doses else []
+
     # Aggregates over mains only.
     work_durations = [(m, _work_seconds(m)) for m in mains]
     total_work_s = sum(s for _, s in work_durations)
@@ -433,6 +448,13 @@ def _parent_from_session(
         # not from a per-workout aggregation here.
         "_glycogen_used": summary.get("glycogen_used"),
         "_glycogen_kj": summary.get("glycogen_kj"),
+        # Training Stimulus aggregate (max dose per band across mains).
+        # Differs from glycogen's session-cumulative additive model: a
+        # rower doing two separate VO2max sets in one session shouldn't
+        # be flagged as "double VO2max stimulated" — the adaptation
+        # response saturates per session.
+        "_stimulus_doses": session_stim_doses or None,
+        "_stimulus_systems": session_stim_systems or None,
         # Session-level intensity factor (parallel to per-workout _if_eff).
         "_if_eff": summary.get("if_eff_session"),
 

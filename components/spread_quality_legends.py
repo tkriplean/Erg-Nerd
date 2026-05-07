@@ -27,7 +27,13 @@ from services.heartrate_utils import (
     HR_ZONE_FILTER_TEXT,
     HR_ZONE_NAMES,
 )
+from services.erg_stress import (
+    STIMULUS_BAND_DEFINITIONS,
+    STIMULUS_FILTER_TEXT,
+    ZONE_BANDS_S,
+)
 from services.volume_bins import (
+    BAND_TO_BIN,
     BIN_COLORS,
     BIN_NAMES,
     POWER_ZONE_DEFINITION_TEXT,
@@ -171,6 +177,9 @@ class SpreadQualityFilters(hd.BaseState):
     active_bins = hd.Prop(hd.List(hd.Any), [])
     active_hr_bins = hd.Prop(hd.List(hd.Any), [])
     active_quality = hd.Prop(hd.List(hd.Any), [])
+    # Training Stimulus filter — list of band-seconds (20, 90, 300, 1200,
+    # 3600, 7200) corresponding to systems with dose ≥ 1.0 in the workout.
+    active_stimulus_bands = hd.Prop(hd.List(hd.Any), [])
 
 
 @hd.cached
@@ -324,3 +333,43 @@ def spread_quality_legends(
                         state.active_quality = tuple(
                             sorted(sel, key=lambda q: QUALITY_ORDER[q])
                         )
+
+        # ── Stimulus legend ──────────────────────────────────────────────
+        # One chip per duration band; clicking filters to workouts that
+        # delivered ≥ 1.0× stimulus dose to that system.  Disjunctive
+        # within the legend (multi-select shows workouts hitting *any* of
+        # the selected systems), conjunctive across legends.
+        active_stimulus: set[int] = set(state.active_stimulus_bands)
+        with hd.hbox(
+            gap=0.75,
+            align="center",
+            padding=(0.25, 0, 0.5, 0),
+            wrap="wrap",
+            justify="center",
+        ):
+            hd.text(
+                "Stimulus",
+                font_size="small",
+                font_weight="bold",
+                font_color="neutral-600",
+                min_width=7,
+            )
+            for band_s in ZONE_BANDS_S:
+                bin_idx = BAND_TO_BIN[band_s]
+                name = BIN_NAMES[bin_idx]
+                with hd.scope(f"stim_{name}"):
+                    color_str = BIN_COLORS[bin_idx][0 if is_dark else 1]
+                    clicked = legend_chip(
+                        name=name,
+                        color_str=color_str,
+                        is_active=band_s in active_stimulus,
+                        definition=STIMULUS_BAND_DEFINITIONS.get(band_s, ""),
+                        filter_rule=STIMULUS_FILTER_TEXT.get(band_s, ""),
+                    )
+                    if clicked:
+                        sel = set(state.active_stimulus_bands)
+                        if band_s in sel:
+                            sel.discard(band_s)
+                        else:
+                            sel.add(band_s)
+                        state.active_stimulus_bands = tuple(sorted(sel))

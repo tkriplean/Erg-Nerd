@@ -76,7 +76,12 @@ import hyperdiv as hd
 from services.volume_bins import BIN_COLORS, BIN_NAMES, swatch_svg
 from services.heartrate_utils import HR_ZONE_COLORS, HR_ZONE_NAMES
 from services.workout_quality import QUALITY_STYLE
-from services.erg_stress import SEVERITY_STYLE
+from services.erg_stress import (
+    SEVERITY_STYLE,
+    STIMULUS_T_THRESH,
+    ZONE_BANDS_S,
+)
+from services.volume_bins import BAND_TO_BIN
 from services.formatters import fmt_distance
 
 
@@ -214,6 +219,9 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
     ),
     "glycogen_used": ColumnDef(
         "glycogen_used", "Gly Used", "5rem", format="glycogen_used"
+    ),
+    "stimulus": ColumnDef(
+        "stimulus", "Stimulus", "5.5rem", renderer="stimulus"
     ),
     # ── Stateful columns ─────────────────────────────────────────────────
     "structure_filter": ColumnDef(
@@ -489,6 +497,28 @@ def _enrich_opts(key: str, opts: dict) -> dict:
                 s: {"label": v["label"], "bg": _rgba_css(v["bg"])}
                 for s, v in SEVERITY_STYLE.items()
             },
+        }
+    if key == "stimulus":
+        is_dark = hd.theme().is_dark
+        # Per-band metadata for the JS strip + tooltip.  Bands are in
+        # ZONE_BANDS_S order (shortest → longest); colors / names / swatches
+        # pull from BIN_COLORS by skipping index 0 (Rest) via BAND_TO_BIN.
+        bands_list = list(ZONE_BANDS_S)
+        bin_idx_per_band = [BAND_TO_BIN[d] for d in bands_list]
+        zone_names = [BIN_NAMES[i] for i in bin_idx_per_band]
+        bar_colors = _theme_bar_colors(
+            tuple(BIN_COLORS[i] for i in bin_idx_per_band), is_dark
+        )
+        swatch_uris = _theme_swatches(
+            tuple(BIN_COLORS[i] for i in bin_idx_per_band), is_dark
+        )
+        return {
+            **opts,
+            "bands": bands_list,
+            "colors": bar_colors,
+            "zone_names": zone_names,
+            "swatch_uris": swatch_uris,
+            "t_thresh": {int(d): float(STIMULUS_T_THRESH[d]) for d in bands_list},
         }
     return opts
 

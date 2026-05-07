@@ -547,6 +547,19 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     severity:          (r) => r._severity_score != null ? r._severity_score : -1,
     anaerobic_strain:  (r) => r._anaerobic_strain != null ? r._anaerobic_strain : -1,
     glycogen_used:     (r) => r._glycogen_used != null ? r._glycogen_used : -1,
+    stimulus:          (r) => {
+      // Sort by count of fully-stimulated systems, then by max dose as tiebreak.
+      const doses = r._stimulus_doses;
+      if (!doses) return -1;
+      let count = 0;
+      let maxDose = 0;
+      for (const k in doses) {
+        const v = doses[k] || 0;
+        if (v >= 1.0) count++;
+        if (v > maxDose) maxDose = v;
+      }
+      return count + maxDose / 1000;
+    },
     rank_event:        (r, opts) => (opts && opts.event_order && opts.event_order[r.event_key]) ?? 99,
     rank_date:         (r) => r.date_iso || "",
     rank_age:          (r) => r.age || 0,
@@ -922,6 +935,12 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       return el("div", { style: { width: "100%" } },
         el("img", { class: "dist-img", src: r._dist_uri }));
     },
+
+    stimulus(r, col) {
+      const doses = r._stimulus_doses;
+      if (!doses) return emDash();
+      return _stimulusStripCell(doses, col);
+    },
   };
 
   // ── Stacked-bar builder (work-meter fraction per zone, bin 0 = Rest skipped) ──
@@ -985,6 +1004,116 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       svg.appendChild(rect);
     }
     return svg;
+  }
+
+  // ── Stimulus strip builder (six per-band cells, proportional fill) ───
+  // Renders a row of six SVG cells, one per duration band.  Each cell's
+  // fill height is proportional to the workout's stimulus dose for that
+  // band, clamped at 1.0 (anything beyond fills the cell completely):
+  //
+  //   dose = 0      empty cell (no rect, blank space)
+  //   dose ∈ (0,1]  filled rect with height = dose × cell_height
+  //   dose > 1.0    full cell (clamped)
+  //
+  // The 6 bands are passed in via `opts.bands` (ordered list of band-second
+  // keys: [20, 90, 300, 1200, 3600, 7200]) plus `opts.colors` (one rgba per
+  // band).  When *all* doses are zero, the caller renders an em-dash
+  // instead of this strip.
+  function _buildStimulusStrip(doses, opts, widthRem, heightRem) {
+    const SVG_NS = "http://www.w3.org/2000/svg";
+    const bands = opts.bands || [20, 90, 300, 1200, 3600, 7200];
+    const colors = opts.colors || [];
+    const N = bands.length;
+    const cellW = 12;
+    const gap = 1;
+    const W = N * cellW + (N - 1) * gap;
+    const H = 12;
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("xmlns", SVG_NS);
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    svg.setAttribute("preserveAspectRatio", "none");
+    svg.setAttribute("class", "stim-strip");
+    svg.style.width = (widthRem || 4.5) + "rem";
+    svg.style.height = (heightRem || 0.75) + "rem";
+    svg.style.display = "block";
+    for (let i = 0; i < N; i++) {
+      const band = bands[i];
+      const dose = (doses && doses[band]) || (doses && doses[String(band)]) || 0;
+      if (dose <= 0) continue;  // empty cell — no rect, no outline
+      const x = i * (cellW + gap);
+      const color = colors[i] || "rgba(160,160,160,0.85)";
+      const fillFrac = Math.min(1.0, dose);  // clamp at 1.0 visually
+      const fillH = (H - 2) * fillFrac;
+      const fillY = H - 1 - fillH;
+      const fill = document.createElementNS(SVG_NS, "rect");
+      fill.setAttribute("x", x + 1);
+      fill.setAttribute("y", fillY);
+      fill.setAttribute("width", cellW - 2);
+      fill.setAttribute("height", fillH);
+      fill.setAttribute("fill", color);
+      svg.appendChild(fill);
+    }
+    return svg;
+  }
+
+  function _stimulusStripCell(doses, col) {
+    const opts = col.opts || {};
+    const bands = opts.bands || [20, 90, 300, 1200, 3600, 7200];
+
+    // Detect the "recovery row" case: every band's dose is zero.  Render
+    // an em-dash instead of the strip — visually quieter and signals
+    // "this workout was a recovery row" rather than ambiguously empty.
+    let anyDose = false;
+    for (const b of bands) {
+      const v = (doses && doses[b]) || (doses && doses[String(b)]) || 0;
+      if (v > 0) { anyDose = true; break; }
+    }
+
+    const trigger = el("div", { class: "stim" });
+    if (!anyDose) {
+      trigger.appendChild(el("span", { class: "muted" }, "—"));
+    } else {
+      trigger.appendChild(
+        _buildStimulusStrip(doses, opts, opts.strip_w || 4.5, opts.strip_h || 0.75)
+      );
+    }
+
+    const buildBody = () => {
+      const body = el("div", { class: "tt-body" });
+      const names = opts.zone_names || [];
+      const swatches = opts.swatch_uris || [];
+      let stimulated = [];
+      for (let i = 0; i < bands.length; i++) {
+        const band = bands[i];
+        const dose = (doses && doses[band]) || (doses && doses[String(band)]) || 0;
+        const name = names[i] || String(band) + "s";
+        const state = dose >= 2.0 ? "overdose"
+                    : dose >= 1.0 ? "full"
+                    : dose >= 0.5 ? "partial"
+                    : dose > 0    ? "minimal"
+                    : "none";
+        if (dose >= 1.0) stimulated.push(name);
+        const row = el("div", { class: "row" });
+        if (swatches[i]) row.appendChild(el("img", { src: swatches[i] }));
+        row.appendChild(el("span", { class: "zname" }, name));
+        if (dose > 0) {
+          row.appendChild(el("span", { class: "pct" },
+            `${dose.toFixed(2)}× (${state})`));
+        } else {
+          row.appendChild(el("span", { class: "pct muted" }, "—"));
+        }
+        body.appendChild(row);
+      }
+      const headline = stimulated.length
+        ? `Stimulated: ${stimulated.join(" + ")}`
+        : (anyDose ? "Sub-threshold stimulus only" : "Recovery row");
+      body.appendChild(el("div", { class: "tt-title" }, "Training Stimulus"));
+      body.insertBefore(
+        el("div", { class: "tt-headline" }, headline), body.firstChild);
+      return body;
+    };
+    lazyTooltipWrap(trigger, buildBody, "top");
+    return trigger;
   }
 
   // ── Spread cell (score + bar + lazy tooltip with zone breakdown) ─────

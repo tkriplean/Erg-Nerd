@@ -110,9 +110,8 @@ import hyperdiv as hd
 
 from components.concept2_sync import get_all_workouts
 from components.reference_watts_loader import reference_watts_loader
-from components.app_context import your
 from services.threshold_cache import make_thresholds_resolver
-from services.workout_enrichment import attach_spread_and_quality
+from services.workout_enrichment import attach_spread_and_quality, attach_ess_metrics
 from services.volume_bins import (
     BIN_COLORS,
     Z3_BINS,
@@ -125,7 +124,7 @@ from services.heartrate_utils import (
 from components.hyperdiv_extensions import aligned_button, grid_box
 from components.lazy_tooltip_plugin import LazyTooltip
 from components.workout_table import WorkoutTable, always_white
-from components.app_context import get_profile
+from components.app_context import get_profile, your, AppContext
 from components.shared_ui import global_filter_ui
 from components.spread_quality_legends import (
     spread_quality_legends,
@@ -622,6 +621,18 @@ def _enrich_workouts(
             reference_pbs_for=reference_pbs_for,
         )
 
+        attach_ess_metrics(
+            interval_workouts,
+            workouts,
+            AppContext().sessions_dict or {},
+            get_profile() or {},
+            max_hr,
+            with_timeline=False,
+            thresholds_for=thresholds_for,
+            ref_watts_for=ref_watts_for,
+            reference_pbs_for=reference_pbs_for,
+        )
+
     for r in interval_workouts:
         r = dict(r)  # shallow copy so per-page fields don't leak back to AppContext
         # Z3 fraction = time at watts closest to a Z3 band's reference
@@ -980,13 +991,15 @@ def intervals_page() -> None:
             "header": "Intervals",
             "active_key": state.structure_filter,
         },
-        "stimulus",
-        "hr",
-        "quality",
         {"key": "distance", "header": "Work", "width": "6rem"},
         "work_pace",
         "time",
         "work_spm",
+        "hr",
+        "severity",
+        "stimulus",
+        "ess",
+        "glycogen_used",
         "link",
     ]
 

@@ -67,6 +67,16 @@ from components.volume_chart_plugin import VolumeChart
 from components.hyperdiv_extensions import grid_box
 from components.shared_ui import global_filter_ui
 
+from datetime import timedelta
+from services.erg_stress import STIMULUS_T_THRESH, ZONE_BANDS_S
+from services.training_load import (
+    compute_ctl_atl_tsb,
+    daily_loads_from_workouts,
+)
+from services.volume_bins import BAND_TO_BIN, BIN_COLORS, BIN_NAMES
+from components.training_load_chart_builder import build_training_load_chart_config
+from components.training_load_chart_plugin import TrainingLoadChart
+
 # HR Z3 sub-zones: bin 2 = Z4 Threshold (80–90 %), bin 1 = Z5 Max (> 90 %)
 _HR_Z3A_BINS = frozenset({2})  # Threshold
 _HR_Z3B_BINS = frozenset({1})  # Max
@@ -616,6 +626,210 @@ def _volume_section(
 
 
 # ---------------------------------------------------------------------------
+# Training-load section: stimulus rollup + days-since + CTL/ATL/TSB chart
+# ---------------------------------------------------------------------------
+
+
+def _stimulus_window_counts(workouts: list, days: int, today: date) -> dict[int, int]:
+    """Per-band count of workouts that fully stimulated that system within
+    the last ``days`` days (inclusive of today)."""
+    cutoff = today - timedelta(days=days - 1)
+    counts: dict[int, int] = {int(d): 0 for d in ZONE_BANDS_S}
+    for w in workouts:
+        ds = (w.get("date") or "")[:10]
+        try:
+            wdate = date.fromisoformat(ds)
+        except (TypeError, ValueError):
+            continue
+        if wdate < cutoff:
+            continue
+        for d in w.get("_stimulus_systems") or []:
+            counts[int(d)] = counts.get(int(d), 0) + 1
+    return counts
+
+
+def _days_since_last_stimulus(workouts: list, today: date) -> dict[int, int | None]:
+    """Per-band days since the last full-or-better stimulus.  ``None``
+    when the band has never been stimulated in the workout history."""
+    last_seen: dict[int, date] = {}
+    for w in workouts:
+        ds = (w.get("date") or "")[:10]
+        try:
+            wdate = date.fromisoformat(ds)
+        except (TypeError, ValueError):
+            continue
+        for d in w.get("_stimulus_systems") or []:
+            d_int = int(d)
+            if d_int not in last_seen or wdate > last_seen[d_int]:
+                last_seen[d_int] = wdate
+    out: dict[int, int | None] = {}
+    for d in ZONE_BANDS_S:
+        d_int = int(d)
+        if d_int in last_seen:
+            out[d_int] = (today - last_seen[d_int]).days
+        else:
+            out[d_int] = None
+    return out
+
+
+def _parse_rgba(rgba_str: str) -> tuple:
+    """Parse 'rgba(r,g,b,a)' → (r, g, b, a) tuple."""
+    try:
+        inner = rgba_str.strip()[5:-1]
+        parts = [p.strip() for p in inner.split(",")]
+        return (int(parts[0]), int(parts[1]), int(parts[2]), float(parts[3]))
+    except Exception:
+        return (128, 128, 128, 0.8)
+
+
+def _training_load_section(workouts: list, is_dark: bool) -> None:
+    """Bottom-of-Volume-Page training-load panel.
+
+    Three sub-panels:
+      A. Per-system stimulus counts over 7 / 28-day windows.
+      B. Days-since-last-stimulus per system, color-coded against
+         adaptation-decay timescales (≤7d green, 8–14d yellow, >14d red).
+      C. CTL / ATL / TSB time-series chart (Banister PMC).
+    """
+    today = date.today()
+
+    with hd.box(
+        padding=(2, 1, 2, 1),
+        gap=1.5,
+        border_top="1px solid neutral-200",
+        margin_top=2,
+    ):
+        hd.h3("Training Load")
+        hd.text(
+            "Multi-session view of per-system stimulus delivery and "
+            "Banister-style fitness/fatigue (CTL / ATL / TSB).",
+            font_size="small",
+            font_color="neutral-500",
+        )
+
+        # ── Panel A + B (stimulus counts + days-since) side-by-side ──
+        with hd.hbox(gap=2, wrap="wrap", align="start"):
+            # Panel A: stimulus rollup
+            with hd.box(gap=0.5, min_width=20):
+                hd.text(
+                    "Stimulus this week / month",
+                    font_size="small",
+                    font_weight="bold",
+                    font_color="neutral-700",
+                )
+                counts_7 = _stimulus_window_counts(workouts, 7, today)
+                counts_28 = _stimulus_window_counts(workouts, 28, today)
+                with grid_box(grid_template_columns="auto 4rem 4rem", gap=0.4):
+                    hd.text("System", font_size="x-small", font_weight="semibold")
+                    hd.text("7-day", font_size="x-small", font_weight="semibold")
+                    hd.text("28-day", font_size="x-small", font_weight="semibold")
+                    for d in ZONE_BANDS_S:
+                        bin_idx = BAND_TO_BIN[d]
+                        name = BIN_NAMES[bin_idx]
+                        color_str = BIN_COLORS[bin_idx][0 if is_dark else 1]
+                        with hd.scope(f"stim_count_{d}"):
+                            with hd.hbox(gap=0.3, align="center"):
+                                hd.box(
+                                    width=0.7,
+                                    height=0.7,
+                                    background_color=_parse_rgba(color_str),
+                                    border_radius="small",
+                                )
+                                hd.text(name, font_size="small")
+                            hd.text(
+                                str(counts_7[d]),
+                                font_size="small",
+                                font_color=(
+                                    "neutral-400" if counts_7[d] == 0 else "neutral-800"
+                                ),
+                            )
+                            hd.text(
+                                str(counts_28[d]),
+                                font_size="small",
+                                font_color=(
+                                    "neutral-400"
+                                    if counts_28[d] == 0
+                                    else "neutral-800"
+                                ),
+                            )
+
+            # Panel B: days-since-last-stimulus
+            with hd.box(gap=0.5, min_width=20):
+                hd.text(
+                    "Days since last stimulus",
+                    font_size="small",
+                    font_weight="bold",
+                    font_color="neutral-700",
+                )
+                days_since = _days_since_last_stimulus(workouts, today)
+                with grid_box(grid_template_columns="auto 4rem", gap=0.4):
+                    hd.text("System", font_size="x-small", font_weight="semibold")
+                    hd.text("Days", font_size="x-small", font_weight="semibold")
+                    for d in ZONE_BANDS_S:
+                        bin_idx = BAND_TO_BIN[d]
+                        name = BIN_NAMES[bin_idx]
+                        color_str = BIN_COLORS[bin_idx][0 if is_dark else 1]
+                        days = days_since[d]
+                        if days is None:
+                            label = "never"
+                            color = "neutral-400"
+                        elif days <= 7:
+                            label = f"{days}d"
+                            color = "success-600"
+                        elif days <= 14:
+                            label = f"{days}d"
+                            color = "warning-600"
+                        else:
+                            label = f"{days}d"
+                            color = "danger-600"
+                        with hd.scope(f"days_since_{d}"):
+                            with hd.hbox(gap=0.3, align="center"):
+                                hd.box(
+                                    width=0.7,
+                                    height=0.7,
+                                    background_color=_parse_rgba(color_str),
+                                    border_radius="small",
+                                )
+                                hd.text(name, font_size="small")
+                            hd.text(label, font_size="small", font_color=color)
+
+        # ── Panel C: CTL / ATL / TSB chart ──────────────────────────
+        with hd.box(gap=0.5):
+            hd.text(
+                "Fitness / Fatigue / Form (CTL / ATL / TSB)",
+                font_size="small",
+                font_weight="bold",
+                font_color="neutral-700",
+            )
+            hd.text(
+                "Banister model: CTL (blue) = 42-day exponentially-weighted "
+                "ESS (fitness); ATL (red) = 7-day EW ESS (fatigue); TSB "
+                "(filled area) = CTL − ATL (form, on the right axis).  "
+                "Background bands mark TrainingPeaks PMC zones — drag the "
+                "brush below to window the view.",
+                font_size="x-small",
+                font_color="neutral-500",
+            )
+            # Pass the full history; the plugin's navigator strip handles
+            # windowing client-side without rerunning Python.
+            daily = daily_loads_from_workouts(workouts)
+            if not daily:
+                hd.text(
+                    "No ESS data yet.",
+                    font_size="small",
+                    font_color="neutral-400",
+                )
+            else:
+                pmc = compute_ctl_atl_tsb(daily)
+                cfg = build_training_load_chart_config(
+                    pmc, is_dark=is_dark, initial_window_days=180
+                )
+                if cfg is not None:
+                    with hd.box():
+                        TrainingLoadChart(config=cfg)
+
+
+# ---------------------------------------------------------------------------
 # Tab entry point
 # ---------------------------------------------------------------------------
 
@@ -645,3 +859,30 @@ def volume_page() -> None:
             profile,
             is_owner=ctx.is_owner,
         )
+
+        # Training-load section needs ESS metrics on each workout — attach
+        # them now if not already present.  The cache makes repeat renders
+        # cheap.  Profile drives mass_kg for glycogen / severity, which is
+        # not used by the training-load panel itself but matches the
+        # standard enrichment path.
+        if AppContext().sessions_dict is not None:
+            try:
+                _, _all = result
+                from services.heartrate_utils import resolve_max_hr
+                from services.workout_enrichment import attach_ess_metrics
+
+                _max_hr, _ = resolve_max_hr(profile or {}, _all)
+                attach_ess_metrics(
+                    all_workouts,
+                    _all,
+                    AppContext().sessions_dict or {},
+                    profile=profile,
+                    max_hr=_max_hr,
+                    with_timeline=False,
+                )
+            except Exception:
+                # Don't crash the volume page if enrichment fails; the
+                # training-load section will simply show empty panels.
+                pass
+
+        _training_load_section(all_workouts, is_dark=hd.theme().is_dark)

@@ -54,7 +54,7 @@ from services.heartrate_utils import (
     HR_ZONE_NAMES,
     resolve_max_hr,
 )
-from services.volume_bins import BIN_COLORS, BIN_NAMES
+from services.volume_bins import BAND_TO_BIN, BIN_COLORS, BIN_NAMES
 from services.workout_enrichment import attach_ess_metrics, attach_spread_and_quality
 
 from components.workout_chart_builder import (
@@ -182,6 +182,17 @@ def _session_rollup(workout: dict) -> None:
     strain = summary.get("anaerobic_strain") or 0.0
     glycogen = summary.get("glycogen_used")
     duration_s = int(summary.get("duration_s") or 0)
+
+    # Session-level stimulus aggregate: max dose per band across the
+    # session's per-workout records (matches the session_rollup convention).
+    session_stim_systems: list[int] = []
+    per_workout_recs = summary.get("per_workout") or []
+    if per_workout_recs:
+        agg: dict[int, float] = {}
+        for pw in per_workout_recs:
+            for band, dose in (pw.get("stimulus_doses") or {}).items():
+                agg[int(band)] = max(agg.get(int(band), 0.0), float(dose))
+        session_stim_systems = sorted(d for d, v in agg.items() if v >= 1.0)
     minutes = duration_s // 60
     seconds = duration_s % 60
 
@@ -212,6 +223,15 @@ def _session_rollup(workout: dict) -> None:
                 gly_pct = round(glycogen * 100)
                 gly_warn = " ⚠" if glycogen > 1 else ""
                 _stat("Glycogen Used", f"{gly_pct}%{gly_warn}")
+            if per_workout_recs:
+                stim_text = (
+                    " + ".join(
+                        BIN_NAMES[BAND_TO_BIN[d]] for d in session_stim_systems
+                    )
+                    if session_stim_systems
+                    else "—"
+                )
+                _stat("Stimulated", stim_text)
             _stat(
                 "Session Time",
                 f"{minutes}:{seconds:02d}"
@@ -302,6 +322,8 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
         # The two reservoirs sit adjacent so the limiter story is legible
         # at a glance: W' Used dominates short max efforts (2k, sprints),
         # Glycogen Used dominates long endurance efforts (HM, marathon).
+        # Training Stimulus follows: which physiological systems received
+        # an adaptation-grade dose from this workout.
         if has_ess:
             with hd.hbox(wrap="wrap", gap=0):
                 if workout.get("_severity"):
@@ -315,6 +337,15 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
                     gly = workout["_glycogen_used"]
                     gly_warn = " ⚠" if gly > 1 else ""
                     _stat("Glycogen Used", f"{round(gly * 100)}%{gly_warn}")
+                stim_systems = workout.get("_stimulus_systems")
+                if stim_systems is not None:
+                    if stim_systems:
+                        names = " + ".join(
+                            BIN_NAMES[BAND_TO_BIN[d]] for d in stim_systems
+                        )
+                    else:
+                        names = "—"
+                    _stat("Stimulated", names)
 
         with hd.hbox(wrap="wrap", gap=0):
             if workout.get("distance"):
@@ -1347,6 +1378,7 @@ def _render_similar_workouts(workout, all_workouts, max_hr, profile, state):
                     "severity",
                     "anaerobic_strain",
                     "glycogen_used",
+                    "stimulus",
                     "similarity",
                     compare_col_entry,
                     "link",
@@ -1368,6 +1400,7 @@ def _render_similar_workouts(workout, all_workouts, max_hr, profile, state):
                     "severity",
                     "anaerobic_strain",
                     "glycogen_used",
+                    "stimulus",
                     "similarity",
                     compare_col_entry,
                     "link",
@@ -1761,6 +1794,7 @@ def workout_page(workout_id: int) -> None:
                     "severity",
                     "anaerobic_strain",
                     "glycogen_used",
+                    "stimulus",
                     {"key": "link", "current_id": str(workout["id"])},
                 ]
                 WorkoutTable(
