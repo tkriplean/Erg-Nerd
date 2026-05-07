@@ -30,12 +30,14 @@ Interval-only fields (when ``is_interval``):
 **Stage 3 (render-time)** — ``attach_spread_and_quality`` / ``attach_quality_only``
 mutate each workout dict in-place to attach the heavier metrics:
 
-  _zone_time_fractions dict | None   Argmax-band time fractions per duration
-                                     band (sums to 1.0 over the six bands).
-                                     Drives the Zone Spread bar inside the
-                                     Watts cell + the filter chips.
-  _zone_saturations    dict | None   Mean ``zone_ratio_d(t)`` per band over
-                                     work-only seconds.  Diagnostic / tooltip.
+  _zone_time_fractions dict | None   Time-fraction per duration band (sums
+                                     to 1.0 over the six bands).  Each
+                                     work-second classified to argmin_d
+                                     ``|P − RW_d|`` — i.e. the band whose
+                                     reference watts is closest to that
+                                     second's power.  Drives the Zone
+                                     Spread bar inside the Watts cell +
+                                     the filter chips.
   _hr_bin_meters      list | None    Per-HR-bin meter counts when max_hr known
   _hr_spread_score    float | None   0–100 weighted HR spread
   _quality            str | None     "Low"/"Medium"/"High"/"Ultra"
@@ -282,20 +284,18 @@ def attach_spread_and_quality(
         wid = r["id"]
 
         zsum = get_or_compute(
-            "zone_summary_v1",
+            "zone_summary_v2",
             wid,
             h,
             lambda r=r: compute_workout_zone_summary(r, rw_at_duration),
         )
         if zsum:
             r["_zone_time_fractions"] = zsum["zone_time_fractions"]
-            r["_zone_saturations"] = zsum["zone_saturations"]
             r["_zone_bin_fractions"] = zone_fractions_to_bin_list(
                 zsum["zone_time_fractions"]
             )
         else:
             r["_zone_time_fractions"] = None
-            r["_zone_saturations"] = None
             r["_zone_bin_fractions"] = None
 
         if max_hr:
@@ -459,11 +459,10 @@ def _assign_ess(r: dict, sm: Optional[dict], wid) -> None:
     r["_severity_score"] = pw["severity_score"] if pw else None
     r["_anaerobic_strain"] = pw["anaerobic_strain"] if pw else None
     # Zone Spread fields — overwrite anything attach_spread_and_quality
-    # produced.  Same workout-isolated EMA shape, just sharing the loop
-    # that the session pass already runs.
+    # produced.  Same closest-RW-band classification, just sharing the
+    # session pass's per-second power array instead of rebuilding it.
     if pw and pw.get("zone_time_fractions"):
         r["_zone_time_fractions"] = pw["zone_time_fractions"]
-        r["_zone_saturations"] = pw["zone_saturations"]
         r["_zone_bin_fractions"] = zone_fractions_to_bin_list(
             pw["zone_time_fractions"]
         )

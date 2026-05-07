@@ -624,9 +624,9 @@ def _enrich_workouts(
 
     for r in interval_workouts:
         r = dict(r)  # shallow copy so per-page fields don't leak back to AppContext
-        # Z3 fraction = time argmax-classified to a Z3 band (Sprint /
-        # Anaerobic / VO2max).  Drives the grid colouring.  ``Z3_BINS`` are
-        # the BIN_NAMES indices for those three bands.
+        # Z3 fraction = time at watts closest to a Z3 band's reference
+        # watts (Sprint / Anaerobic / VO2max).  Drives the grid colouring.
+        # ``Z3_BINS`` are the BIN_NAMES indices for those three bands.
         bf = r.get("_zone_bin_fractions") or [0.0] * 7
         r["_z3"] = sum(bf[i] for i in Z3_BINS) if any(bf) else 0.0
         col, row = _compute_grid_placement(r)

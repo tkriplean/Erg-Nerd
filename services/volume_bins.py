@@ -21,8 +21,8 @@ the multi-band intensity model, ordered shortest → longest:
 A workout's volume is distributed across bins 1–6 by its
 ``_zone_time_fractions``: bin meters = total_work_meters × fraction.  This
 keeps the Volume page's stacked-bar shape but gives each bar a meaningful
-duration-band semantics (a workout that argmax-classified its work seconds
-to the 20-minute band shows up as Threshold-coloured volume).
+duration-band semantics (a workout that spent most of its work-seconds at
+watts closest to ``RW_20min`` shows up as Threshold-coloured volume).
 
 Exported:
     BIN_NAMES                   — ordered display names (index 0 = Rest)
@@ -105,7 +105,7 @@ BAND_TO_BIN: dict[int, int] = {
 }
 
 # Bin-index → band-seconds, the inverse mapping.  Used to translate the
-# argmax-band tally back to a bin index for stacked bars.
+# closest-RW-band tally back to a bin index for stacked bars.
 BIN_TO_BAND: tuple[Optional[int], ...] = (
     None,  # 0 Rest — not a duration band
     20,
@@ -157,18 +157,18 @@ ZONE_FILTER_THRESHOLD = 0.10
 # to *sustain* a power level for the band's saturation to fully reflect it.
 POWER_ZONE_DEFINITION_TEXT: dict[int, str] = {
     0: "Interval rest distance — not counted toward zone spread.",
-    1: "Sprint band — 20-second EMA dominates.  Saturated by very short maximal efforts.",
-    2: "Anaerobic band — 90-second EMA dominates.  Saturated by ~1–2 minute supra-threshold efforts.",
-    3: "VO2max band — 5-minute EMA dominates.  Saturated by 3–8 minute hard efforts.",
-    4: "Threshold band — 20-minute EMA dominates.  Saturated by 10–30 minute threshold work.",
-    5: "Tempo band — 60-minute EMA dominates.  Saturated by sustained sub-threshold tempo work.",
-    6: "Endurance band — 2-hour EMA dominates.  Saturated by long aerobic / Z2 cruising.",
+    1: "Sprint band — power closest to RW(20 s).  Very short maximal efforts.",
+    2: "Anaerobic band — power closest to RW(90 s).  ~1–2 minute supra-threshold efforts.",
+    3: "VO2max band — power closest to RW(5 min).  3–8 minute hard efforts.",
+    4: "Threshold band — power closest to RW(20 min).  10–30 minute threshold work.",
+    5: "Tempo band — power closest to RW(60 min).  Sustained sub-threshold tempo work.",
+    6: "Endurance band — power closest to RW(2 h).  Long aerobic / Z2 cruising.",
 }
 
 # Filter rule descriptions for chip tooltips.  All six bands share the same
 # threshold so the language is uniform.
 POWER_ZONE_FILTER_TEXT: dict[int, str] = {
-    i: f"Selected: workouts with ≥{int(ZONE_FILTER_THRESHOLD * 100)}% of work time argmax-classified to {BIN_NAMES[i]}."
+    i: f"Selected: workouts with ≥{int(ZONE_FILTER_THRESHOLD * 100)}% of work time at watts closest to {BIN_NAMES[i]}'s reference watts."
     for i in range(1, N_BINS)
 }
 
@@ -294,7 +294,7 @@ def workout_zone_meters(workout: dict) -> tuple:
     Bin 0 is interval rest distance.  Bins 1–6 are the six duration bands;
     each bin's meters are the workout's total work meters scaled by the
     workout's ``_zone_time_fractions[band]`` value (i.e. the time fraction
-    spent argmax-classified to that band).
+    of work-seconds at watts closest to that band's reference watts).
 
     Returns a zero vector when ``_zone_time_fractions`` is missing — this
     happens for workouts without resolvable reference watts at the

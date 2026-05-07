@@ -532,8 +532,9 @@ def _volume_section(
             )
             rows = _quality_period_rows(aggregated, view)
         else:
-            # Power Spread mode: classify each work-second to its argmax
-            # duration band and distribute meters by the time-fractions.
+            # Power Spread mode: classify each work-second to the duration
+            # band whose reference watts is closest to that second's power,
+            # then distribute meters by the resulting time-fractions.
             # Gate on the reference-watts loader so the first-time index
             # build shows a progress bar instead of blocking the render.
             if not reference_watts_loader(all_workouts):

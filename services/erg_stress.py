@@ -167,10 +167,10 @@ ZONE_BAND_LABELS: dict[int, str] = {
 EMA_TAU_FACTORS: dict[int, float] = {
     20: 0.30,
     90: 0.30,
-    300: 0.33,
-    1200: 0.33,
-    3600: 0.40,
-    7200: 0.40,
+    300: 0.30,
+    1200: 0.30,
+    3600: 0.30,
+    7200: 0.30,
 }
 
 
@@ -435,28 +435,27 @@ def compute_workout_zone_summary(
     workout: dict,
     ref_watts_at_duration_fn: Callable,
 ) -> Optional[dict]:
-    """Workout-isolated zone time fractions + per-band saturation means.
+    """Workout-isolated zone time fractions by closest-reference-watts band.
 
-    Runs a six-band EMA against the workout's per-second power timeline
-    (built from :func:`build_segments`), then bins each work-second to its
-    argmax band over a stride-sampled subset (~600 samples max).  Returns:
+    Classifies each *work*-second of the workout to the duration band whose
+    reference watts (``RW_d``) is closest in absolute distance to the
+    second's power.  Returns:
 
-        {
-            "zone_time_fractions": {band_seconds: fraction, ...},
-            "zone_saturations":   {band_seconds: mean_zone_ratio, ...},
-        }
+        {"zone_time_fractions": {band_seconds: fraction, ...}}
 
-    Both dicts have one entry per :data:`ZONE_BANDS_S`; ``zone_time_fractions``
-    sums to 1.0 over work-only seconds (or 0 if the workout has no work
-    seconds).
+    The dict has one entry per :data:`ZONE_BANDS_S` and sums to 1.0 over
+    work-only seconds (or 0 if the workout has no work seconds).
 
     Returns ``None`` when the workout cannot be summarised — no segments,
     zero duration, or missing reference watts at any band.
 
-    The EMAs seed at zero at the workout's start, so this function reports
-    *workout-isolated* signatures (a cooldown after a race shows the cooldown's
-    own profile, not the inherited race state).  Same convention as the
-    per-workout column values in :func:`compute_session_metrics`.
+    Semantics — this is a **power-level distribution** (Power Spread): a
+    sample's classification depends only on its instantaneous watts vs. the
+    rower's six reference points, not on duration-band activation history.
+    Distinct from the multi-band EMA *intensity* signal :math:`I(t)`, which
+    is duration-aware (a 30-s sprint vs. a 30-min steady ride at the same
+    average watts produce different intensity profiles but the same power-
+    level distribution).
     """
     segments = build_segments(workout)
     if not segments:
@@ -467,12 +466,12 @@ def compute_workout_zone_summary(
         return None
 
     when = workout.get("date_dt")
-    rw_d: dict[int, float] = {}
+    rws_list: list[float] = []
     for d in ZONE_BANDS_S:
         rw = ref_watts_at_duration_fn(when, d)
         if rw is None or rw <= 0:
             return None
-        rw_d[d] = float(rw)
+        rws_list.append(float(rw))
 
     P_arr = np.zeros(duration_s, dtype=np.float64)
     kind_arr = np.empty(duration_s, dtype=object)
@@ -485,39 +484,26 @@ def compute_workout_zone_summary(
             kind_arr[s:e] = seg["kind"]
 
     n_bands = len(ZONE_BANDS_S)
-    inv_taus = [1.0 / _tau(d) for d in ZONE_BANDS_S]
-    inv_rws = [1.0 / rw_d[d] for d in ZONE_BANDS_S]
-
-    Z = np.empty((n_bands, duration_s), dtype=np.float64)
-    for i in range(n_bands):
-        a = inv_taus[i]
-        Z[i] = lfilter([a], [1.0, a - 1.0], P_arr) * inv_rws[i]
-
-    work_mask = (kind_arr == "work")
+    work_mask = kind_arr == "work"
     if not work_mask.any():
         zeros = {int(d): 0.0 for d in ZONE_BANDS_S}
-        return {"zone_time_fractions": dict(zeros), "zone_saturations": dict(zeros)}
+        return {"zone_time_fractions": dict(zeros)}
 
-    work_idx = np.where(work_mask)[0]
-    stride = max(1, work_idx.size // 600)
-    sampled_idx = work_idx[::stride]
-    Z_sampled = Z[:, sampled_idx]
-    argmax_per_sample = Z_sampled.argmax(axis=0)
-    counts = np.bincount(argmax_per_sample, minlength=n_bands)
+    rws_arr = np.asarray(rws_list, dtype=np.float64)
+    P_work = P_arr[work_mask]
+    # Classify each work-second to argmin_d |P − RW_d|.  For piecewise-
+    # constant P (segment-based source data) this is exact per-second; the
+    # broadcast cost is trivial (n_bands × n_work floats).
+    band_per_second = np.abs(P_work[None, :] - rws_arr[:, None]).argmin(axis=0)
+    counts = np.bincount(band_per_second, minlength=n_bands)
     total_count = int(counts.sum())
     fractions_arr = (
-        counts / total_count
-        if total_count
-        else np.zeros(n_bands, dtype=np.float64)
+        counts / total_count if total_count else np.zeros(n_bands, dtype=np.float64)
     )
-    saturations_arr = Z_sampled.mean(axis=1)
 
     return {
         "zone_time_fractions": {
             int(ZONE_BANDS_S[i]): float(fractions_arr[i]) for i in range(n_bands)
-        },
-        "zone_saturations": {
-            int(ZONE_BANDS_S[i]): float(saturations_arr[i]) for i in range(n_bands)
         },
     }
 
@@ -630,6 +616,7 @@ def _attach_per_workout_records(
     P_arr,
     inv_taus,
     inv_rws,
+    rws_list,
     inv_amp,
     kind_arr,
     wid_idx_arr,
@@ -652,6 +639,7 @@ def _attach_per_workout_records(
     # ESS attribution (above) still uses the time-slice integral of the
     # session-state I(t), so ``Σ ESS_workout = ESS_session`` exactly.
     n_bands = len(ZONE_BANDS_S)
+    rws_arr = np.asarray(rws_list, dtype=np.float64)
 
     # Per-workout ESS attribution.  ``wid_idx_arr`` (built in
     # :func:`_calculate_intensity` via vectorised slice assignment) maps
@@ -667,9 +655,7 @@ def _attach_per_workout_records(
             )
         else:
             sums = np.zeros(n_w, dtype=np.float64)
-        ess_by_workout = {
-            wid: float(sums[i]) for i, wid in enumerate(workout_windows)
-        }
+        ess_by_workout = {wid: float(sums[i]) for i, wid in enumerate(workout_windows)}
     else:
         ess_by_workout = {wid: 0.0 for wid in workout_windows}
 
@@ -696,43 +682,35 @@ def _attach_per_workout_records(
             I_w_arr = np.zeros(0, dtype=np.float64)
 
         # Workout intensity: mean over work-only seconds in this window.
-        # Per-band zone summary (Zone Spread): argmax-band tally and mean
-        # per-band saturation, sampled on a coarse stride (~600 samples max
-        # per workout regardless of length).  EMA values are 1-Hz for τ
-        # correctness; argmax/mean don't need 1-Hz sample density and the
-        # stride drops the tally cost ~10–20× on long sessions.
+        # Zone Spread (power-level distribution): classify each work-second
+        # to argmin_d |P − RW_d|, the duration band whose reference watts
+        # is closest to the instantaneous power.  Independent of the EMA
+        # state above — a duration-aware view lives in I(t).
         if I_w_arr.size:
-            work_w_mask = (kind_w == "work")
+            work_w_mask = kind_w == "work"
             intensity_w = (
                 float(I_w_arr[work_w_mask].mean()) if work_w_mask.any() else 0.0
             )
             if work_w_mask.any():
-                work_idx = np.where(work_w_mask)[0]
-                stride = max(1, work_idx.size // 600)
-                sampled_work_idx = work_idx[::stride]
-                Z_sampled = Z_w[:, sampled_work_idx]
-                argmax_per_sample = Z_sampled.argmax(axis=0)
-                counts = np.bincount(argmax_per_sample, minlength=n_bands)
+                P_work = P_w[work_w_mask]
+                band_per_second = np.abs(P_work[None, :] - rws_arr[:, None]).argmin(
+                    axis=0
+                )
+                counts = np.bincount(band_per_second, minlength=n_bands)
                 total_count = int(counts.sum())
                 fractions_arr = (
                     counts / total_count
                     if total_count
                     else np.zeros(n_bands, dtype=np.float64)
                 )
-                saturations_arr = Z_sampled.mean(axis=1)
             else:
                 fractions_arr = np.zeros(n_bands, dtype=np.float64)
-                saturations_arr = np.zeros(n_bands, dtype=np.float64)
         else:
             intensity_w = 0.0
             fractions_arr = np.zeros(n_bands, dtype=np.float64)
-            saturations_arr = np.zeros(n_bands, dtype=np.float64)
 
         zone_time_fractions = {
             int(ZONE_BANDS_S[i]): float(fractions_arr[i]) for i in range(n_bands)
-        }
-        zone_saturations = {
-            int(ZONE_BANDS_S[i]): float(saturations_arr[i]) for i in range(n_bands)
         }
 
         slc = I_w_arr if I_w_arr.size else np.zeros(1, dtype=np.float64)
@@ -748,9 +726,7 @@ def _attach_per_workout_records(
         if w_bal_curve is not None and w_prime:
             wb_slc = w_bal_curve[t_start:t_end]
             if wb_slc.size:
-                wb_start = (
-                    float(w_bal_curve[t_start - 1]) if t_start > 0 else w_prime
-                )
+                wb_start = float(w_bal_curve[t_start - 1]) if t_start > 0 else w_prime
                 strain_w = max(
                     0.0, min(1.0, (wb_start - float(wb_slc.min())) / w_prime)
                 )
@@ -775,7 +751,6 @@ def _attach_per_workout_records(
                 "severity_bucket": severity_bucket(sev_w) or "Low",
                 "anaerobic_strain": strain_w,
                 "zone_time_fractions": zone_time_fractions,
-                "zone_saturations": zone_saturations,
             }
         )
     return per_workout_records
@@ -911,6 +886,7 @@ def _calculate_intensity(
         I_arr,
         workout_windows,
         inv_rws,
+        rws_list,
         inv_taus,
         inv_amp,
         zone_arrs,
@@ -929,7 +905,7 @@ def _compute_wbal(cp, w_prime, total_session_s, P_arr, kind_arr):
     if cp and w_prime and cp > 0 and w_prime > 0:
         # DCP: mean of P (work seconds only) below CP.  When the rower is
         # rarely below CP we don't have good DCP — use mid-range τ_W'.
-        non_gap = (kind_arr != "gap")
+        non_gap = kind_arr != "gap"
         below = non_gap & (P_arr < cp)
         DCP = float(P_arr[below].mean()) if below.any() else cp / 2.0
         tau_w = 546.0 * math.exp(-0.01 * DCP) + 316.0
@@ -941,7 +917,7 @@ def _compute_wbal(cp, w_prime, total_session_s, P_arr, kind_arr):
         #   work, P≤cp:   dW = (w_prime - w_bal) / tau_w     (recovery)
         # The recovery term depends on the running ``w_bal``, so we keep
         # the loop in Python — but on a preallocated numpy array.
-        is_gap = (kind_arr == "gap")
+        is_gap = kind_arr == "gap"
         is_above = (~is_gap) & (P_arr > cp)
         # Depletion magnitude is constant per-second: store it once.
         depletion = np.where(is_above, P_arr - cp, 0.0)
@@ -1039,6 +1015,7 @@ def compute_session_metrics(
         I_arr,
         workout_windows,
         inv_rws,
+        rws_list,
         inv_taus,
         inv_amp,
         zone_arrs,
@@ -1093,6 +1070,7 @@ def compute_session_metrics(
         P_arr,
         inv_taus,
         inv_rws,
+        rws_list,
         inv_amp,
         kind_arr,
         wid_idx_arr,
@@ -1103,7 +1081,7 @@ def compute_session_metrics(
     # Same convention as per-workout intensity: arithmetic mean over
     # work-only seconds in the session.  Includes carryover state across
     # workouts.
-    work_mask = (kind_arr == "work")
+    work_mask = kind_arr == "work"
     intensity_session = float(I_arr[work_mask].mean()) if work_mask.any() else 0.0
 
     if with_timeline:

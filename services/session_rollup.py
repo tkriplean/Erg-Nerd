@@ -416,7 +416,6 @@ def _parent_from_session(
         # list onto the parent row so the JS Watts cell can render the
         # session-row's stacked Zone Spread bar.
         "_zone_time_fractions": most_severe.get("_zone_time_fractions"),
-        "_zone_saturations": most_severe.get("_zone_saturations"),
         "_zone_bin_fractions": most_severe.get("_zone_bin_fractions"),
         "_hr_spread_score": most_severe.get("_hr_spread_score"),
         "_hr_bin_meters": most_severe.get("_hr_bin_meters"),
