@@ -30,7 +30,17 @@ The table is rendered entirely in JavaScript by
 Sort and pagination state live in JS — no Python round-trip on header
 clicks or page changes.  Filter changes that should reset the page push
 a different ``reset_token`` string; JS resets sort + page when the token
-changes.
+changes.  Sort/page/expanded state is mirrored to ``sessionStorage`` keyed
+by the plugin's component id so a return-trip to ``/workout/<id>`` and
+back via the browser's back button restores the table to where it was.
+
+Public profile prefix
+---------------------
+``WorkoutTable`` reads :class:`AppContext` at render time to derive a
+``link_prefix`` (empty in owner mode, ``"/u/{uid}"`` when viewing a
+public profile) and ships it to the plugin.  The JS plugin prepends it
+to every ``/workout/<id>`` "view" anchor so the public dashboard's URL
+space stays consistent.
 
 Filter strategy
 ---------------
@@ -382,6 +392,10 @@ class _WorkoutTablePlugin(hd.Plugin):
     rows_per_page = hd.Prop(hd.Int, _DEFAULT_ROWS_PER_PAGE)
     reset_token = hd.Prop(hd.String, "")
     tree_mode = hd.Prop(hd.Bool, False)
+    # Prefix prepended to "/workout/<id>" links rendered by the plugin.
+    # Empty in owner mode; "/u/{uid}" when viewing a public profile so the
+    # link stays within the public dashboard's URL space.
+    link_prefix = hd.Prop(hd.String, "")
     event_out = hd.Prop(hd.Any, None)
 
 
@@ -624,6 +638,13 @@ def WorkoutTable(
     else:
         highlight_ids = []
 
+    # In public mode every "/workout/<id>" link must stay under "/u/{uid}/"
+    # so the JS-rendered "view" anchors don't drop the viewer out of the
+    # public dashboard.  The owner mode prefix is empty.
+    from components.app_context import AppContext as _AppContext
+    _ctx = _AppContext()
+    _link_prefix = f"/u/{_ctx.user_id}" if _ctx.is_public else ""
+
     plugin = _WorkoutTablePlugin(
         rows=[_row_for_js(r) for r in results],
         column_configs=column_configs,
@@ -635,6 +656,7 @@ def WorkoutTable(
         rows_per_page=rows_per_page,
         reset_token=reset_token,
         tree_mode=tree_mode,
+        link_prefix=_link_prefix,
     )
 
     # ── Event dispatch ───────────────────────────────────────────────────

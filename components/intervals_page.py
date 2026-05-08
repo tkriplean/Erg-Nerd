@@ -892,6 +892,20 @@ def _grid_browser(zone_workouts: list[dict], state) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Page state — connection-wide so the grid/table state survives a round-trip
+# through ``/workout/<id>``.
+# ---------------------------------------------------------------------------
+
+
+@hd.global_state
+class IntervalsPageState(hd.BaseState):
+    # tuple[str] — "col,row" keys of selected cells in the work:rest grid
+    active_cells = hd.Prop(hd.Any, ())
+    # str | None — filter table to this structure key
+    structure_filter = hd.Prop(hd.Any, None)
+
+
+# ---------------------------------------------------------------------------
 # Tab entry point
 # ---------------------------------------------------------------------------
 
@@ -927,10 +941,7 @@ def intervals_page() -> None:
 
     spread_severity_state = SpreadSeverityFilters()
 
-    state = hd.state(
-        active_cells=tuple(),  # tuple[str] — "col,row" keys of selected cells
-        structure_filter=None,  # str | None — filter table to this structure key
-    )
+    state = IntervalsPageState()
 
     def _on_structure_click(payload):
         sk = payload["structure_key"]

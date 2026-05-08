@@ -458,6 +458,35 @@ def step_ms(all_ms: list, window_size: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Page state
+# ---------------------------------------------------------------------------
+# Page-level UI state lives in a connection-wide ``@hd.global_state`` so it
+# survives the round-trip when the user clicks a workout, lands on
+# ``/workout/<id>``, and presses the browser back button.  An ordinary
+# ``hd.state(...)`` call is keyed on the call-site stack — robust against
+# navigation in practice but fragile against code edits and not idiomatic
+# for state that's meant to outlive a single render of this page.
+
+
+@hd.global_state
+class WorkoutsPageState(hd.BaseState):
+    window_size = hd.Prop(hd.String, "Year")
+    # 0 = uninitialised → defaults to latest workout
+    window_end_ms = hd.Prop(hd.Int, 0)
+    # 0 = derive from window_size; non-zero after a brush resize
+    window_start_ms = hd.Prop(hd.Int, 0)
+    last_change_id = hd.Prop(hd.Int, 0)
+    last_click_seq = hd.Prop(hd.Int, 0)
+    filter_10k = hd.Prop(hd.Bool, False)
+    # "All" | "Intervals" | "Continuous"
+    filter_ivl = hd.Prop(hd.String, "All")
+    # False = pace (sec/500m); True = watts
+    show_watts = hd.Prop(hd.Bool, False)
+    # "gander" | "severity"
+    color_mode = hd.Prop(hd.String, "gander")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -467,17 +496,7 @@ def workouts_page() -> None:
     Render the pace-vs-date focus+context chart with brush navigator,
     workout filters, and an in-window workouts table.
     """
-    state = hd.state(
-        window_size="Year",
-        window_end_ms=0,   # 0 = uninitialised → defaults to latest workout
-        window_start_ms=0, # 0 = derive from window_size; non-zero after a brush resize
-        last_change_id=0,
-        last_click_seq=0,
-        filter_10k=False,
-        filter_ivl="All",  # "All" | "Intervals Only" | "No Intervals"
-        show_watts=False,  # False = pace (sec/500m), True = watts
-        color_mode="gander",  # "gander" | "severity"
-    )
+    state = WorkoutsPageState()
 
 
     """Top-level component for the Workouts page."""
@@ -685,10 +704,12 @@ def workouts_page() -> None:
                 state.window_start_ms = chart.brush_start
 
             # ── Click-to-open: navigate to /workout/<id> when a chart dot is clicked ──
-            if chart.click_seq > state.last_click_seq:                
+            if chart.click_seq > state.last_click_seq:
                 state.last_click_seq = chart.click_seq
                 if chart.clicked_workout_id:
-                    hd.location().go(path=f"/workout/{chart.clicked_workout_id}")
+                    _ctx = AppContext()
+                    _prefix = f"/u/{_ctx.user_id}" if _ctx.is_public else ""
+                    hd.location().go(path=f"{_prefix}/workout/{chart.clicked_workout_id}")
 
             # ── Spread + Severity legend (Power Spread / HR Spread / Severity) ────────
             spread_severity_legends(max_hr)

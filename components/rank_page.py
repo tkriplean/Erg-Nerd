@@ -639,6 +639,25 @@ def _build_wr_series(rows: list[dict], state) -> list:
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Page state — connection-wide so the filter/focus/modal selections survive
+# a round-trip through ``/workout/<id>``.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+@hd.global_state
+class RankPageState(hd.BaseState):
+    include_filter = hd.Prop(hd.String, "PBs")
+    ranking_focus = hd.Prop(hd.String, "c2_age_matched")
+    k_age_match = hd.Prop(hd.Int, 0)
+    # tuple[str] — events the user requires every rower to have completed
+    modifier_must_have_events = hd.Prop(hd.Any, ())
+    modifier_exclude_unverified = hd.Prop(hd.Bool, False)
+    modifier_min_performances = hd.Prop(hd.Int, 1)
+    # The rank row currently displayed in the rank-distribution modal (or None)
+    modal_row = hd.Prop(hd.Any, None)
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Main entry point
 # ──────────────────────────────────────────────────────────────────────────
 
@@ -665,15 +684,7 @@ def rank_page() -> None:
             hd.link("Open profile", href="/profile")
         return
 
-    state = hd.state(
-        include_filter="PBs",
-        ranking_focus="c2_age_matched",
-        k_age_match=0,
-        modifier_must_have_events=(),
-        modifier_exclude_unverified=False,
-        modifier_min_performances=1,
-        modal_row=None,
-    )
+    state = RankPageState()
 
     # Snap focus away from options unsupported on the current machine.
     if not wr_machine_supported(machine):

@@ -411,6 +411,32 @@ def _results_table(workouts: list, etype: str, pb_id: int | None) -> None:
     )
 
 
+# ── Page state — connection-wide so event/filter selections survive a ────────
+#    round-trip through ``/workout/<id>``.
+
+
+@hd.global_state
+class RacePageState(hd.BaseState):
+    # (event_type, event_value); kept alongside the split fields for the
+    # legacy single-tuple API used by callers that want both at once.
+    event = hd.Prop(hd.Any, (_DEFAULT_EVENT_TYPE, _DEFAULT_EVENT_VALUE))
+    event_type = hd.Prop(hd.String, _DEFAULT_EVENT_TYPE)
+    event_value = hd.Prop(hd.Int, _DEFAULT_EVENT_VALUE)
+    include_filter = hd.Prop(hd.String, "All")
+    show_wr_boat = hd.Prop(hd.Bool, False)
+    # {(etype, evalue): result} — cached from concept2_records
+    wr_records = hd.Prop(hd.Any, {})
+    # "gender|age|weight_kg" — invalidation key for wr_records
+    wr_records_key = hd.Prop(hd.String, "")
+    # "pace" | "watts" (stroke graph)
+    chart_metric = hd.Prop(hd.String, "pace")
+    chart_show_pace = hd.Prop(hd.Bool, True)
+    chart_show_spm = hd.Prop(hd.Bool, False)
+    chart_show_hr = hd.Prop(hd.Bool, False)
+    # "pace" | "watts" (pace-vs-date scatter)
+    scatter_metric = hd.Prop(hd.String, "pace")
+
+
 # ── Main page entry point ─────────────────────────────────────────────────────
 
 
@@ -432,20 +458,7 @@ def race_page() -> None:
       5. Results table
     """
 
-    state = hd.state(
-        event=(_DEFAULT_EVENT_TYPE, _DEFAULT_EVENT_VALUE),
-        event_type=_DEFAULT_EVENT_TYPE,
-        event_value=_DEFAULT_EVENT_VALUE,
-        include_filter="All",
-        show_wr_boat=False,
-        wr_records={},  # {(etype, evalue): result} — cached from concept2_records
-        wr_records_key="",  # "gender|age|weight_kg" — invalidation key
-        chart_metric="pace",  # "pace" | "watts" (stroke graph)
-        chart_show_pace=True,
-        chart_show_spm=False,
-        chart_show_hr=False,
-        scatter_metric="pace",  # "pace" | "watts" (pace-vs-date scatter)
-    )
+    state = RacePageState()
 
     (event_type, event_value) = state.event
 

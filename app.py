@@ -217,28 +217,102 @@ _DEFAULT_PAGE = "Power Curve"
 
 
 # ---------------------------------------------------------------------------
-# Scroll-to-top on SPA navigation
+# Scroll behavior on SPA navigation
 # ---------------------------------------------------------------------------
+# Forward navigations (pushState) snap to the top of the new page.  Back
+# navigations (popstate) restore the scroll position the user was at when
+# they left.  Scroll positions are keyed by URL path+query and stashed in
+# sessionStorage so they survive even an accidental full reload during the
+# round-trip.  Restoration polls briefly because HyperDiv re-renders the
+# page asynchronously over the websocket — the document may not be tall
+# enough to hold the saved scrollY at the instant popstate fires.
 
-_SCROLL_TO_TOP_JS = """
+_SCROLL_NAV_JS = """
 (function () {
-    if (window.__scrollToTopInstalled) return;
-    window.__scrollToTopInstalled = true;
-    var _orig = history.pushState;
+    if (window.__scrollNavInstalled) return;
+    window.__scrollNavInstalled = true;
+
+    var STORAGE_KEY = "egn_scroll_y";
+    var positions = {};
+    try {
+        var raw = sessionStorage.getItem(STORAGE_KEY);
+        if (raw) positions = JSON.parse(raw) || {};
+    } catch (e) {}
+
+    function pathKey() {
+        return window.location.pathname + window.location.search;
+    }
+    function saveCurrent() {
+        positions[pathKey()] = window.scrollY || window.pageYOffset || 0;
+        try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(positions)); } catch (e) {}
+    }
+    function restoreFor(key) {
+        var target = positions[key];
+        if (typeof target !== "number" || target <= 0) {
+            window.scrollTo({ top: 0, behavior: "instant" });
+            return;
+        }
+        // Poll until the document is tall enough to honor the target
+        // scrollY (HyperDiv re-renders async over the websocket).  Cap at
+        // ~1 second so we don't poll forever on short pages.
+        var attempts = 0;
+        function tryRestore() {
+            var docHeight = Math.max(
+                document.body ? document.body.scrollHeight : 0,
+                document.documentElement ? document.documentElement.scrollHeight : 0
+            );
+            var maxScroll = Math.max(0, docHeight - window.innerHeight);
+            if (maxScroll >= target || attempts > 40) {
+                window.scrollTo({ top: target, behavior: "instant" });
+                return;
+            }
+            attempts += 1;
+            setTimeout(tryRestore, 25);
+        }
+        tryRestore();
+    }
+
+    // Tell the browser we're handling restoration ourselves; otherwise it
+    // races our async re-render and clamps to whatever height the DOM has
+    // at popstate time.
+    if ("scrollRestoration" in history) {
+        history.scrollRestoration = "manual";
+    }
+
+    var _push = history.pushState;
     history.pushState = function () {
-        _orig.apply(this, arguments);
+        saveCurrent();
+        _push.apply(this, arguments);
         window.scrollTo({ top: 0, behavior: "instant" });
     };
+    var _replace = history.replaceState;
+    history.replaceState = function () {
+        // replaceState swaps the current entry — preserve the saved scroll
+        // for the new key by carrying over the value we had for the old.
+        var oldKey = pathKey();
+        _replace.apply(this, arguments);
+        var newKey = pathKey();
+        if (oldKey !== newKey && oldKey in positions) {
+            positions[newKey] = positions[oldKey];
+            try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(positions)); } catch (e) {}
+        }
+    };
+
     window.addEventListener("popstate", function () {
-        window.scrollTo({ top: 0, behavior: "instant" });
+        // Forward navigations that piggy-back on dispatchEvent(new PopStateEvent…)
+        // — see workout_table_plugin.js:spaNavigate — set this flag so we
+        // don't restore the previous scroll for what's actually a fresh nav.
+        if (window.__ergNerdSyntheticPopstate) return;
+        restoreFor(pathKey());
     });
+    window.addEventListener("beforeunload", saveCurrent);
 })();
 """
 
 
 class _ScrollToTop(hd.Plugin):
     _name = "ScrollToTop"
-    _assets = [hd.Plugin.js(_SCROLL_TO_TOP_JS)]
+    _assets = [hd.Plugin.js(_SCROLL_NAV_JS)]
 
 
 # ---------------------------------------------------------------------------

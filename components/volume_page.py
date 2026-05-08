@@ -454,6 +454,17 @@ def _hr_callout(all_workouts: list, profile: dict, is_owner: bool = True) -> tup
         )
 
 
+# Page state — connection-wide so view/mode toggles survive a round-trip
+# through ``/workout/<id>``.
+@hd.global_state
+class VolumePageState(hd.BaseState):
+    view = hd.Prop(hd.String, "monthly")
+    # "power_spread" | "hr" | "severity"
+    zone_mode = hd.Prop(hd.String, "power_spread")
+    # "meters" | "percent"
+    value_mode = hd.Prop(hd.String, "meters")
+
+
 def _volume_section(
     all_workouts: list,
     profile: dict,
@@ -461,11 +472,7 @@ def _volume_section(
 ) -> None:
     """Render the volume controls + stacked bar chart."""
 
-    state = hd.state(
-        view="monthly",
-        zone_mode="power_spread",  # "power_spread" | "hr" | "severity"
-        value_mode="meters",  # "meters" | "percent"
-    )
+    state = VolumePageState()
     view = state.view
     zone_mode = state.zone_mode  # captured before any mid-render mutations
     value_mode = state.value_mode

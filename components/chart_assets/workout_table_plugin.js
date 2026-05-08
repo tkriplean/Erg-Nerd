@@ -235,11 +235,17 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     }
     .pagination {
       display: flex; align-items: center; justify-content: center;
-      gap: 1rem; padding: 0.75rem 0;
+      gap: 0.25rem; padding: 0.5rem 0;
       font-size: var(--sl-font-size-small);
       color: var(--sl-color-neutral-500);
     }
-    .pagination sl-button { font-size: inherit; }
+    .pagination sl-icon-button { font-size: 1.1rem; }
+    .pagination sl-icon-button[disabled] { opacity: 0.3; }
+    .pagination .pagination-count {
+      margin-left: 0.5rem;
+      color: var(--sl-color-neutral-400);
+      font-size: var(--sl-font-size-x-small);
+    }
 
     /* Cell-internal styles */
     a.link { font-size: var(--sl-font-size-small); text-decoration: none; color: var(--sl-color-primary-600); }
@@ -319,7 +325,63 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     defaultSortAsc: !!ctx.initialProps.default_sort_asc,
     treeMode: !!ctx.initialProps.tree_mode,
     expanded: new Set(),
+    linkPrefix: ctx.initialProps.link_prefix || "",
   };
+
+  // ── State persistence across remount ─────────────────────────────────────
+  // When the user clicks "view" → /workout/<id> and then comes back via the
+  // browser back button, the plugin instance is destroyed and recreated.
+  // Mirror sortCol/sortAsc/page/expanded into sessionStorage keyed by the
+  // plugin's stable component id so the table lands in the same state.
+  const STATE_STORAGE_KEY = "wtbl:" + ctx.key;
+  try {
+    const _raw = sessionStorage.getItem(STATE_STORAGE_KEY);
+    if (_raw) {
+      const _saved = JSON.parse(_raw);
+      if (_saved && typeof _saved === "object") {
+        if (typeof _saved.sortCol === "string") state.sortCol = _saved.sortCol;
+        if (typeof _saved.sortAsc === "boolean") state.sortAsc = _saved.sortAsc;
+        if (typeof _saved.page === "number") state.page = _saved.page;
+        if (Array.isArray(_saved.expanded)) state.expanded = new Set(_saved.expanded);
+      }
+    }
+  } catch (e) { /* sessionStorage unavailable — fall back to defaults */ }
+
+  function persistState() {
+    try {
+      sessionStorage.setItem(STATE_STORAGE_KEY, JSON.stringify({
+        sortCol: state.sortCol,
+        sortAsc: state.sortAsc,
+        page: state.page,
+        expanded: Array.from(state.expanded),
+      }));
+    } catch (e) { /* quota / disabled — ignore */ }
+  }
+
+  // ── SPA navigation ───────────────────────────────────────────────────────
+  // Plain <a href> would trigger a full page reload, dropping the websocket
+  // and every server-side hd.state.  Reuse the browser's pushState +
+  // popstate machinery (HyperDiv's location-singleton listens on popstate)
+  // so the table view links keep us inside the running app.  Cmd/ctrl/shift/
+  // middle clicks fall through to the browser so "open in new tab" still
+  // works.
+  //
+  // We set ``window.__ergNerdSyntheticPopstate`` while we dispatch the
+  // popstate so the scroll-restore listener in app.py's _SCROLL_NAV_JS can
+  // tell forward-clicks apart from real browser back/forward — only the
+  // latter should restore the previous scroll position.
+  function spaNavigate(href) {
+    history.pushState(null, "", href);
+    window.__ergNerdSyntheticPopstate = true;
+    try {
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    } finally {
+      window.__ergNerdSyntheticPopstate = false;
+    }
+  }
+  function isPlainClick(ev) {
+    return !ev.metaKey && !ev.ctrlKey && !ev.shiftKey && !ev.altKey && ev.button === 0;
+  }
 
   let eventSeq = 0;
   function emit(name, payload) {
@@ -468,6 +530,29 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
   }
   function text(s) { return document.createTextNode(s ?? ""); }
   function emDash() { return el("span", { class: "em-dash" }, "—"); }
+
+  // "View" anchor: real <a href> so cmd/ctrl/middle-click open a new tab,
+  // but a plain click is intercepted and routed through ``spaNavigate`` so
+  // the running app keeps its websocket and server-side state.  Persists
+  // the table state right before navigating so the back-button restoration
+  // sees the freshest sort/page/expanded values.
+  function _viewLink(id) {
+    const href = state.linkPrefix + "/workout/" + id;
+    return el(
+      "a",
+      {
+        class: "link",
+        href,
+        onClick: (ev) => {
+          if (!isPlainClick(ev)) return;
+          ev.preventDefault();
+          persistState();
+          spaNavigate(href);
+        },
+      },
+      "view",
+    );
+  }
 
   // Tree-mode role classification: a child is "non-main" when it's a
   // warmup, cooldown, or recovery piece — its meters belong in Other
@@ -693,7 +778,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
         }
         const target = r._view_target_id;
         if (!target) return document.createDocumentFragment();
-        return el("a", { class: "link", href: `/workout/${target}` }, "view");
+        return _viewLink(target);
       }
       // Suppress the "view" link for the row that matches the column's
       // current_id option — used by the "all workouts done on this day"
@@ -702,7 +787,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       if (cur != null && String(cur) === String(r.id)) {
         return document.createDocumentFragment();
       }
-      return el("a", { class: "link", href: `/workout/${r.id}` }, "view");
+      return _viewLink(r.id);
     },
 
     tree_date(r) {
@@ -1304,6 +1389,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
   function toggleExpand(sid) {
     if (state.expanded.has(sid)) state.expanded.delete(sid);
     else state.expanded.add(sid);
+    persistState();
     render();
   }
 
@@ -1468,24 +1554,39 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       }
     });
 
+
+    function drawPagination() {
+      // Pagination
+      if (state.paginate && totalPages > 1) {
+        const bar = el("div", { class: "pagination" });
+        const prev = el("sl-icon-button", {
+          name: "chevron-left", label: "Previous page",
+          ...(state.page === 0 ? { disabled: true } : {}),
+        });
+        prev.addEventListener("click", () => {
+          if (state.page > 0) { state.page -= 1; persistState(); render(); }
+        });
+        bar.appendChild(prev);
+        bar.appendChild(text(`Page ${state.page + 1} of ${totalPages}`));
+        const next = el("sl-icon-button", {
+          name: "chevron-right", label: "Next page",
+          ...(state.page >= totalPages - 1 ? { disabled: true } : {}),
+        });
+        next.addEventListener("click", () => {
+          if (state.page < totalPages - 1) { state.page += 1; persistState(); render(); }
+        });
+        bar.appendChild(next);
+        container.appendChild(bar);
+      }
+
+    }
+
+    drawPagination();
+
     container.appendChild(grid);
 
-    // Pagination
-    if (state.paginate && totalPages > 1) {
-      const bar = el("div", { class: "pagination" });
-      if (state.page > 0) {
-        const prev = el("sl-button", { size: "small", variant: "neutral" }, "← Prev");
-        prev.addEventListener("click", () => { state.page -= 1; render(); });
-        bar.appendChild(prev);
-      }
-      bar.appendChild(text(`Page ${state.page + 1} of ${totalPages}  (${countLabel})`));
-      if (state.page < totalPages - 1) {
-        const next = el("sl-button", { size: "small", variant: "neutral" }, "Next →");
-        next.addEventListener("click", () => { state.page += 1; render(); });
-        bar.appendChild(next);
-      }
-      container.appendChild(bar);
-    }
+    drawPagination();
+
   }
 
   function onSortClick(col) {
@@ -1496,6 +1597,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       state.sortAsc = !!col.default_asc;
     }
     state.page = 0;
+    persistState();
     render();
   }
 
@@ -1519,6 +1621,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       case "paginate":        state.paginate = value !== false; break;
       case "rows_per_page":   state.perPage = value || 25; break;
       case "tree_mode":       state.treeMode = !!value; break;
+      case "link_prefix":     state.linkPrefix = value || ""; break;
       case "reset_token":
         if (value !== state.resetToken) {
           state.resetToken = value;
@@ -1529,6 +1632,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
           // expanded sessions, so children aren't stranded under a
           // since-filtered-out parent.
           state.expanded.clear();
+          persistState();
         }
         break;
       default: return;
