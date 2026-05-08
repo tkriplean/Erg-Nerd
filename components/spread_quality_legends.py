@@ -1,5 +1,5 @@
 """
-Shared filter-legend component for Power Spread, HR Spread, and Quality.
+Shared filter-legend component for Power Spread, HR Spread, and Severity.
 
 Both the Intervals and Workouts pages render this same stack of three
 labelled legends.  Each legend is a row of clickable chips; clicking a chip
@@ -10,7 +10,7 @@ within** a legend (selecting two chips matches workouts in EITHER zone) and
 Active state lives on the caller's ``state`` object as:
     state.active_bins        tuple[int]    pace bin indices (1–6)
     state.active_hr_bins     tuple[int]    HR bin indices (1–5)
-    state.active_quality     tuple[str]    quality buckets
+    state.active_severity    tuple[str]    severity buckets
 
 The Power Spread header carries a (?) icon whose tooltip renders a graphical
 scale of each zone's reference event and the user's current watts at that
@@ -28,6 +28,11 @@ from services.heartrate_utils import (
     HR_ZONE_NAMES,
 )
 from services.erg_stress import (
+    SEVERITY_DEFINITION_TEXT,
+    SEVERITY_FILTER_TEXT,
+    SEVERITY_ORDER,
+    SEVERITY_STYLE,
+    SEVERITY_THRESHOLDS,
     STIMULUS_BAND_DEFINITIONS,
     STIMULUS_FILTER_TEXT,
     ZONE_BANDS_S,
@@ -39,13 +44,6 @@ from services.volume_bins import (
     POWER_ZONE_DEFINITION_TEXT,
     POWER_ZONE_FILTER_TEXT,
     swatch_svg,
-)
-from services.workout_quality import (
-    QUALITY_DEFINITION_TEXT,
-    QUALITY_FILTER_TEXT,
-    QUALITY_ORDER,
-    QUALITY_STYLE,
-    QUALITY_THRESHOLDS,
 )
 from components.workout_table import always_white
 
@@ -173,27 +171,27 @@ def legend_chip(
 
 
 @hd.global_state
-class SpreadQualityFilters(hd.BaseState):
+class SpreadSeverityFilters(hd.BaseState):
     active_bins = hd.Prop(hd.List(hd.Any), [])
     active_hr_bins = hd.Prop(hd.List(hd.Any), [])
-    active_quality = hd.Prop(hd.List(hd.Any), [])
+    active_severity = hd.Prop(hd.List(hd.Any), [])
     # Training Stimulus filter — list of band-seconds (20, 90, 300, 1200,
     # 3600, 7200) corresponding to systems with dose ≥ 1.0 in the workout.
     active_stimulus_bands = hd.Prop(hd.List(hd.Any), [])
 
 
 @hd.cached
-def spread_quality_legends(
+def spread_severity_legends(
     max_hr: int | None,
 ) -> None:
-    """Render Power Spread + HR Spread + Quality filter chips.
+    """Render Power Spread + HR Spread + Severity filter chips.
 
     Toggles ``state.active_bins`` / ``state.active_hr_bins`` /
-    ``state.active_quality`` on click.
+    ``state.active_severity`` on click.
     """
     is_dark = hd.theme().is_dark
 
-    state = SpreadQualityFilters()
+    state = SpreadSeverityFilters()
 
     # ── Power Spread legend ──────────────────────────────────────────────
     active_bins: set[int] = set(state.active_bins)
@@ -294,8 +292,8 @@ def spread_quality_legends(
                                 sel.add(i)
                             state.active_hr_bins = tuple(sorted(sel))
 
-        # ── Quality legend ───────────────────────────────────────────────
-        active_quality: set[str] = set(state.active_quality)
+        # ── Severity legend ──────────────────────────────────────────────
+        active_severity: set[str] = set(state.active_severity)
         with hd.hbox(
             gap=0.75,
             align="center",
@@ -304,15 +302,15 @@ def spread_quality_legends(
             justify="center",
         ):
             hd.text(
-                "Quality",
+                "Severity",
                 font_size="small",
                 font_weight="bold",
                 font_color="neutral-600",
                 min_width=7,
             )
-            for label, _upper in QUALITY_THRESHOLDS:
-                with hd.scope(f"quality_{label}"):
-                    color_rgba = QUALITY_STYLE[label]["bg"]
+            for label, _upper in SEVERITY_THRESHOLDS:
+                with hd.scope(f"severity_{label}"):
+                    color_rgba = SEVERITY_STYLE[label]["bg"]
                     color_str = (
                         f"rgba({color_rgba[0]},{color_rgba[1]},{color_rgba[2]},"
                         f"{color_rgba[3]})"
@@ -320,18 +318,18 @@ def spread_quality_legends(
                     clicked = legend_chip(
                         name=label,
                         color_str=color_str,
-                        is_active=label in active_quality,
-                        definition=QUALITY_DEFINITION_TEXT[label],
-                        filter_rule=QUALITY_FILTER_TEXT[label],
+                        is_active=label in active_severity,
+                        definition=SEVERITY_DEFINITION_TEXT[label],
+                        filter_rule=SEVERITY_FILTER_TEXT[label],
                     )
                     if clicked:
-                        sel = set(state.active_quality)
+                        sel = set(state.active_severity)
                         if label in sel:
                             sel.discard(label)
                         else:
                             sel.add(label)
-                        state.active_quality = tuple(
-                            sorted(sel, key=lambda q: QUALITY_ORDER[q])
+                        state.active_severity = tuple(
+                            sorted(sel, key=lambda q: SEVERITY_ORDER[q])
                         )
 
         # ── Stimulus legend ──────────────────────────────────────────────

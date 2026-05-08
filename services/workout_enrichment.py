@@ -27,8 +27,8 @@ Interval-only fields (when ``is_interval``):
   work_pace      float | None    avg work pace (tenths/500m)
   work_spm       float | None    work-weighted avg stroke rate
 
-**Stage 3 (render-time)** — ``attach_spread_and_quality`` / ``attach_quality_only``
-mutate each workout dict in-place to attach the heavier metrics:
+**Stage 3 (render-time)** — ``attach_spread`` mutates each workout dict
+in-place to attach the heavier metrics:
 
   _zone_time_fractions dict | None   Time-fraction per duration band (sums
                                      to 1.0 over the six bands).  Each
@@ -46,9 +46,6 @@ mutate each workout dict in-place to attach the heavier metrics:
                                      ``attach_ess_metrics`` only.
   _hr_bin_meters      list | None    Per-HR-bin meter counts when max_hr known
   _hr_spread_score    float | None   0–100 weighted HR spread
-  _quality            str | None     "Low"/"Medium"/"High"/"Ultra"
-  _quality_score      float | None   Continuous quality score
-  _quality_energy     dict | None    Per-category energy breakdown
 
 The stacked spread bar that visualises ``_zone_time_fractions`` /
 ``_hr_bin_meters`` is built on demand by the JS plugins (see
@@ -85,10 +82,6 @@ so repeated renders (and other pages requesting the same workout) reuse
 the result instead of recomputing.  HR-dependent metrics include
 ``max_hr`` in the cache key so a profile change naturally invalidates
 only the affected entries.
-
-``attach_quality_only`` is a lightweight variant that attaches only the
-``_quality*`` fields — used by the Volume page's quality mode where the
-spread/HR fields would be discarded.
 """
 
 from __future__ import annotations
@@ -127,7 +120,6 @@ from services.workout_metrics_cache import get_or_compute
 # ``attach_ess_metrics`` only collapses fits within one render).
 _CP_FIT_CACHE: dict[tuple, tuple] = {}
 _CP_FIT_CACHE_MAX = 4096
-from services.workout_quality import compute_workout_quality
 from services.critical_power_model import fit_critical_power
 from services.erg_stress import (
     compute_session_metrics,
@@ -210,79 +202,41 @@ def enrich_all(workouts_dict: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Stage 3 — Render-time enrichment (spread + quality)
+# Stage 3 — Render-time enrichment (spread)
 # ---------------------------------------------------------------------------
 
 
-def _resolvers(
+def _resolver(
     all_workouts: list,
-    thresholds_for: Optional[Callable],
     ref_watts_for: Optional[Callable],
-    reference_pbs_for: Optional[Callable],
-) -> tuple[Callable, Callable, Callable]:
-    if thresholds_for is None or ref_watts_for is None or reference_pbs_for is None:
+) -> Callable:
+    if ref_watts_for is None:
         return make_thresholds_resolver(all_workouts)
-    return thresholds_for, ref_watts_for, reference_pbs_for
+    return ref_watts_for
 
 
-def _cached_quality(
-    r: dict,
-    h: str,
-    ref_watts_for: Callable,
-    thresholds_for: Callable,
-    reference_pbs_for: Callable,
-) -> Optional[dict]:
-    """Quality dict for ``r`` from the central metrics cache."""
-    return get_or_compute(
-        "quality",
-        r["id"],
-        h,
-        lambda: compute_workout_quality(
-            r,
-            ref_watts_for(r),
-            thresholds_for(r),
-            reference_pbs_for(r),
-        ),
-    )
-
-
-def _assign_quality(r: dict, quality: Optional[dict]) -> None:
-    if quality is not None:
-        r["_quality"] = quality["category"]
-        r["_quality_score"] = quality["score"]
-        r["_quality_energy"] = quality["per_category_energy"]
-    else:
-        r["_quality"] = None
-        r["_quality_score"] = None
-        r["_quality_energy"] = None
-
-
-def attach_spread_and_quality(
+def attach_spread(
     workouts: list,
     all_workouts: list,
     max_hr: Optional[int],
     *,
-    thresholds_for: Optional[Callable] = None,
     ref_watts_for: Optional[Callable] = None,
-    reference_pbs_for: Optional[Callable] = None,
 ) -> None:
-    """Attach spread and quality fields to each workout dict in ``workouts``.
+    """Attach spread (zone + HR) fields to each workout dict in ``workouts``.
 
     ``all_workouts`` is the full corpus used to resolve reference watts at
     each workout's date.  ``max_hr``, if None, leaves all HR fields as None.
 
-    ``thresholds_for``, ``ref_watts_for``, and ``reference_pbs_for`` may be
-    supplied by callers that already built a per-date resolver (e.g. the
-    Intervals page builds one for its own enrichment loop and reuses it
-    here).  When omitted, this builds a fresh resolver internally.
+    ``ref_watts_for`` may be supplied by callers that already built a
+    per-date resolver (e.g. the Intervals page builds one for its own
+    enrichment loop and reuses it here).  When omitted, this builds a fresh
+    resolver internally.
 
     Every metric is memoised in ``services.workout_metrics_cache`` keyed by
     ``(metric, workout_id, input_hash[, max_hr])`` so subsequent renders
     are O(1) per workout.
     """
-    thresholds_for, ref_watts_for, reference_pbs_for = _resolvers(
-        all_workouts, thresholds_for, ref_watts_for, reference_pbs_for
-    )
+    ref_watts_for = _resolver(all_workouts, ref_watts_for)
 
     h = input_hash(all_workouts)
     rw_at_duration = _ref_watts_at_duration_fn(ref_watts_for)
@@ -324,36 +278,6 @@ def attach_spread_and_quality(
         else:
             r["_hr_bin_meters"] = None
             r["_hr_spread_score"] = None
-
-        _assign_quality(
-            r, _cached_quality(r, h, ref_watts_for, thresholds_for, reference_pbs_for)
-        )
-
-
-def attach_quality_only(
-    workouts: list,
-    all_workouts: list,
-    *,
-    thresholds_for: Optional[Callable] = None,
-    ref_watts_for: Optional[Callable] = None,
-    reference_pbs_for: Optional[Callable] = None,
-) -> None:
-    """Attach only ``_quality``/``_quality_score``/``_quality_energy``.
-
-    Skips the bin-meters, power-spread, and HR-spread fields that
-    ``attach_spread_and_quality`` computes.  Used by the Volume page's
-    quality mode where the only field consumed downstream is ``_quality``.
-    """
-    thresholds_for, ref_watts_for, reference_pbs_for = _resolvers(
-        all_workouts, thresholds_for, ref_watts_for, reference_pbs_for
-    )
-
-    h = input_hash(all_workouts)
-
-    for r in workouts:
-        _assign_quality(
-            r, _cached_quality(r, h, ref_watts_for, thresholds_for, reference_pbs_for)
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -445,7 +369,7 @@ def _assign_ess(r: dict, sm: Optional[dict], wid) -> None:
             "_ess_session_summary",
         ):
             r[k] = None
-        # Don't blank out zone fields here — attach_spread_and_quality may
+        # Don't blank out zone fields here — attach_spread may
         # have already populated them via the standalone single-workout
         # path.  Only overwrite when we have a fresh per-workout record.
         return
@@ -469,7 +393,7 @@ def _assign_ess(r: dict, sm: Optional[dict], wid) -> None:
     r["_glycogen_kj"] = pw.get("glycogen_kj") if pw else None
     r["_stimulus_doses"] = pw.get("stimulus_doses") if pw else None
     r["_stimulus_systems"] = pw.get("stimulus_systems") if pw else None
-    # Zone Spread fields — overwrite anything attach_spread_and_quality
+    # Zone Spread fields — overwrite anything attach_spread
     # produced.  Same closest-RW-band classification, just sharing the
     # session pass's per-second power array instead of rebuilding it.
     if pw and pw.get("zone_time_fractions"):
@@ -507,9 +431,7 @@ def attach_ess_metrics(
     profile: Optional[dict] = None,
     max_hr: Optional[int] = None,
     *,
-    thresholds_for: Optional[Callable] = None,
     ref_watts_for: Optional[Callable] = None,
-    reference_pbs_for: Optional[Callable] = None,
     with_timeline: bool = True,
 ) -> None:
     """Attach ESS / Severity / Anaerobic-Strain fields to each workout in-place.
@@ -541,10 +463,7 @@ def attach_ess_metrics(
     severity-formula update.
     """
 
-    if thresholds_for is None or ref_watts_for is None or reference_pbs_for is None:
-        thresholds_for, ref_watts_for, reference_pbs_for = _resolvers(
-            all_workouts, thresholds_for, ref_watts_for, reference_pbs_for
-        )
+    ref_watts_for = _resolver(all_workouts, ref_watts_for)
 
     h = input_hash(workouts)
     gender = (profile or {}).get("gender")

@@ -1,9 +1,7 @@
 """
 Erg Stress Score — multi-band power-duration-saturation training-load metric.
 
-This module is the home of three per-workout / per-session metrics that sit
-alongside (not replacing) the existing Quality metric in
-:mod:`services.workout_quality`:
+This module is the home of three per-workout / per-session metrics:
 
 * **ESS** — time integral of ``I(t)²`` over the session.  Calibrated so a
   60' continuous effort at 60-min reference watts yields ESS ≈ 100.  Strictly
@@ -75,8 +73,7 @@ cp, w_prime)`` — the workhorse.
 the highest available resolution (intervals → splits → whole workout).
 ``compute_w_prime_estimate(cp_params, gender)`` — pick W' for a rower.
 ``severity_bucket(score)`` — bucket label from a numeric severity score.
-``SEVERITY_STYLE`` — color metadata for the UI chip (parallel to the
-``QUALITY_STYLE`` dict in :mod:`services.workout_quality`).
+``SEVERITY_STYLE`` — color metadata for the UI chip.
 ``ZONE_BANDS_S`` — the six band time-constants (= τ_d), in seconds.
 ``ZONE_BAND_LABELS`` — short human labels matching the bands.
 
@@ -445,8 +442,7 @@ SEVERITY_THRESHOLDS: tuple[tuple[str, float], ...] = (
 
 SEVERITY_ORDER: dict[str, int] = {"Low": 0, "Moderate": 1, "High": 2, "Maximal": 3}
 
-#: Per-bucket visual style for table cells / chips.  Parallel shape to
-#: :data:`services.workout_quality.QUALITY_STYLE`.
+#: Per-bucket visual style for table cells / chips.
 SEVERITY_STYLE: dict[str, dict] = {
     "Low": {
         "label": "Low",
@@ -479,6 +475,13 @@ SEVERITY_DEFINITION_TEXT: dict[str, str] = {
     "Moderate": "Severity 0.70–1.00 — solid moderate / aerobic session.",
     "High": "Severity 1.00–1.40 — sharp threshold / VO2 / hard intervals.",
     "Maximal": "Severity ≥ 1.40 — race-pace or PB territory; high recovery demand.",
+}
+
+SEVERITY_FILTER_TEXT: dict[str, str] = {
+    "Low": "Selected: workouts in the Low severity bucket.",
+    "Moderate": "Selected: workouts in the Moderate severity bucket.",
+    "High": "Selected: workouts in the High severity bucket.",
+    "Maximal": "Selected: workouts in the Maximal severity bucket.",
 }
 
 

@@ -1,8 +1,7 @@
 # Erg Stress Score (ESS)
 
-A multi-band power-duration-saturation training-load metric for the rower,
-shipped alongside the existing **Quality** metric so they can be compared on
-real data.  Four numbers travel together:
+A multi-band power-duration-saturation training-load metric for the rower.
+Four numbers travel together:
 
 | | What it measures | Reads on |
 |---|---|---|

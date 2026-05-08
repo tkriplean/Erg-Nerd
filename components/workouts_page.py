@@ -36,15 +36,15 @@ from components.workout_table import WorkoutTable
 from components.app_context import get_profile, AppContext
 from components.reference_watts_loader import reference_watts_loader
 from components.shared_ui import global_filter_ui, header_dropdown
-from components.spread_quality_legends import spread_quality_legends, SpreadQualityFilters
+from components.spread_quality_legends import spread_severity_legends, SpreadSeverityFilters
 from services.heartrate_utils import (
     hr_bin_passes,
     resolve_max_hr,
 )
 from services.reference_watts import get_reference_watts
 from services.volume_bins import power_bin_passes
-from services.workout_enrichment import attach_ess_metrics, attach_spread_and_quality
-from services.workout_quality import QUALITY_STYLE
+from services.workout_enrichment import attach_ess_metrics, attach_spread
+from services.erg_stress import SEVERITY_STYLE
 
 from components.concept2_sync import get_all_workouts
 
@@ -270,14 +270,14 @@ def compute_sb_ids(workouts: list) -> set:
 # ---------------------------------------------------------------------------
 
 
-def _quality_hsl(category: str | None) -> tuple:
-    """Return (h, s, l) for a workout's quality category in 'quality' color mode.
+def _severity_hsl(category: str | None) -> tuple:
+    """Return (h, s, l) for a workout's severity category in 'severity' color mode.
 
-    Workouts without a quality value (None) get a neutral grey.
+    Workouts without a severity value (None) get a neutral grey.
     """
     if not category:
         return (0, 0, 50)  # neutral grey
-    rgba = QUALITY_STYLE[category]["bg"]
+    rgba = SEVERITY_STYLE[category]["bg"]
     r, g, b = rgba[0] / 255.0, rgba[1] / 255.0, rgba[2] / 255.0
     mx, mn = max(r, g, b), min(r, g, b)
     l = (mx + mn) / 2.0
@@ -308,9 +308,9 @@ def prepare_points(
     Returns list sorted largest-dist-first so big dots render behind small ones.
 
     color_mode = "gander" (default): each workout gets a deterministic palette
-    colour from its id.  color_mode = "quality": each workout is coloured by
-    its workout-quality category (workouts must already have ``_quality``
-    attached); workouts without a quality value get a neutral grey.
+    colour from its id.  color_mode = "severity": each workout is coloured by
+    its severity category (workouts must already have ``_severity``
+    attached); workouts without a severity value get a neutral grey.
 
     Each dict has:
       id        — workout id (for click-to-open)
@@ -371,8 +371,8 @@ def prepare_points(
             rest_desc = ""
             dist_str = f"{dist:,}m" if dist else ""
 
-        if color_mode == "quality":
-            h, s, l_ = _quality_hsl(r.get("_quality"))
+        if color_mode == "severity":
+            h, s, l_ = _severity_hsl(r.get("_severity"))
         else:
             # Deterministic color from workout ID
             idx = int(hashlib.md5(str(rid).encode()).hexdigest(), 16) % len(_PALETTE)
@@ -476,7 +476,7 @@ def workouts_page() -> None:
         filter_10k=False,
         filter_ivl="All",  # "All" | "Intervals Only" | "No Intervals"
         show_watts=False,  # False = pace (sec/500m), True = watts
-        color_mode="gander",  # "gander" | "quality"
+        color_mode="gander",  # "gander" | "severity"
     )
 
 
@@ -498,15 +498,15 @@ def workouts_page() -> None:
     all_workouts = result[1]
 
 
-    # ── Attach Power Spread, HR Spread, and Quality fields ────────────────────
-    # Block on the reference-watts loader so quality colouring + filters work.
+    # ── Attach Power Spread + HR Spread fields ────────────────────────────────
+    # Block on the reference-watts loader so the spread metrics resolve.
     if not reference_watts_loader(all_workouts):
         return
 
     workouts = _apply_outlier_filter(all_workouts)
 
     max_hr, _ = resolve_max_hr(profile, workouts)
-    attach_spread_and_quality(workouts, workouts, max_hr)
+    attach_spread(workouts, workouts, max_hr)
     # ``with_timeline=False`` skips the per-second timeline build inside
     # ``compute_session_metrics``: the workouts table never reads
     # ``_ess_timeline`` (it's stripped from the JS row payload via
@@ -543,11 +543,11 @@ def workouts_page() -> None:
         ]
 
 
-    spread_quality_filters = SpreadQualityFilters()
-    # Apply Power Spread / HR Spread / Quality legend filters (disjunctive within,
+    spread_severity_filters = SpreadSeverityFilters()
+    # Apply Power Spread / HR Spread / Severity legend filters (disjunctive within,
     # conjunctive across).
-    if spread_quality_filters.active_bins:
-        sel = set(spread_quality_filters.active_bins)
+    if spread_severity_filters.active_bins:
+        sel = set(spread_severity_filters.active_bins)
         filtered = [
             r for r in filtered
             if any(
@@ -555,17 +555,17 @@ def workouts_page() -> None:
                 for i in sel
             )
         ]
-    if spread_quality_filters.active_hr_bins:
-        sel = set(spread_quality_filters.active_hr_bins)
+    if spread_severity_filters.active_hr_bins:
+        sel = set(spread_severity_filters.active_hr_bins)
         filtered = [
             r for r in filtered
             if any(hr_bin_passes(r.get("_hr_bin_meters"), i) for i in sel)
         ]
-    if spread_quality_filters.active_quality:
-        sel = set(spread_quality_filters.active_quality)
-        filtered = [r for r in filtered if r.get("_quality") in sel]
-    if spread_quality_filters.active_stimulus_bands:
-        sel = set(spread_quality_filters.active_stimulus_bands)
+    if spread_severity_filters.active_severity:
+        sel = set(spread_severity_filters.active_severity)
+        filtered = [r for r in filtered if r.get("_severity") in sel]
+    if spread_severity_filters.active_stimulus_bands:
+        sel = set(spread_severity_filters.active_stimulus_bands)
         # Workout passes if dose ≥ 1.0 for *any* selected band.
         # ``_stimulus_doses`` is a dict keyed by band-seconds (int).
         def _stim_passes(r: dict) -> bool:
@@ -602,7 +602,7 @@ def workouts_page() -> None:
                             key="color_mode_dd",
                             labels={
                                 "gander": "Take a Gander at",
-                                "quality": "Scrutinize the Quality of",
+                                "severity": "Gape at the Severity of",
                             },
                             current_value=state.color_mode,
                             field="color_mode",
@@ -690,8 +690,8 @@ def workouts_page() -> None:
                 if chart.clicked_workout_id:
                     hd.location().go(path=f"/workout/{chart.clicked_workout_id}")
 
-            # ── Spread + Quality legend (Power Spread / HR Spread / Quality) ──────────
-            spread_quality_legends(max_hr)
+            # ── Spread + Severity legend (Power Spread / HR Spread / Severity) ────────
+            spread_severity_legends(max_hr)
 
             # ── Workouts-in-view table ────────────────────────────────────────────────
             in_window = [

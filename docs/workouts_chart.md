@@ -63,10 +63,11 @@ all_workouts (raw Concept2 API dicts)
     ▼  _apply_outlier_filter()
 filtered workouts  (removes warm-ups / aborted pieces)
     │
-    ▼  attach_spread_and_quality()   (services/workout_enrichment.py)
-workouts with _power_spread_score, _hr_spread_score, _quality fields attached
+    ▼  attach_spread()   (services/workout_enrichment.py)
+workouts with _power_spread_score, _hr_spread_score fields attached
+    │  attach_ess_metrics() also attaches _severity, _severity_score
     │
-    ▼  legend filters (active_bins / active_hr_bins / active_quality)
+    ▼  legend filters (active_bins / active_hr_bins / active_severity)
     │  + structural filters (10k+, Intervals / Continuous)
     │
     ├──▶  compute_sb_ids()        → set of IDs that are a season best
@@ -77,7 +78,7 @@ workouts with _power_spread_score, _hr_spread_score, _quality fields attached
 ```
 
 Session-level filters (10k+, Intervals Only, Continuous, plus the Power Spread,
-HR Spread, and Quality legend chips) are applied in `workouts_chart()` **after**
+HR Spread, and Severity legend chips) are applied in `workouts_chart()` **after**
 the outlier filter and **before** SB detection and point preparation, so the SB
 set is always consistent with the visible data.
 
@@ -88,19 +89,19 @@ Race page) that toggles between two color modes via `state.color_mode`:
 
 - `"gander"` — **Take a Gander at** (default). Workouts are coloured by a
   deterministic palette indexed off the workout id.
-- `"quality"` — **Scrutinize the Quality of**. Each workout is coloured by its
-  workout-quality category using `services.workout_quality.QUALITY_STYLE`.
-  Workouts without a resolvable quality value get a neutral grey.
+- `"severity"` — **Gape at the Severity of**. Each workout is coloured by its
+  severity category using `services.erg_stress.SEVERITY_STYLE`.  Workouts
+  without a resolvable severity value get a neutral grey.
 
 `prepare_points(color_mode=…)` derives the per-point HSL triple from the chosen
 mode; switching modes only changes colour, not which workouts are drawn.
 
-### Spread + Quality legend
+### Spread + Severity legend
 
-Between the chart and the in-window table, `spread_quality_legends(state, max_hr,
-ref_watts)` (from `components/spread_quality_legends.py`) renders the same Power
-Spread + HR Spread + Quality chip stack used on the Intervals page. Chips
-toggle disjunctively within their own legend and conjunctively across legends;
+Between the chart and the in-window table, `spread_severity_legends(max_hr)`
+(from `components/spread_quality_legends.py`) renders the same Power Spread +
+HR Spread + Severity chip stack used on the Intervals page. Chips toggle
+disjunctively within their own legend and conjunctively across legends;
 filtering applies to both the chart points and the in-window table.
 
 ### Click to open a workout
@@ -484,7 +485,7 @@ string).
 - Sorted descending by date (most recent first).
 - Capped at 250 rows (single-page; no pagination overflow).
 - Uses the shared `WorkoutTable()` renderer from `components/workout_table.py`.
-- Columns: Date · Distance · Time · Pace · Watts · Drag · SPM · HR · **Power Spread** · **HR Spread** · **Quality** · `view`-link.
+- Columns: Date · Distance · Time · Pace · Watts · Drag · SPM · HR · **Power Spread** · **HR Spread** · **Severity** · `view`-link.
 - The heading shows a count: `"Workouts in View  (N)"`.
 
 The table reflects all active user-facing filters but **not** the outlier filter

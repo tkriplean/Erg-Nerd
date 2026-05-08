@@ -9,10 +9,9 @@ Exported:
                       at WorkoutTable call time and shipped to the JS plugin.
 
 Shared cell-renderer helpers (still used outside the table — workout_page
-summary cards, spread/quality legends):
+summary cards, spread/severity legends):
   always_white(is_dark)
   render_spread_cell(...)
-  render_quality_cell(...)
 
 Design
 ------
@@ -75,7 +74,6 @@ import hyperdiv as hd
 
 from services.volume_bins import BIN_COLORS, BIN_NAMES, swatch_svg
 from services.heartrate_utils import HR_ZONE_COLORS, HR_ZONE_NAMES
-from services.workout_quality import QUALITY_STYLE
 from services.erg_stress import (
     SEVERITY_STYLE,
     STIMULUS_T_THRESH,
@@ -209,7 +207,6 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
     ),
     "similarity": ColumnDef("similarity", "Similarity", "6rem", format="similarity"),
     "hr": ColumnDef("hr", "HR", "8rem", renderer="hr_spread"),
-    "quality": ColumnDef("quality", "Quality", "6rem", renderer="quality"),
     # ── ESS family (services/erg_stress.py) ─────────────────────────────
     "ess": ColumnDef("ess", "ESS", "5rem", format="ess"),
     "if_eff": ColumnDef("if_eff", "Intensity", "6rem", format="if_eff"),
@@ -363,57 +360,6 @@ def render_spread_cell(
     )
 
 
-@hd.cached
-def render_quality_cell(
-    q: str | None, score: float, energy: tuple, is_dark: bool
-) -> None:
-    """Colored quality pill with score + top-3 contributing categories tooltip.
-    Used by workout_page's summary card."""
-    from components.lazy_tooltip_plugin import LazyTooltip
-
-    if q is None:
-        hd.text("—", font_size="small", font_color="neutral-400")
-        return
-
-    style = QUALITY_STYLE[q]
-    top_cats = sorted(energy, key=lambda p: p[1], reverse=True)[:3]
-    if q == "Low":
-        headline = (
-            f"Quality score {score:.2f} — below the 0.50 threshold for a "
-            f"Medium workout."
-        )
-    elif q == "Medium":
-        headline = (
-            f"Quality score {score:.2f} — clears the 0.50 Medium threshold, "
-            f"below the 0.75 cutoff for High."
-        )
-    elif q == "High":
-        headline = f"Quality score {score:.2f} — clears the 0.75 High threshold."
-    else:
-        headline = f"Quality score {score:.2f} — beyond reference power."
-
-    if top_cats:
-        total = sum(e for _, e in top_cats) or 1.0
-        top = [
-            {"name": cat, "pct_text": f"{100.0 * e / total:.0f}%"}
-            for cat, e in top_cats
-        ]
-    else:
-        top = []
-
-    LazyTooltip(
-        config={
-            "kind": "quality",
-            "label": style["label"],
-            "bg": _rgba_css(style["bg"]),
-            "tt_title": f"{q} quality",
-            "headline": headline,
-            "top": top,
-        },
-        placement="top",
-    )
-
-
 # ---------------------------------------------------------------------------
 # Plugin
 # ---------------------------------------------------------------------------
@@ -482,14 +428,6 @@ def _enrich_opts(key: str, opts: dict) -> dict:
             "bar_w": _SPREAD_BAR_WIDTH,
             "bar_h": _SPREAD_BAR_HEIGHT,
         }
-    if key == "quality":
-        return {
-            **opts,
-            "quality_styles": {
-                q: {"label": s["label"], "bg": _rgba_css(s["bg"])}
-                for q, s in QUALITY_STYLE.items()
-            },
-        }
     if key == "severity":
         return {
             **opts,
@@ -546,9 +484,8 @@ def _json_safe(v):
 # per workout.  Skipping them at JSON-serialisation time cut the
 # Workouts-page render from ~25 s to ~0.5 s in profiling.
 #
-# Do NOT add ``_bin_meters`` / ``_hr_bin_meters`` / ``_quality_energy`` to
-# this set — they're small AND the JS plugin reads them (power/HR-spread
-# tooltip bars, quality tooltip top-3 categories).
+# Do NOT add ``_bin_meters`` / ``_hr_bin_meters`` to this set — they're
+# small AND the JS plugin reads them (power/HR-spread tooltip bars).
 _TABLE_IRRELEVANT_KEYS: frozenset = frozenset(
     {
         "_ess_timeline",

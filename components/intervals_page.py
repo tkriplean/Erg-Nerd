@@ -48,15 +48,16 @@ Grid placement rules:
 
 Legends & filters
 -----------------
-The Power Spread + HR Spread + Quality legend stack is shared with the
+The Power Spread + HR Spread + Severity legend stack is shared with the
 Workouts page; see :mod:`components.spread_quality_legends` for the chip
 rendering and tooltip content.  The three legends combine **disjunctively
 (OR) within** themselves and **conjunctively across** with each other and
 with the grid-cell selection.
 
 The HR legend's chip row is hidden when the user has no max HR resolvable;
-a short note points to the Profile page.  The Quality legend always renders
-(workouts with no quality score are excluded when any chip is selected).
+a short note points to the Profile page.  The Severity legend always
+renders (workouts with no severity score are excluded when any chip is
+selected).
 
 Table
 -----
@@ -71,7 +72,7 @@ Sortable headers (▲/▼), default sort: date descending.
 
 Columns: Date · Intervals (clickable, filters by rep-stripped key) ·
          Stimulus · Power Spread (score + bar) · HR Spread (score + bar) ·
-         Quality (Low/Medium/High/Ultra pill) ·
+         Severity (Low/Moderate/High/Maximal pill) ·
          Work dist · Avg Split · Time · SPM · ↗
 
 The Power/HR Spread columns each show a 0–100 weighted-average score
@@ -84,17 +85,7 @@ render as "—" and sort last.
 Time-aware thresholds: each row's Power Spread score is computed
 against the rower's reference watts **on that row's own date** (via
 services/reference_watts.py), so a 2010 workout is graded against 2010
-fitness, not today's.  The Quality column uses the same time-aware
-reference watts — see :mod:`services.workout_enrichment`.
-
-The Quality column scores every work interval against the date-matched
-reference watts via :mod:`services.workout_quality`.  Each split accrues
-"quality energy" weighted by ``split_watts / category_reference_watts``
-and discounted (for interval workouts) by the preceding rest ratio;
-per-category energy is normalized by a reference target and summed.  The
-scalar is bucketed **Low** (<0.5) / **Medium** (<0.75) / **High** (≥0.75).
-Workouts whose reference-watts index is missing anchors show "—"; sort is
-by raw score so ordering is continuous within each bucket.
+fitness, not today's.
 
 Structure filter: clicking any Intervals cell sets a filter restricting
 the table to workouts with that same rep-stripped structure key (so
@@ -111,7 +102,7 @@ import hyperdiv as hd
 from components.concept2_sync import get_all_workouts
 from components.reference_watts_loader import reference_watts_loader
 from services.threshold_cache import make_thresholds_resolver
-from services.workout_enrichment import attach_spread_and_quality, attach_ess_metrics
+from services.workout_enrichment import attach_spread, attach_ess_metrics
 from services.volume_bins import (
     BIN_COLORS,
     Z3_BINS,
@@ -127,8 +118,8 @@ from components.workout_table import WorkoutTable, always_white
 from components.app_context import get_profile, your, AppContext
 from components.shared_ui import global_filter_ui
 from components.spread_quality_legends import (
-    spread_quality_legends,
-    SpreadQualityFilters,
+    spread_severity_legends,
+    SpreadSeverityFilters,
 )
 
 # ---------------------------------------------------------------------------
@@ -180,24 +171,16 @@ _RATIO_ROWS = [
 _N_ROWS = len(_RATIO_ROWS)
 
 # ---------------------------------------------------------------------------
-# Per-cell quality expectations
+# Per-cell intensity expectations
 # ---------------------------------------------------------------------------
 #
-# Each populated cell in _STIMULUS_INFO carries two numbers describing what a
-# well-executed quality workout of that specific stimulus looks like:
+# Each populated cell in _STIMULUS_INFO carries an ``expected_score`` (0–100
+# pace-intensity score) describing what a well-executed workout of that
+# specific stimulus looks like.  Drives the cell's background colour in the
+# grid via :func:`_cell_background_rgba`.
 #
-#   expected_score  — 0–100 pace-intensity score we'd expect.  Drives:
-#                     (a) the cell's background colour in the grid, and
-#                     (b) the "was this hard enough?" check for the Quality
-#                         column.
-#
-#   expected_work_s — rough lower bound (seconds of work) for a genuine dose
-#                     at that stimulus.  Used with expected_score to grade
-#                     each workout Low / Medium / High in the Quality column.
-#
-# Values are conservative ballparks — they shape a 3-state colour chip, not
-# a prescription.  Cells left as None in _STIMULUS_INFO use no expectations:
-# the grid paints them a neutral grey and their Quality column shows "—".
+# Values are conservative ballparks.  Cells left as None in _STIMULUS_INFO
+# use no expectations: the grid paints them a neutral grey.
 
 
 def _intensity_to_bin(score: float) -> int:
@@ -256,8 +239,7 @@ def _cell_background_rgba(row_idx: int, col_idx: int, is_dark: bool) -> tuple:
 _STIMULUS_INFO: list[list[dict | None]] = [
     # Row 0 — Continuous (rest < 9% of cycle, ≈ no formal rest).  Pace-intensity
     # is intentionally low here — the point is volume at easy/steady intensity,
-    # not hardness — so expected_score = 0 (or 10 for fartlek) and the Quality
-    # column grades purely on work-time accumulation.
+    # not hardness — so expected_score = 0 (or 10 for fartlek).
     [
         None,  # ≤30" continuous — n/a
         None,  # 30–60" continuous — uncommon; surges this short are noise inside an aerobic piece
@@ -271,7 +253,6 @@ _STIMULUS_INFO: list[list[dict | None]] = [
             ),
             "example": "10× 1' easy / 1' moderate, continuous.",
             "expected_score": 10,
-            "expected_work_s": 1500,
         },
         {
             "name": "Sustained aerobic",
@@ -281,7 +262,6 @@ _STIMULUS_INFO: list[list[dict | None]] = [
             ),
             "example": "3× 5' at aerobic pace, continuous.",
             "expected_score": 0,
-            "expected_work_s": 1500,
         },
         {
             "name": "Aerobic base",
@@ -291,7 +271,6 @@ _STIMULUS_INFO: list[list[dict | None]] = [
             ),
             "example": "2× 15' / 1'r, or a single 20'.",
             "expected_score": 0,
-            "expected_work_s": 1800,
         },
         {
             "name": "Long slow distance",
@@ -301,7 +280,6 @@ _STIMULUS_INFO: list[list[dict | None]] = [
             ),
             "example": "Single 60', or 2× 30'.",
             "expected_score": 0,
-            "expected_work_s": 2700,
         },
     ],
     # Row 1 — Short rest (rest 9–33% of cycle, work:rest ≈ 2–10 : 1).
@@ -318,7 +296,6 @@ _STIMULUS_INFO: list[list[dict | None]] = [
             ),
             "example": '12× 30" / 8"r, 10× 45" / 12"r.',
             "expected_score": 65,
-            "expected_work_s": 300,
         },
         {
             "name": "VO₂max (short rest)",
@@ -329,7 +306,6 @@ _STIMULUS_INFO: list[list[dict | None]] = [
             ),
             "example": '6× 2\' / 30"r, 8× 90" / 30"r.',
             "expected_score": 60,
-            "expected_work_s": 480,
         },
         {
             "name": "Supra-threshold",
@@ -340,7 +316,6 @@ _STIMULUS_INFO: list[list[dict | None]] = [
             ),
             "example": "4× 6' / 2'r, 5× 4' / 1'r.",
             "expected_score": 40,
-            "expected_work_s": 600,
         },
         {
             "name": "Threshold accumulation",
@@ -351,7 +326,6 @@ _STIMULUS_INFO: list[list[dict | None]] = [
             ),
             "example": "3× 12' / 4'r, 4× 10' / 3'r.",
             "expected_score": 30,
-            "expected_work_s": 1500,
         },
         {
             "name": "Tempo",
@@ -361,7 +335,6 @@ _STIMULUS_INFO: list[list[dict | None]] = [
             ),
             "example": "2× 20' / 5'r.",
             "expected_score": 25,
-            "expected_work_s": 1800,
         },
     ],
     # Row 2 — Balanced (rest 33–60% of cycle, work:rest ≈ 1 : 1).
@@ -378,7 +351,6 @@ _STIMULUS_INFO: list[list[dict | None]] = [
             ),
             "example": '8× 20" / 10"r (Tabata), 10× 30" / 30"r.',
             "expected_score": 80,
-            "expected_work_s": 120,
         },
         {
             "name": "Anaerobic capacity",
@@ -389,7 +361,6 @@ _STIMULUS_INFO: list[list[dict | None]] = [
             ),
             "example": '10× 45" / 45"r, 8× 60" / 45"r.',
             "expected_score": 75,
-            "expected_work_s": 360,
         },
         {
             "name": "VO₂max (medium intervals)",
@@ -401,7 +372,6 @@ _STIMULUS_INFO: list[list[dict | None]] = [
             ),
             "example": "6× 2' / 2'r, 8× 90\" / 90\"r.",
             "expected_score": 65,
-            "expected_work_s": 480,
         },
         {
             "name": "VO₂max (long intervals)",
@@ -412,7 +382,6 @@ _STIMULUS_INFO: list[list[dict | None]] = [
             ),
             "example": "5× 4' / 4'r, 4× 5' / 4'r, 4× 1000m / 4'r.",
             "expected_score": 55,
-            "expected_work_s": 600,
         },
         {
             "name": "Lactate threshold (1:1)",
@@ -423,7 +392,6 @@ _STIMULUS_INFO: list[list[dict | None]] = [
             ),
             "example": "3× 10' / 10'r, 2× 15' / 15'r.",
             "expected_score": 35,
-            "expected_work_s": 900,
         },
         None,  # 20'+ work with 1:1 rest is just two efforts — not a programmed stimulus
     ],
@@ -441,7 +409,6 @@ _STIMULUS_INFO: list[list[dict | None]] = [
             ),
             "example": '8× 15" / 45"r, 6× 20" / 60"r.',
             "expected_score": 90,
-            "expected_work_s": 60,
         },
         {
             "name": "Speed endurance",
@@ -452,7 +419,6 @@ _STIMULUS_INFO: list[list[dict | None]] = [
             ),
             "example": '5× 45" / 2\'r, 6× 30" / 90"r.',
             "expected_score": 70,
-            "expected_work_s": 240,
         },
         {
             "name": "VO₂max (recovery-rich)",
@@ -463,7 +429,6 @@ _STIMULUS_INFO: list[list[dict | None]] = [
             ),
             "example": "6× 2' / 4'r, 4× 90\" / 3'r, 4× 500m / 3'r.",
             "expected_score": 70,
-            "expected_work_s": 300,
         },
         None,  # 3–8' work with 1:2–4 rest is uncommon
         None,  # 8–20' work with very long rest — n/a
@@ -482,7 +447,6 @@ _STIMULUS_INFO: list[list[dict | None]] = [
             ),
             "example": "6× 10\" / 2'r, 8× 15\" / 3'r.",
             "expected_score": 95,
-            "expected_work_s": 60,
         },
         {
             "name": "Sprint interval training (SIT)",
@@ -493,7 +457,6 @@ _STIMULUS_INFO: list[list[dict | None]] = [
             ),
             "example": "4× 30\" / 4'r (Wingate), 4× 45\" / 5'r.",
             "expected_score": 90,
-            "expected_work_s": 180,
         },
         None,  # 1–3' work with very long rest — race-pace pieces, but uncommon as a programmed stimulus
         None,  # 3–8' work with very long rest — n/a
@@ -580,29 +543,27 @@ def _compute_grid_placement(r: dict) -> tuple[int, int]:
 # ``work_spm`` — see ``services.workout_enrichment.enrich_for_storage``)
 # or Stage-3 render-time metrics that route through
 # ``services.workout_metrics_cache`` (``_zone_time_fractions``,
-# ``_zone_bin_fractions``, ``_hr_*``, ``_quality*``).  This loop only adds
-# the page-specific grid placement (``_z3``, ``_grid_col``, ``_grid_row``,
-# ``_stimulus``) — derived from already-cached primitives, so no local
-# memoization layer is needed.
+# ``_zone_bin_fractions``, ``_hr_*``, ``_severity*``).  This loop only
+# adds the page-specific grid placement (``_z3``, ``_grid_col``,
+# ``_grid_row``, ``_stimulus``) — derived from already-cached primitives,
+# so no local memoization layer is needed.
 
 
 def _enrich_workouts(
     workouts: list[dict],
-    thresholds_for,
     ref_watts_for,
-    reference_pbs_for,
     max_hr: int | None,
 ) -> list[dict]:
     """
     Filter to interval workout types (excluding single-rep workouts) and
-    attach the page-specific grid-placement fields.  Spread + quality
+    attach the page-specific grid-placement fields.  Spread + severity
     fields come via the central metrics cache.
 
     Fields attached on top of Stage-2 enrichment:
 
       _zone_time_fractions, _zone_bin_fractions    (central cache)
       _hr_bin_meters, _hr_spread_score             (central cache)
-      _quality, _quality_score, _quality_energy    (central cache)
+      _severity, _severity_score                   (central cache)
       _z3       float          Fraction of work time in Z3 bands (grid colour)
       _grid_col int            Column index in the 2D grid
       _grid_row int            Row index in the 2D grid
@@ -612,13 +573,11 @@ def _enrich_workouts(
     result = []
     interval_workouts = [r for r in workouts if r["is_interval"] and r["reps"] != 1]
     if interval_workouts:
-        attach_spread_and_quality(
+        attach_spread(
             interval_workouts,
             workouts,
             max_hr,
-            thresholds_for=thresholds_for,
             ref_watts_for=ref_watts_for,
-            reference_pbs_for=reference_pbs_for,
         )
 
         attach_ess_metrics(
@@ -628,9 +587,7 @@ def _enrich_workouts(
             get_profile() or {},
             max_hr,
             with_timeline=False,
-            thresholds_for=thresholds_for,
             ref_watts_for=ref_watts_for,
-            reference_pbs_for=reference_pbs_for,
         )
 
     for r in interval_workouts:
@@ -957,23 +914,18 @@ def intervals_page() -> None:
     if not reference_watts_loader(all_workouts):
         return
 
-    # Per-date cache so we don't recompute thresholds when many workouts
-    # share a date.  Both the ref-watts dict (for Quality) and the derived
-    # bin thresholds are cached.
-    _thresholds_for, _ref_watts_for, _reference_pbs_for = make_thresholds_resolver(
-        all_workouts
-    )
+    # Per-date cache so we don't recompute reference watts when many workouts
+    # share a date.
+    _ref_watts_for = make_thresholds_resolver(all_workouts)
 
-    all_intervals = _enrich_workouts(
-        all_workouts, _thresholds_for, _ref_watts_for, _reference_pbs_for, max_hr
-    )
+    all_intervals = _enrich_workouts(all_workouts, _ref_watts_for, max_hr)
 
     if not all_intervals:
         with hd.box(padding=4, align="center"):
             hd.text("No interval workouts found.", font_color="neutral-500")
         return
 
-    spread_quality_state = SpreadQualityFilters()
+    spread_severity_state = SpreadSeverityFilters()
 
     state = hd.state(
         active_cells=tuple(),  # tuple[str] — "col,row" keys of selected cells
@@ -1007,19 +959,19 @@ def intervals_page() -> None:
     # the active pace-zone, HR-zone, and structure filters.
     pre_filtered = _filter_disjunctive(
         all_intervals,
-        set(spread_quality_state.active_bins),
+        set(spread_severity_state.active_bins),
         power_bin_passes,
         "_zone_bin_fractions",
     )
     pre_filtered = _filter_disjunctive(
         pre_filtered,
-        set(spread_quality_state.active_hr_bins),
+        set(spread_severity_state.active_hr_bins),
         hr_bin_passes,
         "_hr_bin_meters",
     )
-    if spread_quality_state.active_quality:
-        sel_quality = set(spread_quality_state.active_quality)
-        pre_filtered = [r for r in pre_filtered if r.get("_quality") in sel_quality]
+    if spread_severity_state.active_severity:
+        sel_severity = set(spread_severity_state.active_severity)
+        pre_filtered = [r for r in pre_filtered if r.get("_severity") in sel_severity]
     if state.structure_filter:
         pre_filtered = [
             r for r in pre_filtered if r["structure_key"] == state.structure_filter
@@ -1034,7 +986,7 @@ def intervals_page() -> None:
             # 2D grid browser — counts reflect pace/HR/structure filters
             _grid_browser(pre_filtered, state)
 
-            spread_quality_legends(max_hr)
+            spread_severity_legends(max_hr)
 
             # Apply cell filter on top of already pace/HR/structure filtered
             active_cells = frozenset(state.active_cells)
@@ -1068,9 +1020,9 @@ def intervals_page() -> None:
             # plugin resets page + sort to defaults.
             reset_token = (
                 f"{state.structure_filter or 'all'}"
-                f"_{sorted(list(spread_quality_state.active_bins))}"
-                f"_{sorted(list(spread_quality_state.active_hr_bins))}"
-                f"_{sorted(list(spread_quality_state.active_quality))}"
+                f"_{sorted(list(spread_severity_state.active_bins))}"
+                f"_{sorted(list(spread_severity_state.active_hr_bins))}"
+                f"_{sorted(list(spread_severity_state.active_severity))}"
                 f"_{sorted(list(state.active_cells))}"
             )
             WorkoutTable(

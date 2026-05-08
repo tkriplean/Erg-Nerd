@@ -4,7 +4,7 @@ Volume aggregation and Zone-Spread binning for the Workouts charts.
 This module replaces the v1 watts-classification scheme with a multi-band
 duration-saturation classification that consumes the per-workout
 ``_zone_time_fractions`` field (set by
-:func:`services.workout_enrichment.attach_spread_and_quality` and
+:func:`services.workout_enrichment.attach_spread` and
 :func:`services.workout_enrichment.attach_ess_metrics`).
 
 The seven-bin layout is preserved for downstream compatibility — bin 0 is
@@ -40,12 +40,13 @@ Exported:
     swatch_svg()                — data-URI SVG color swatch for legends
     aggregate_workouts()        — group all workouts by week / month / season × bin
 
-    Watts-classification utilities (used by :mod:`services.workout_quality`
-    and :mod:`services.threshold_cache`, independent of the zone-spread bins
-    above):
+    Severity binning (used by the Volume page's Workout Severity mode):
 
-    compute_bin_thresholds()    — build watts cutoffs from a reference-watts dict
-    classify_watts()            — map a watts value → watts-zone bin index
+    SEVERITY_BIN_NAMES          — ordered display names for the severity
+                                  buckets (Rest / Low / Moderate / High /
+                                  Maximal / Unrated)
+    workout_severity_bin_meters()  — per-bin meter counts for one workout,
+                                     based on its ``_severity`` bucket
 """
 
 from __future__ import annotations
@@ -53,14 +54,6 @@ from __future__ import annotations
 import base64
 from datetime import date
 from typing import Optional
-
-from services.rowing_utils import (
-    PACE_MAX,
-    PACE_MIN,
-    compute_watts,
-    watts_to_pace,
-)
-
 
 # ---------------------------------------------------------------------------
 # Bin definitions
@@ -174,95 +167,6 @@ POWER_ZONE_FILTER_TEXT: dict[int, str] = {
 
 
 # ---------------------------------------------------------------------------
-# Watts-zone classification (used by Quality metric and the threshold cache).
-# Independent of the zone-spread bins above — this maps an instantaneous
-# watts value to one of six watts ranges anchored at 1k/2k/5k/60min/marathon
-# midpoints.  The Quality metric ingests these bins to score per-split work.
-# ---------------------------------------------------------------------------
-
-# Events needed for the five watts-zone boundaries.
-_CK_1K = ("dist", 1000)
-_CK_2K = ("dist", 2000)
-_CK_5K = ("dist", 5000)
-_CK_60MIN = ("time", 36000)
-_CK_MARATHON = ("dist", 42195)
-
-
-def compute_bin_thresholds(ref_watts: Optional[dict]) -> Optional[dict]:
-    """
-    Compute watts cutoffs for six watts-classification zones from a
-    reference-watts dict.
-
-    ``ref_watts`` maps cat_key tuples → watts (the output of
-    :func:`services.reference_watts.get_reference_watts`).  It must contain at
-    least the 1k, 2k, 5k, 60min and marathon entries for a meaningful result;
-    if any is missing this returns None.
-
-    Returns
-    -------
-    dict with keys (watts values; higher = more intense):
-        fast_lower_w      — watts > this → Fast watts-zone
-        two_k_lower_w     — watts > this → 2k watts-zone
-        five_k_lower_w    — watts > this → 5k watts-zone
-        threshold_lower_w — watts > this → Threshold watts-zone
-        fast_aero_lower_w — watts > this → Fast Aerobic watts-zone
-    or None if insufficient data.
-    """
-    if not ref_watts:
-        return None
-
-    w1k = ref_watts.get(_CK_1K)
-    w2k = ref_watts.get(_CK_2K)
-    w5k = ref_watts.get(_CK_5K)
-    w60 = ref_watts.get(_CK_60MIN)
-    wmara = ref_watts.get(_CK_MARATHON)
-
-    if w1k is None or w2k is None or w5k is None or w60 is None or wmara is None:
-        return None
-
-    def _mid(a: float, b: float) -> float:
-        return (a + b) / 2.0
-
-    mara_pace = watts_to_pace(wmara)
-    fast_aero_watts = compute_watts(mara_pace + 3.0)
-
-    return {
-        "fast_lower_w": _mid(w1k, w2k),
-        "two_k_lower_w": _mid(w2k, w5k),
-        "five_k_lower_w": _mid(w5k, w60),
-        "threshold_lower_w": _mid(w60, wmara),
-        "fast_aero_lower_w": fast_aero_watts,
-    }
-
-
-def classify_watts(watts: float, thresholds: Optional[dict]) -> int:
-    """
-    Map a watts value to a watts-zone bin index (1–6).
-
-    Higher watts ⇒ lower index.  If thresholds is None, all values fall into
-    bin 6 (slowest watts-zone) — caller can still display totals without
-    zone coloring.
-
-    Note: this returns an index into a *watts-classification* list (used by
-    the Quality metric), not the duration-band ``BIN_NAMES`` exported by
-    this module.  The two share the same shape (1–6) but different semantics.
-    """
-    if thresholds is None:
-        return 6
-    if watts > thresholds["fast_lower_w"]:
-        return 1
-    if watts > thresholds["two_k_lower_w"]:
-        return 2
-    if watts > thresholds["five_k_lower_w"]:
-        return 3
-    if watts > thresholds["threshold_lower_w"]:
-        return 4
-    if watts > thresholds["fast_aero_lower_w"]:
-        return 5
-    return 6
-
-
-# ---------------------------------------------------------------------------
 # Date-bucketing helpers
 # ---------------------------------------------------------------------------
 
@@ -354,41 +258,48 @@ def power_bin_passes(bm: list, bin_idx: int) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Quality binning (used by the Volume page's "Workout Quality" mode)
+# Severity binning (used by the Volume page's "Workout Severity" mode)
 # ---------------------------------------------------------------------------
 # Bin layout (parallel to BIN_NAMES shape so the chart builder can treat them
 # identically):
 #     0  Rest        interval rest meters (grey, same as zone-spread mode)
-#     1  Low         workout._quality == "Low"
-#     2  Medium      workout._quality == "Medium"
-#     3  High        workout._quality == "High"
-#     4  Ultra       workout._quality == "Ultra"
-#     5  Unrated     no resolvable quality (missing reference watts at date)
+#     1  Low         workout._severity == "Low"
+#     2  Moderate    workout._severity == "Moderate"
+#     3  High        workout._severity == "High"
+#     4  Maximal     workout._severity == "Maximal"
+#     5  Unrated     no resolvable severity (ESS computation failed)
 
-QUALITY_BIN_NAMES: list[str] = ["Rest", "Low", "Medium", "High", "Ultra", "Unrated"]
-N_QUALITY_BINS = len(QUALITY_BIN_NAMES)
-_QUALITY_BIN_INDEX: dict[str, int] = {
+SEVERITY_BIN_NAMES: list[str] = [
+    "Rest",
+    "Low",
+    "Moderate",
+    "High",
+    "Maximal",
+    "Unrated",
+]
+N_SEVERITY_BINS = len(SEVERITY_BIN_NAMES)
+_SEVERITY_BIN_INDEX: dict[str, int] = {
     "Low": 1,
-    "Medium": 2,
+    "Moderate": 2,
     "High": 3,
-    "Ultra": 4,
+    "Maximal": 4,
 }
 
 
-def workout_quality_bin_meters(
-    workout: dict, quality_category: Optional[str]
+def workout_severity_bin_meters(
+    workout: dict, severity_category: Optional[str]
 ) -> list[float]:
     """
-    Return ``[rest_m, low_m, medium_m, high_m, ultra_m, unrated_m]`` for one
-    workout.
+    Return ``[rest_m, low_m, moderate_m, high_m, maximal_m, unrated_m]`` for
+    one workout.
 
     Rest distance follows the same rule as :func:`workout_zone_meters` —
     interval ``rest_distance`` lands in bin 0; non-interval workouts have 0
     rest.  All work meters land in the single bucket matching
-    ``quality_category`` (Low/Medium/High/Ultra), or bin 5 (Unrated) when the
-    category is None.
+    ``severity_category`` (Low/Moderate/High/Maximal), or bin 5 (Unrated) when
+    the category is None.
     """
-    bins = [0.0] * N_QUALITY_BINS
+    bins = [0.0] * N_SEVERITY_BINS
 
     is_interval = workout["is_interval"]
 
@@ -412,7 +323,7 @@ def workout_quality_bin_meters(
         work_m = workout.get("distance") or 0
 
     if work_m > 0:
-        idx = _QUALITY_BIN_INDEX.get(quality_category or "", 5)
+        idx = _SEVERITY_BIN_INDEX.get(severity_category or "", 5)
         bins[idx] += work_m
 
     return bins

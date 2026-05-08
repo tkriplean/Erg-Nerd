@@ -5,8 +5,7 @@ Process-wide cache for per-workout render-time metrics.
 
 Several pages (Workouts, Volume, Workout, Intervals) ask for the same
 heavy fields every render — power-bin meters, HR-bin meters, the SVG
-bars derived from them, the spread scores, the quality category.  All
-are pure functions of:
+bars derived from them, the spread scores.  All are pure functions of:
 
   - the workout content,
   - the reference-watts index for the workout's date,
@@ -17,8 +16,7 @@ when the workout corpus changes (sync, edit, delete).  So the cache key
 is ``(metric, workout_id, input_hash[, max_hr])`` — any change to the
 corpus or the profile naturally invalidates everything that depends on it.
 
-Bounded; on overflow we drop everything (matches the previous
-``_QUALITY_CACHE`` and intervals-page enrichment-cache patterns).
+Bounded; on overflow we drop everything.
 
 Public API
     get_or_compute(metric, workout_id, input_hash, compute_fn, **extra)

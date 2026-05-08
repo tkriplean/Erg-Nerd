@@ -3,17 +3,17 @@ Volume tab — stacked spread-zone bar chart + distribution data table.
 
 Volume chart:
   - Stacked bar chart showing meters per zone per week / month / season.
-  - Zone mode toggle: Power Spread | HR Spread | Workout Quality
+  - Zone mode toggle: Power Spread | HR Spread | Workout Severity
       Power Spread mode: zones derived from time-aware reference watts (each
                   workout classified against the rower's fitness at the
                   workout's own date via services/reference_watts.py →
                   volume_bins.py).
       HR Spread mode:    zones derived from % of HRmax (heartrate_utils.py).
-      Workout Quality:   one bucket per workout's overall Quality category
-                  (Low/Medium/High/Ultra) plus an Unrated bucket for
-                  workouts whose reference-watts index can't resolve them.
-                  Interval rest_distance is still counted as Rest, never
-                  coloured with the workout's quality.
+      Workout Severity:  one bucket per workout's overall Severity category
+                  (Low/Moderate/High/Maximal) plus an Unrated bucket for
+                  workouts whose ESS metrics can't be computed.  Interval
+                  rest_distance is still counted as Rest, never coloured
+                  with the workout's severity.
   - Toggle: Weekly | Monthly | Seasonal  (radio button group)
   - Season and machine filters are applied globally (from app.py gfilter)
     before this component receives workouts; no page-level filter UI for these.
@@ -40,12 +40,12 @@ from components.reference_watts_loader import reference_watts_loader
 from components.app_context import AppContext, your
 from services.formatters import fmt_meters
 from services.rowing_utils import profile_complete
-from services.workout_enrichment import attach_quality_only, attach_spread_and_quality
+from services.workout_enrichment import attach_ess_metrics, attach_spread
 
 from services.volume_bins import (
-    QUALITY_BIN_NAMES,
+    SEVERITY_BIN_NAMES,
     aggregate_workouts,
-    workout_quality_bin_meters,
+    workout_severity_bin_meters,
     workout_zone_meters,
 )
 from services.heartrate_utils import (
@@ -60,7 +60,7 @@ from services.heartrate_utils import (
     HR_Z3_BINS,
     is_valid_hr,
 )
-from services.workout_quality import QUALITY_STYLE
+from services.erg_stress import SEVERITY_STYLE
 from components.app_context import get_profile
 from components.volume_chart_builder import build_volume_chart_config, get_period_rows
 from components.volume_chart_plugin import VolumeChart
@@ -84,35 +84,35 @@ _HR_NO_DATA_BINS = frozenset({6})  # "No HR" — excluded from classification de
 
 
 # ---------------------------------------------------------------------------
-# Quality-mode bin colors
+# Severity-mode bin colors
 # ---------------------------------------------------------------------------
-# QUALITY_BIN_NAMES = ["Rest", "Low", "Medium", "High", "Ultra", "Unrated"]
-# build_volume_chart_config wants (dark_rgba, light_rgba) tuples.  Quality
+# SEVERITY_BIN_NAMES = ["Rest", "Low", "Moderate", "High", "Maximal", "Unrated"]
+# build_volume_chart_config wants (dark_rgba, light_rgba) tuples.  Severity
 # styles are single-themed (only one rgba), so we use the same colour for
 # both themes.  Rest re-uses the standard Rest grey; Unrated picks a neutral
 # grey that visually reads as "no signal".
 
 
-def _quality_rgba(category: str) -> str:
-    r, g, b, a = QUALITY_STYLE[category]["bg"]
+def _severity_rgba(category: str) -> str:
+    r, g, b, a = SEVERITY_STYLE[category]["bg"]
     return f"rgba({r},{g},{b},{a})"
 
 
-_QUALITY_BIN_COLORS: list[tuple[str, str]] = [
+_SEVERITY_BIN_COLORS: list[tuple[str, str]] = [
     ("rgba(120,120,120,1)", "rgba(155,155,155,1)"),  # 0 Rest
-    (_quality_rgba("Low"), _quality_rgba("Low")),  # 1 Low
-    (_quality_rgba("Medium"), _quality_rgba("Medium")),  # 2 Medium
-    (_quality_rgba("High"), _quality_rgba("High")),  # 3 High
-    (_quality_rgba("Ultra"), _quality_rgba("Ultra")),  # 4 Ultra
+    (_severity_rgba("Low"), _severity_rgba("Low")),  # 1 Low
+    (_severity_rgba("Moderate"), _severity_rgba("Moderate")),  # 2 Moderate
+    (_severity_rgba("High"), _severity_rgba("High")),  # 3 High
+    (_severity_rgba("Maximal"), _severity_rgba("Maximal")),  # 4 Maximal
     ("rgba(195,195,195,0.45)", "rgba(210,210,210,0.55)"),  # 5 Unrated
 ]
-# Bottom → top stacking order: Ultra, High, Medium, Low, Rest, Unrated.
-# Highest quality at the base so the "good" colours anchor the bar.
-_QUALITY_DRAW_ORDER: list[int] = [4, 3, 2, 1, 0, 5]
+# Bottom → top stacking order: Maximal, High, Moderate, Low, Rest, Unrated.
+# Highest severity at the base so the "hardest" colours anchor the bar.
+_SEVERITY_DRAW_ORDER: list[int] = [4, 3, 2, 1, 0, 5]
 
 
-def _quality_period_rows(aggregated: dict, view: str) -> list:
-    """Return one dict per period for the Workout Quality distribution table.
+def _severity_period_rows(aggregated: dict, view: str) -> list:
+    """Return one dict per period for the Workout Severity distribution table.
 
     Each dict has the labels and pre-formatted strings the table needs.
     """
@@ -134,7 +134,7 @@ def _quality_period_rows(aggregated: dict, view: str) -> list:
     rows = []
     for k in reversed(keys):
         b = raw_data[k]["bins"]
-        rest, low_m, med_m, high_m, ultra_m, unrated_m = b[:6]
+        rest, low_m, mod_m, high_m, max_m, unrated_m = b[:6]
         total = sum(b)
         if view == "weekly":
             label = _week_label(k)
@@ -153,20 +153,20 @@ def _quality_period_rows(aggregated: dict, view: str) -> list:
                 "rest": fmt_meters(rest),
                 "low_m": fmt_meters(low_m),
                 "low_pct": _pct(low_m),
-                "med_m": fmt_meters(med_m),
-                "med_pct": _pct(med_m),
+                "mod_m": fmt_meters(mod_m),
+                "mod_pct": _pct(mod_m),
                 "high_m": fmt_meters(high_m),
                 "high_pct": _pct(high_m),
-                "ultra_m": fmt_meters(ultra_m),
-                "ultra_pct": _pct(ultra_m),
+                "max_m": fmt_meters(max_m),
+                "max_pct": _pct(max_m),
                 "unrated_m": fmt_meters(unrated_m),
                 "unrated_pct": _pct(unrated_m),
                 "total_raw": total,
                 "rest_raw": rest,
                 "low_raw": low_m,
-                "med_raw": med_m,
+                "mod_raw": mod_m,
                 "high_raw": high_m,
-                "ultra_raw": ultra_m,
+                "max_raw": max_m,
                 "unrated_raw": unrated_m,
             }
         )
@@ -196,8 +196,8 @@ def _distribution_table(rows: list, view: str, zone_mode: str = "power_spread") 
       Period | Total | Rest | Easy (<70%) | Tempo (70–80%)
       | Threshold (80–90%) | Max (90%+) | Distribution
 
-    Workout Quality mode columns:
-      Period | Total | Rest | Low | Medium | High | Ultra | Unrated
+    Workout Severity mode columns:
+      Period | Total | Rest | Low | Moderate | High | Maximal | Unrated
 
     Sort state resets when view or zone_mode changes (via scope key).
     """
@@ -205,7 +205,7 @@ def _distribution_table(rows: list, view: str, zone_mode: str = "power_spread") 
 
     # Column definitions: (header_label, sort_key, css_width, render_fn)
     # render_fn=None → Distribution badge rendered specially
-    if zone_mode == "quality":
+    if zone_mode == "severity":
         col_defs = [
             (period_col, "idx", "9rem", lambda r: r["label"]),
             ("Total", "total", "7rem", lambda r: r["total"]),
@@ -217,10 +217,10 @@ def _distribution_table(rows: list, view: str, zone_mode: str = "power_spread") 
                 lambda r: f"{r['low_m']}  ({r['low_pct']})",
             ),
             (
-                "Medium",
-                "med",
+                "Moderate",
+                "mod",
                 "minmax(8rem,1fr)",
-                lambda r: f"{r['med_m']}  ({r['med_pct']})",
+                lambda r: f"{r['mod_m']}  ({r['mod_pct']})",
             ),
             (
                 "High",
@@ -229,10 +229,10 @@ def _distribution_table(rows: list, view: str, zone_mode: str = "power_spread") 
                 lambda r: f"{r['high_m']}  ({r['high_pct']})",
             ),
             (
-                "Ultra",
-                "ultra",
+                "Maximal",
+                "max",
                 "minmax(8rem,1fr)",
-                lambda r: f"{r['ultra_m']}  ({r['ultra_pct']})",
+                lambda r: f"{r['max_m']}  ({r['max_pct']})",
             ),
             (
                 "Unrated",
@@ -316,9 +316,9 @@ def _distribution_table(rows: list, view: str, zone_mode: str = "power_spread") 
         "z3b": lambda i, r: r.get("z3b_raw", 0),
         "dist": lambda i, r: r.get("distribution", ""),
         "low": lambda i, r: r.get("low_raw", 0),
-        "med": lambda i, r: r.get("med_raw", 0),
+        "mod": lambda i, r: r.get("mod_raw", 0),
         "high": lambda i, r: r.get("high_raw", 0),
-        "ultra": lambda i, r: r.get("ultra_raw", 0),
+        "max": lambda i, r: r.get("max_raw", 0),
         "unrated": lambda i, r: r.get("unrated_raw", 0),
     }
     key_fn = _SORT_KEYS.get(sort.col, _SORT_KEYS["idx"])
@@ -463,7 +463,7 @@ def _volume_section(
 
     state = hd.state(
         view="monthly",
-        zone_mode="power_spread",  # "power_spread" | "hr" | "quality"
+        zone_mode="power_spread",  # "power_spread" | "hr" | "severity"
         value_mode="meters",  # "meters" | "percent"
     )
     view = state.view
@@ -509,38 +509,43 @@ def _volume_section(
                 z3b_bins=_HR_Z3B_BINS,
                 no_data_bins=_HR_NO_DATA_BINS,
             )
-        elif zone_mode == "quality":
-            # Quality requires per-date reference watts + thresholds.
+        elif zone_mode == "severity":
+            # Severity comes from attach_ess_metrics — needs the reference-
+            # watts index too (for the multi-band intensity model).
             if not reference_watts_loader(all_workouts):
                 return
-            # Attach _quality to each workout so we can read it from the bin_fn.
-            # Quality mode only consumes _quality, so skip the spread/HR fields
-            # that attach_spread_and_quality would otherwise compute.
-            attach_quality_only(all_workouts, all_workouts)
-            unrated_count = sum(1 for w in all_workouts if w.get("_quality") is None)
+            attach_ess_metrics(
+                all_workouts,
+                all_workouts,
+                AppContext().sessions_dict or {},
+                profile,
+                max_hr,
+                with_timeline=False,
+            )
+            unrated_count = sum(1 for w in all_workouts if w.get("_severity") is None)
             if unrated_count:
                 # An unrated workout is generally a bug — flag it once per
-                # render so the underlying reference-watts gap stays visible.
+                # render so the underlying ESS gap stays visible.
                 print(
-                    f"[volume_page] {unrated_count} workouts have no quality "
-                    "rating (missing reference watts at their date)",
+                    f"[volume_page] {unrated_count} workouts have no severity "
+                    "rating (ESS computation failed for their session)",
                     file=sys.stderr,
                 )
             aggregated = aggregate_workouts(
                 all_workouts,
-                bin_fn=lambda w: workout_quality_bin_meters(w, w.get("_quality")),
+                bin_fn=lambda w: workout_severity_bin_meters(w, w.get("_severity")),
             )
             chart_config = build_volume_chart_config(
                 aggregated,
                 view=view,
                 scope="all_time",
                 today=date.today(),
-                bin_names=QUALITY_BIN_NAMES,
-                bin_colors=_QUALITY_BIN_COLORS,
-                draw_order=_QUALITY_DRAW_ORDER,
+                bin_names=SEVERITY_BIN_NAMES,
+                bin_colors=_SEVERITY_BIN_COLORS,
+                draw_order=_SEVERITY_DRAW_ORDER,
                 value_mode=value_mode,
             )
-            rows = _quality_period_rows(aggregated, view)
+            rows = _severity_period_rows(aggregated, view)
         else:
             # Power Spread mode: classify each work-second to the duration
             # band whose reference watts is closest to that second's power,
@@ -554,7 +559,7 @@ def _volume_section(
             # each workout via the central metrics cache; subsequent renders
             # are O(1).  Pass max_hr=None to skip HR-spread computation —
             # we don't need it for the Power Spread aggregation.
-            attach_spread_and_quality(all_workouts, all_workouts, None)
+            attach_spread(all_workouts, all_workouts, None)
 
             aggregated = aggregate_workouts(
                 all_workouts,
@@ -612,7 +617,7 @@ def _volume_section(
             ) as mode_rg:
                 hd.radio_button("Power Spread", value="power_spread")
                 hd.radio_button("HR Spread", value="hr")
-                hd.radio_button("Workout Quality", value="quality")
+                hd.radio_button("Workout Severity", value="severity")
 
             if mode_rg.changed:
                 state.zone_mode = mode_rg.value
@@ -862,27 +867,21 @@ def volume_page() -> None:
 
         # Training-load section needs ESS metrics on each workout — attach
         # them now if not already present.  The cache makes repeat renders
-        # cheap.  Profile drives mass_kg for glycogen / severity, which is
-        # not used by the training-load panel itself but matches the
-        # standard enrichment path.
+        # cheap (and severity mode above already populated them).  Profile
+        # drives mass_kg for glycogen / severity, which is not used by the
+        # training-load panel itself but matches the standard enrichment path.
         if AppContext().sessions_dict is not None:
-            try:
-                _, _all = result
-                from services.heartrate_utils import resolve_max_hr
-                from services.workout_enrichment import attach_ess_metrics
+            _, _all = result
+            from services.heartrate_utils import resolve_max_hr
 
-                _max_hr, _ = resolve_max_hr(profile or {}, _all)
-                attach_ess_metrics(
-                    all_workouts,
-                    _all,
-                    AppContext().sessions_dict or {},
-                    profile=profile,
-                    max_hr=_max_hr,
-                    with_timeline=False,
-                )
-            except Exception:
-                # Don't crash the volume page if enrichment fails; the
-                # training-load section will simply show empty panels.
-                pass
+            _max_hr, _ = resolve_max_hr(profile or {}, _all)
+            attach_ess_metrics(
+                all_workouts,
+                _all,
+                AppContext().sessions_dict or {},
+                profile=profile,
+                max_hr=_max_hr,
+                with_timeline=False,
+            )
 
         _training_load_section(all_workouts, is_dark=hd.theme().is_dark)

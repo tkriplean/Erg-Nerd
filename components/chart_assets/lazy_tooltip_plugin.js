@@ -3,9 +3,8 @@
  * the user first hovers (or tabs to) the trigger.  See the docstring of
  * components/lazy_tooltip_plugin.py for config shapes.
  *
- * Three trigger kinds — all rendered from the `config` prop:
+ * Two trigger kinds — all rendered from the `config` prop:
  *   "spread"  — bold score on top of a small zone bar (image)
- *   "quality" — rounded coloured pill with a label
  *   "info"    — Shoelace question-circle icon
  *
  * The first mouseenter on the trigger lazily creates an <sl-tooltip>, moves
@@ -52,7 +51,7 @@ window.hyperdiv.registerPlugin("LazyTooltip", (ctx) => {
       gap: 0.2rem;
       min-width: 12rem;
     }
-    .tt-body.quality, .tt-body.info { min-width: 0; max-width: 24rem; gap: 0.3rem; }
+    .tt-body.info { min-width: 0; max-width: 24rem; gap: 0.3rem; }
     .row { display: flex; align-items: center; gap: 0.4rem; }
     .row img { width: 0.6rem; height: 0.6rem; display: block; }
     .row .zname {
@@ -156,15 +155,6 @@ window.hyperdiv.registerPlugin("LazyTooltip", (ctx) => {
       const bar = buildSpreadBar(
         cfg.bin_meters, cfg.bar_colors, cfg.bar_w || 5, cfg.bar_h || 0.5);
       if (bar) el.appendChild(bar);
-    } else if (cfg.kind === "quality") {
-      const pill = document.createElement("div");
-      pill.className = "pill";
-      pill.style.background = cfg.bg;
-      const lbl = document.createElement("span");
-      lbl.className = "pill-label";
-      lbl.textContent = cfg.label;
-      pill.appendChild(lbl);
-      el.appendChild(pill);
     } else if (cfg.kind === "info") {
       const wrap = document.createElement("span");
       wrap.className = "info-wrap";
@@ -205,32 +195,6 @@ window.hyperdiv.registerPlugin("LazyTooltip", (ctx) => {
           row.appendChild(m);
         }
         body.appendChild(row);
-      }
-    } else if (cfg.kind === "quality") {
-      body.classList.add("quality");
-      if (cfg.tt_title) {
-        const t = document.createElement("div");
-        t.className = "tt-title";
-        t.textContent = cfg.tt_title;
-        body.appendChild(t);
-      }
-      if (cfg.headline) {
-        const h = document.createElement("div");
-        h.className = "tt-headline";
-        h.textContent = cfg.headline;
-        body.appendChild(h);
-      }
-      if (cfg.top && cfg.top.length) {
-        const lbl = document.createElement("div");
-        lbl.className = "tt-label";
-        lbl.textContent = "Top contributions:";
-        body.appendChild(lbl);
-        for (const c of cfg.top) {
-          const row = document.createElement("div");
-          row.className = "tt-item";
-          row.textContent = `  • ${c.name}: ${c.pct_text}`;
-          body.appendChild(row);
-        }
       }
     } else if (cfg.kind === "info") {
       body.classList.add("info");

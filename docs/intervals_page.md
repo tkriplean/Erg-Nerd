@@ -8,7 +8,7 @@ The tab has three regions:
 
 1. **2D grid browser** — maps every interval workout onto a physiologically meaningful grid so training coverage gaps are immediately visible. Each row is coloured by the *expected* power spread of a quality workout at that work:rest ratio, giving an at-a-glance map of what "hard" should look like.
 2. **Persistent info panel** — sits directly below the grid and describes *every* currently selected stimulus (name, axis coordinates, physiological description, example workout). Useful for comparing several stimuli side by side.
-3. **Sortable data table** — lists individual workouts with full detail; includes a Quality column grading each workout against its row's expected intensity/volume; filtered by the grid cells, the Power Spread legend, the HR Spread legend, and any active Structure filter.
+3. **Sortable data table** — lists individual workouts with full detail; includes a Severity column grading each workout's recovery cost; filtered by the grid cells, the Power Spread legend, the HR Spread legend, the Severity legend, and any active Structure filter.
 
 ---
 
@@ -155,7 +155,7 @@ If a workout has no `workout.intervals` data, the full workout duration is used 
 }
 ```
 
-Cells left as `None` represent physiologically uncommon combinations; the grid labels them "Other", paints them neutral grey, and the info panel notes they are unusual. "Other" cells have no expectations, so their Quality column shows "—".
+Cells left as `None` represent physiologically uncommon combinations; the grid labels them "Other", paints them neutral grey, and the info panel notes they are unusual.
 
 Terminology follows standard endurance literature (Seiler's polarized model, Daniels' training paces, Billat's HIIT taxonomy). Short labels appear on the grid button; the description and example are rendered structurally in the info panel.
 
@@ -243,45 +243,14 @@ Each chip carries an `hd.tooltip` whose `content_slot` box contains: bold zone h
 | Stimulus | `r["_stimulus"]` | Grid cell label, italic |
 | Power Spread | `r["_power_spread_score"]` + `r["_bar_uri"]` | Bold 0–100 score above a small stacked power-zone bar. Rich tooltip lists each non-empty zone (swatch · name · percentage). "—" when no work meters. |
 | HR Spread | `r["_hr_spread_score"]` + `r["_hr_bar_uri"]` | Same layout as Power Spread, using HR zones. "—" when the workout has no usable HR data or the user has no max HR. |
-| Quality | `r["_quality"]` + `r["_quality_score"]` | Low / Medium / High pill derived from a reference-watts-based quality score (see Quality Grade). Rich tooltip shows the raw score and the top category contributions. "—" when the reference-watts index is missing anchors. |
+| Severity | `r["_severity"]` + `r["_severity_score"]` | Low / Moderate / High / Maximal pill from the ESS severity bucket (see `services/erg_stress.py`). Tooltip shows the raw severity score and W' depleted. "—" when ESS metrics can't be computed. |
 | Work | `r["distance"]` | Work-only meters (C2 API excludes rest from `distance` on interval workouts) |
 | Avg Split | `r["_work_pace"]` | `r["time"] * 500 / r["distance"]`; work-only |
 | Time | `r["time_formatted"]` | Work-only time |
 | SPM | `r["_work_spm"]` | Work-weighted average |
 | ↗ | — | Open-workout link (`COL_LINK`) |
 
-Sort direction flips on repeated header clicks; split defaults ascending (fastest = lowest number). Power / HR Spread sort descending by score, with `None` sorting last. Quality sorts by the raw `_quality_score` (continuous within each Low/Medium/High bucket).
-
-### Quality Grade
-
-`compute_workout_quality(workout, ref_watts, thresholds)` from `services/workout_quality.py` computes a scalar quality score against the rower's **date-aware reference watts** (same curve used for the Power Spread zones). It works for both interval and steady-state workouts — the interval-only rest penalty is the only branching.
-
-Per split or work interval:
-
-1. Compute `split_watts` from pace.
-2. Classify it into a power category via the existing `classify_watts` bin (`Fast`, `2k`, `5k`, `Threshold`, `Fast Aerobic`, `Slow Aerobic`).
-3. Accumulate `energy = (split_watts / category_ref_watts) × split_watts × work_seconds` — faster-than-reference work contributes quadratically, slower-than-reference linearly.
-4. For interval workouts, multiply by `(1 - WORK_REST_PENALTY_FACTOR) + WORK_REST_PENALTY_FACTOR × (rest / (rest + work))`, where `rest` is the rest that *preceded* the work interval. `WORK_REST_PENALTY_FACTOR = 0.25`, so a no-rest rep keeps 75% of its energy and a rest-dominated rep keeps 100%.
-
-Category reference targets (per `QUALITY_REFERENCE_EVENTS` / `QUALITY_REFERENCE_DISTANCES_M`):
-
-| Category | Reference watts | Target distance |
-|---|---|---|
-| Fast | 1k watts | 1 km |
-| 2k | 2k watts | 2 km |
-| 5k | 5k watts | 5 km |
-| Threshold | 60 min watts | 10 km |
-| Fast Aerobic | Marathon watts | 13 km |
-| Slow Aerobic | 0.9 × marathon watts | 15 km |
-
-The final score is `Σ energy[cat] / (ref_watts[cat] × ref_distance[cat])`. Buckets:
-
-- **Low** — score < 0.50
-- **Medium** — 0.50 ≤ score < 0.75
-- **High** — score ≥ 0.75
-- **—** — reference-watts index is missing one of the 5 anchor events (1k, 2k, 5k, 60 min, marathon) for the workout's date, or the workout has no scorable splits.
-
-Thresholds and the category → target distance mapping are tunable in one place (`services/workout_quality.py`). The cell renders as a coloured pill (red/orange/green); the hover tooltip shows the raw score plus the top three category contributions as a percentage of total quality energy.
+Sort direction flips on repeated header clicks; split defaults ascending (fastest = lowest number). Power / HR Spread sort descending by score, with `None` sorting last. Severity sorts by the raw `_severity_score` (continuous within each Low/Moderate/High/Maximal bucket).
 
 ### Pagination
 

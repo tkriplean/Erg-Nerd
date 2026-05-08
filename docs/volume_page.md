@@ -2,9 +2,9 @@
 
 ## Overview
 
-The Volume tab provides a stacked bar chart of training meters broken down per period, with a distribution data table beneath it. It supports three zone modes — **Power Spread**, **HR Spread**, and **Workout Quality** — that share the same chart widget, aggregation layer, and table structure but differ in how meters are classified.
+The Volume tab provides a stacked bar chart of training meters broken down per period, with a distribution data table beneath it. It supports three zone modes — **Power Spread**, **HR Spread**, and **Workout Severity** — that share the same chart widget, aggregation layer, and table structure but differ in how meters are classified.
 
-**Workout Quality mode** colours each workout's meters by its overall Quality category (Low / Medium / High / Ultra) plus an Unrated bucket for workouts whose reference-watts index can't resolve them. Interval `rest_distance` continues to land in the Rest band — never coloured by the workout's quality. An unrated workout is generally a bug (missing reference watts at that date); the page logs a one-line warning to stderr summarising how many fell into Unrated.
+**Workout Severity mode** colours each workout's meters by its overall Severity category (Low / Moderate / High / Maximal) plus an Unrated bucket for workouts whose ESS metrics can't be computed. Interval `rest_distance` continues to land in the Rest band — never coloured by the workout's severity. An unrated workout is generally a bug; the page logs a one-line warning to stderr summarising how many fell into Unrated.
 
 ### Time-aware fitness reference
 
@@ -36,8 +36,8 @@ All controls live in a single `hd.hbox` row at the bottom of `_volume_section()`
 ### View (Weekly / Monthly / Seasonal)
 `hd.radio_buttons("Weekly", "Monthly", "Seasonal")` backed by `state.view` (lowercase). Determines which bucket from `aggregate_workouts()` output is used (`weeks` / `months` / `seasons`).
 
-### Zone Mode (Power Spread / HR Spread / Workout Quality)
-`hd.radio_buttons("Power Spread", "HR Spread", "Workout Quality")` backed by `state.zone_mode` (`"power_spread"` | `"hr"` | `"quality"`). Switches between watts-based zone binning, HR-zone binning, and workout-quality bucketing. See the _Aggregation Paths_ section below.
+### Zone Mode (Power Spread / HR Spread / Workout Severity)
+`hd.radio_buttons("Power Spread", "HR Spread", "Workout Severity")` backed by `state.zone_mode` (`"power_spread"` | `"hr"` | `"severity"`). Switches between watts-based zone binning, HR-zone binning, and workout-severity bucketing. See the _Aggregation Paths_ section below.
 
 **Note:** Season and machine filtering are applied globally (passed in from `app.py`). The volume page itself does not render a scope or machine dropdown — those controls live in the nav bar.
 

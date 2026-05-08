@@ -45,7 +45,6 @@ from services.formatters import (
 
 from components.workout_table import (
     WorkoutTable,
-    render_quality_cell,
     render_spread_cell,
 )
 from components.app_context import AppContext, get_profile
@@ -55,7 +54,7 @@ from services.heartrate_utils import (
     resolve_max_hr,
 )
 from services.volume_bins import BAND_TO_BIN, BIN_COLORS, BIN_NAMES
-from services.workout_enrichment import attach_ess_metrics, attach_spread_and_quality
+from services.workout_enrichment import attach_ess_metrics, attach_spread
 
 from components.workout_chart_builder import (
     build_interval_rows_and_bands,
@@ -271,12 +270,11 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
         "_zone_bin_fractions"
     ) is not None
     has_hr_spread = workout.get("_hr_spread_score") is not None
-    has_quality = workout.get("_quality") is not None
     has_ess = workout.get("_ess") is not None
 
     with hd.box(grow=True, gap=0.25):
-        # ── Top row: Intensity (with Zone Spread bar), HR Spread, Quality ─
-        if has_intensity or has_hr_spread or has_quality:
+        # ── Top row: Intensity (with Zone Spread bar), HR Spread ─────────
+        if has_intensity or has_hr_spread:
             with hd.hbox(wrap="wrap", gap=0):
                 if has_intensity:
                     _spread_stat(
@@ -301,20 +299,6 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
                             zone_colors=HR_ZONE_COLORS,
                             is_dark=is_dark,
                             skip_indices=(0, 6),
-                        ),
-                    )
-                if has_quality:
-                    _spread_stat(
-                        "Quality",
-                        lambda: render_quality_cell(
-                            workout.get("_quality"),
-                            workout.get("_quality_score", 0.0),
-                            (
-                                (cat, e)
-                                for cat, e in workout.get("_quality_energy", {}).items()
-                                if e > 0
-                            ),
-                            is_dark,
                         ),
                     )
 
@@ -1334,7 +1318,7 @@ def _render_similar_workouts(workout, all_workouts, max_hr, profile, state):
     similar = _find_similar(workout, all_workouts)
     if similar:
         try:
-            attach_spread_and_quality(similar, all_workouts, max_hr)
+            attach_spread(similar, all_workouts, max_hr)
         except Exception:
             pass
         try:
@@ -1372,7 +1356,6 @@ def _render_similar_workouts(workout, all_workouts, max_hr, profile, state):
                     "watts",
                     "spm",
                     "hr",
-                    "quality",
                     "ess",
                     "if_eff",
                     "severity",
@@ -1394,7 +1377,6 @@ def _render_similar_workouts(workout, all_workouts, max_hr, profile, state):
                     "drag",
                     "spm",
                     "hr",
-                    "quality",
                     "ess",
                     "if_eff",
                     "severity",
@@ -1482,7 +1464,7 @@ def workout_page(workout_id: int) -> None:
 
     max_hr, _ = resolve_max_hr(profile, all_workouts)
     try:
-        attach_spread_and_quality([workout], all_workouts, max_hr)
+        attach_spread([workout], all_workouts, max_hr)
     except Exception:
         pass
 
@@ -1730,7 +1712,7 @@ def workout_page(workout_id: int) -> None:
         same_day = [w for w in all_workouts if w.get("day") == workout.get("day")]
         if len(same_day) > 1:
             try:
-                attach_spread_and_quality(same_day, all_workouts, max_hr)
+                attach_spread(same_day, all_workouts, max_hr)
             except Exception:
                 pass
             try:
@@ -1788,7 +1770,6 @@ def workout_page(workout_id: int) -> None:
                     "watts",
                     "spm",
                     "hr",
-                    "quality",
                     "ess",
                     "if_eff",
                     "severity",

@@ -541,7 +541,6 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     workout_structure: (r) => r.is_interval ? (r.structure_key || "") : "",
     similarity:        (r) => r._similarity != null ? r._similarity : -1,
     hr:                (r) => r._hr_spread_score != null ? ((r.heart_rate && r.heart_rate.average) || 0) + r._hr_spread_score : -1,
-    quality:           (r) => r._quality_score != null ? r._quality_score : -1,
     ess:               (r) => r._ess != null ? r._ess : -1,
     if_eff:            (r) => r._if_eff != null ? r._if_eff : -1,
     severity:          (r) => r._severity_score != null ? r._severity_score : -1,
@@ -892,20 +891,6 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       return _spreadCell(hr, bins, col);
     },
 
-    quality(r, col) {
-      const q = r._quality;
-      if (q == null) return emDash();
-      const styles = (col.opts && col.opts.quality_styles) || {};
-      const style = styles[q];
-      if (!style) return text(q);
-      const pill = el("div", { class: "quality-pill", style: { background: style.bg } },
-        el("span", { class: "label" }, style.label || q));
-      const score = r._quality_score || 0;
-      const energy = r._quality_energy || {};
-      lazyTooltipWrap(pill, () => _qualityTooltipBody(q, score, energy), "top");
-      return pill;
-    },
-
     severity(r, col) {
       const sev = r._severity;
       if (sev == null) return emDash();
@@ -1214,30 +1199,6 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     body.appendChild(el("div", { class: "tt-headline" }, headline));
     body.appendChild(el("div", { class: "tt-label" },
       `W' depleted: ${Math.round(strain * 100)}%`));
-    return body;
-  }
-
-  function _qualityTooltipBody(q, score, energy) {
-    const body = el("div", { class: "tt-body quality" });
-    body.appendChild(el("div", { class: "tt-title" }, `${q} quality`));
-    let headline;
-    if (q === "Low") headline = `Quality score ${score.toFixed(2)} — below the 0.50 threshold for a Medium workout.`;
-    else if (q === "Medium") headline = `Quality score ${score.toFixed(2)} — clears the 0.50 Medium threshold, below the 0.75 cutoff for High.`;
-    else if (q === "High") headline = `Quality score ${score.toFixed(2)} — clears the 0.75 High threshold.`;
-    else headline = `Quality score ${score.toFixed(2)} — beyond reference power.`;
-    body.appendChild(el("div", { class: "tt-headline" }, headline));
-    // Top-3 categories
-    const cats = Object.entries(energy || {}).filter(([_, e]) => e > 0);
-    cats.sort((a, b) => b[1] - a[1]);
-    const top = cats.slice(0, 3);
-    if (top.length) {
-      const totalE = top.reduce((acc, [_, e]) => acc + e, 0) || 1;
-      body.appendChild(el("div", { class: "tt-label" }, "Top contributions:"));
-      for (const [name, e] of top) {
-        body.appendChild(el("div", { class: "tt-item" },
-          `  • ${name}: ${Math.round((100 * e) / totalE)}%`));
-      }
-    }
     return body;
   }
 
