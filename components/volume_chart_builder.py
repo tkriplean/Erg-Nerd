@@ -147,6 +147,46 @@ def _month_label(month_key: str) -> str:
     return d.strftime("%b '") + d.strftime("%y")
 
 
+def _week_label_parts(week_key: str, show_year: bool):
+    """X-axis label for a week.  ``['Jan 6', '2025']`` (multi-line) when
+    ``show_year`` is True, else plain ``'Jan 6'``."""
+    d = _week_key_to_monday(week_key)
+    if d is None:
+        return week_key
+    base = d.strftime("%b ") + str(d.day)
+    if show_year:
+        return [base, str(d.year)]
+    return base
+
+
+def _month_label_parts(month_key: str, show_year: bool):
+    """X-axis label for a month.  ``['Jan', '2025']`` (multi-line) when
+    ``show_year`` is True, else plain ``'Jan'``."""
+    d = _month_key_to_date(month_key)
+    if d is None:
+        return month_key
+    base = d.strftime("%b")
+    if show_year:
+        return [base, str(d.year)]
+    return base
+
+
+def _week_tooltip_title(week_key: str) -> str:
+    """'2025-W03' → 'Jan 6, 2025' (full year for tooltip)."""
+    d = _week_key_to_monday(week_key)
+    if d is None:
+        return week_key
+    return d.strftime("%b ") + str(d.day) + ", " + str(d.year)
+
+
+def _month_tooltip_title(month_key: str) -> str:
+    """'2025-01' → 'January 2025' (full year for tooltip)."""
+    d = _month_key_to_date(month_key)
+    if d is None:
+        return month_key
+    return d.strftime("%B %Y")
+
+
 # ---------------------------------------------------------------------------
 # Main config builder
 # ---------------------------------------------------------------------------
@@ -215,12 +255,46 @@ def build_volume_chart_config(
         return {}
 
     # ── Labels ──────────────────────────────────────────────────────────────
+    # X-axis labels show year only on the first occurrence of each calendar
+    # year (rendered on a second line via Chart.js array-label support).
+    # ``tooltip_titles`` is a parallel list with the full year always present
+    # — the JS layer reads it for the tooltip title callback.
     if view == "weekly":
-        labels = [_week_label(k) for k in keys]
+        labels: list = []
+        tooltip_titles: list = []
+        last_year = None
+        for k in keys:
+            d = _week_key_to_monday(k)
+            year = d.year if d else None
+            show_year = True or year is not None and year != last_year
+            labels.append(_week_label_parts(k, show_year))
+            tooltip_titles.append(_week_tooltip_title(k))
+            if year is not None:
+                last_year = year
     elif view == "monthly":
-        labels = [_month_label(k) for k in keys]
+        labels = []
+        tooltip_titles = []
+        last_year = None
+        for k in keys:
+            d = _month_key_to_date(k)
+            year = d.year if d else None
+            show_year = True or year is not None and year != last_year
+            print(
+                k,
+                d,
+                year,
+                show_year,
+                _month_label_parts(k, show_year),
+                _month_tooltip_title(k),
+            )
+
+            labels.append(_month_label_parts(k, show_year))
+            tooltip_titles.append(_month_tooltip_title(k))
+            if year is not None:
+                last_year = year
     else:
         labels = list(keys)
+        tooltip_titles = list(keys)  # seasonal keys already include the year
 
     # ── Datasets ─────────────────────────────────────────────────────────────
     # Chart.js stacks datasets in array order: first → bottom, last → top.
@@ -229,9 +303,7 @@ def build_volume_chart_config(
 
     # Per-period totals across all bins (for percent normalisation; also used
     # by the JS tooltip when value_mode=="percent" so it can show both numbers).
-    period_totals = [
-        sum(raw_data[k]["bins"]) for k in keys
-    ]
+    period_totals = [sum(raw_data[k]["bins"]) for k in keys]
 
     datasets = []
     for bin_i in _draw_order:
@@ -266,6 +338,7 @@ def build_volume_chart_config(
     tick_color = "rgba(200,200,200,0.85)" if is_dark else "rgba(50,50,50,0.85)"
     title_color = "rgba(210,210,210,0.9)" if is_dark else "rgba(35,35,35,0.9)"
 
+    print(tooltip_titles)
     return {
         "type": "bar",
         "data": {
@@ -298,15 +371,12 @@ def build_volume_chart_config(
                         "color": title_color,
                         "font": {"size": 12},
                     },
-                    **(
-                        {"max": 100, "suggestedMax": 100}
-                        if is_percent
-                        else {}
-                    ),
+                    **({"max": 100, "suggestedMax": 100} if is_percent else {}),
                 },
             },
             "value_mode": value_mode,
             "period_totals": [round(t) for t in period_totals],
+            "tooltip_titles": tooltip_titles,
             "plugins": {
                 "legend": {
                     "display": True,

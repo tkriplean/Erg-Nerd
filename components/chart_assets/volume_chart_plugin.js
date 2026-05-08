@@ -45,6 +45,7 @@ window.hyperdiv.registerPlugin("VolumeChart", (ctx) => {
     const opts = JSON.parse(JSON.stringify(options));
     const isPercent = opts.value_mode === "percent";
     const periodTotals = opts.period_totals || [];
+    const tooltipTitles = opts.tooltip_titles || [];
 
     // Y-axis: format tick values per the active mode.
     if (opts.scales && opts.scales.y) {
@@ -62,7 +63,13 @@ window.hyperdiv.registerPlugin("VolumeChart", (ctx) => {
       intersect: false,
       callbacks: {
         title(items) {
-          return items.length ? items[0].label : "";
+          if (!items.length) return "";
+          const idx = items[0].dataIndex;
+          console.log(tooltipTitles[idx]);
+          if (idx != null && tooltipTitles[idx] != null) {
+            return tooltipTitles[idx];
+          }
+          return items[0].label;
         },
         label(context) {
           const ds = context.dataset || {};
