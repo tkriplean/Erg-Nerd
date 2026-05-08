@@ -625,7 +625,7 @@ def attach_ess_metrics(
                 # weight tweaks shouldn't bust the cache, but a real change
                 # (kg vs lb, big weight loss, profile fix) should.
                 "mass": str(int(round(mass_kg))) if mass_kg else "0",
-                "model": "v6",  # v6: peak-driven stimulus dose, lower thresholds
+                "model": "v7",  # v7: + closest-RW confirmation gate on stimulus
                 "tl": "1" if with_timeline else "0",
             }
 

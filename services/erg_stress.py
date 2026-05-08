@@ -306,12 +306,20 @@ STIMULUS_DOSE_BUCKETS: tuple[tuple[str, float], ...] = (
 )
 
 
-def _compute_stimulus_doses(Z_w: np.ndarray, work_mask: np.ndarray) -> dict[int, float]:
+def _compute_stimulus_doses(
+    Z_w: np.ndarray,
+    work_mask: np.ndarray,
+    zone_time_fractions: Optional[dict] = None,
+) -> dict[int, float]:
     """Per-band stimulus dose from the workout-isolated band-saturation matrix.
 
     ``Z_w`` is the 6×N matrix ``zone_ratio_d(t) = EMA_d(P_w)(t) / RW_d``
     already computed for the Intensity signal.  ``work_mask`` is the
-    boolean per-second mask of work-only seconds.
+    boolean per-second mask of work-only seconds.  ``zone_time_fractions``
+    is the closest-RW band classification for the same workout (per-band
+    fraction of work-seconds where each band's reference watts was the
+    nearest of the six).  When provided, it gates the dose values via the
+    confirmation rule below.
 
     Peak-driven dose model:
 
@@ -325,19 +333,28 @@ def _compute_stimulus_doses(Z_w: np.ndarray, work_mask: np.ndarray) -> dict[int,
         Lands at 1.0 right at threshold; 2.0 at peak = 1.0; 3.0 cap for
         super-PB efforts where zone_ratio exceeds 1.0.
 
-    The user's intuition driving this design: the EMA reaching saturation
-    *already represents* a band-relevant dose of work — we don't require
-    additional sustained-time-at-saturation on top of the EMA fill.  A
-    5 min effort at 5-min reference power generates a peak EMA of ~0.93,
-    which is a full stimulus; a 5k race at 80 % of PB pace generates a
-    peak ~0.80, which is partial; a sustained FTP effort generates a peak
-    ~0.75 in the 5-min band, which gracefully reads as "almost partial"
-    rather than zero.
+    Closest-RW confirmation gate (when ``zone_time_fractions`` is passed):
+        For each candidate band ``d``, the dose is kept *only if* the
+        rower spent some work-time at watts classified to band ``d`` OR a
+        more-intense (shorter-duration) band.  Otherwise the dose is
+        zeroed out.
+
+    The gate solves a class of false-positive readings.  Without it, the
+    peak-driven dose can register partial stimulus across all bands for
+    a sustained low-intensity workout — e.g., easy Z2 at 180 W elevates
+    every band's EMA peak above 0.36 (zone_ratio_20s = 0.36, etc.), and
+    the quadratic partial-credit branch produces small but non-zero doses
+    everywhere.  Physiologically, no Sprint / Anaerobic / VO2max stimulus
+    was actually delivered — the rower never produced watts in those
+    bands' classification range.  The closest-RW classification is the
+    immediate-power fingerprint; using it to confirm the duration-aware
+    EMA dose strips the leakage cleanly.
 
     Sub-band leakage (e.g., 1-hour FTP triggering Sprint stimulus because
     sustained 240 W elevates short-EMA seconds) is bounded by the
-    per-band ``S_thresh`` — short-EMA bands need their *peak* to reach
-    threshold, which a sustained moderate effort cannot do.
+    per-band ``S_thresh`` plus the closest-RW gate.  Short-EMA bands need
+    their *peak* to reach threshold AND the rower to have spent some time
+    at watts classified to that band or higher.
 
     Workout-isolated convention (bands seed at zero per workout) — same
     as Severity / Intensity / Zone Spread.  A cooldown after a race
@@ -375,6 +392,18 @@ def _compute_stimulus_doses(Z_w: np.ndarray, work_mask: np.ndarray) -> dict[int,
     if below_thresh.any():
         ratio = peaks[below_thresh] / s_thresh_arr[below_thresh]
         dose[below_thresh] = np.minimum(0.99, ratio * ratio)
+
+    # Closest-RW confirmation gate.  ``ZONE_BANDS_S`` runs shortest →
+    # longest = highest-intensity → lowest-intensity.  For each band d,
+    # cumulative_fraction[d] = Σ fraction[d'] for d' ≤ d = fraction of
+    # work-time spent at watts classified to band d or any more-intense
+    # band.  A band is confirmed when this cumulative fraction is > 0.
+    if zone_time_fractions is not None:
+        cumulative = 0.0
+        for i, d in enumerate(ZONE_BANDS_S):
+            cumulative += float(zone_time_fractions.get(int(d), 0.0))
+            if cumulative <= 0.0:
+                dose[i] = 0.0
 
     return {
         int(ZONE_BANDS_S[i]): float(dose[i])
@@ -913,18 +942,25 @@ def _attach_per_workout_records(
                     if total_count
                     else np.zeros(n_bands, dtype=np.float64)
                 )
-                stimulus_doses = _compute_stimulus_doses(Z_w, work_w_mask)
+                # Build zone_time_fractions first so the stimulus call can
+                # use it as the closest-RW confirmation gate.
+                zone_time_fractions = {
+                    int(ZONE_BANDS_S[i]): float(fractions_arr[i])
+                    for i in range(n_bands)
+                }
+                stimulus_doses = _compute_stimulus_doses(
+                    Z_w, work_w_mask, zone_time_fractions
+                )
             else:
                 fractions_arr = np.zeros(n_bands, dtype=np.float64)
+                zone_time_fractions = {int(d): 0.0 for d in ZONE_BANDS_S}
                 stimulus_doses = {int(d): 0.0 for d in ZONE_BANDS_S}
         else:
             intensity_w = 0.0
             fractions_arr = np.zeros(n_bands, dtype=np.float64)
+            zone_time_fractions = {int(d): 0.0 for d in ZONE_BANDS_S}
             stimulus_doses = {int(d): 0.0 for d in ZONE_BANDS_S}
 
-        zone_time_fractions = {
-            int(ZONE_BANDS_S[i]): float(fractions_arr[i]) for i in range(n_bands)
-        }
         stimulus_systems = sorted(d for d, dose in stimulus_doses.items() if dose >= 1.0)
 
         slc = I_w_arr if I_w_arr.size else np.zeros(1, dtype=np.float64)
