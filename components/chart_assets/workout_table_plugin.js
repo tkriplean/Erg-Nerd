@@ -318,7 +318,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     sortCol: ctx.initialProps.default_sort_col || "date",
     sortAsc: !!ctx.initialProps.default_sort_asc,
     page: 0,
-    perPage: ctx.initialProps.rows_per_page || 25,
+    perPage: ctx.initialProps.rows_per_page || 50,
     paginate: ctx.initialProps.paginate !== false,
     resetToken: ctx.initialProps.reset_token || "",
     defaultSortCol: ctx.initialProps.default_sort_col || "date",

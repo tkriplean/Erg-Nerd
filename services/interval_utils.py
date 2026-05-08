@@ -486,7 +486,9 @@ def avg_work_spm(r: dict) -> float | None:
 # ---------------------------------------------------------------------------
 
 
-def interval_structure_label(r: dict, compact: bool = False) -> str:
+def interval_structure_label(
+    r: dict, lines: list[str] | None = None, compact: bool = False
+) -> str:
     """
     Return a canonical one-line structure string for display.
 
@@ -496,7 +498,8 @@ def interval_structure_label(r: dict, compact: bool = False) -> str:
     Pass ``compact=True`` for abbreviated labels (e.g. "36 × 1'  /  1'r"
     instead of "36 × 1:00  /  1:00 rest").
     """
-    lines = build_interval_lines(r, compact=compact)
+    if lines is None:
+        lines = build_interval_lines(r, compact=compact)
     return lines[0] if lines else (r.get("workout_type") or "Unknown")
 
 

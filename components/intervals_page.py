@@ -477,7 +477,7 @@ def _cell_name(row_idx: int, col_idx: int) -> str:
     return info["name"] if info else "Other"
 
 
-_ROWS_PER_PAGE = 200
+_ROWS_PER_PAGE = 100
 
 # Grid cell sizing
 _CELL_H = 4.0  # HyperDiv units per data cell
@@ -571,7 +571,11 @@ def _enrich_workouts(
                                  ("Other" when cell is n/a)
     """
     result = []
-    interval_workouts = [r for r in workouts if r["is_interval"] and r["reps"] != 1]
+    interval_workouts = [
+        r
+        for r in workouts
+        if r["is_interval"] and (not r["workout_type"][:5] == "Fixed" or r["reps"] != 1)
+    ]
     if interval_workouts:
         attach_spread(
             interval_workouts,
@@ -1018,30 +1022,33 @@ def intervals_page() -> None:
                     ).clicked:
                         state.structure_filter = None
 
-            with hd.hbox(align="center", justify="space-between", padding=(0.5, 0)):
-                hd.text(
-                    f"{total_filtered} workout{'s' if total_filtered != 1 else ''}",
-                    font_size="small",
-                    font_color="neutral-500",
+            with hd.box(align="center", justify="space-between", padding=(0.5, 0)):
+                hd.h2("Workouts")
+
+                # hd.text(
+                #     f"{total_filtered} workout{'s' if total_filtered != 1 else ''}",
+                #     font_size="small",
+                #     font_color="neutral-500",
+                # )
+
+                visible_ids = [r["id"] for r in filtered]
+
+                # When any filter changes, push a new reset_token so the JS
+                # plugin resets page + sort to defaults.
+                reset_token = (
+                    f"{state.structure_filter or 'all'}"
+                    f"_{sorted(list(spread_severity_state.active_bins))}"
+                    f"_{sorted(list(spread_severity_state.active_hr_bins))}"
+                    f"_{sorted(list(spread_severity_state.active_severity))}"
+                    f"_{sorted(list(state.active_cells))}"
                 )
 
-            visible_ids = [r["id"] for r in filtered]
-
-            # When any filter changes, push a new reset_token so the JS
-            # plugin resets page + sort to defaults.
-            reset_token = (
-                f"{state.structure_filter or 'all'}"
-                f"_{sorted(list(spread_severity_state.active_bins))}"
-                f"_{sorted(list(spread_severity_state.active_hr_bins))}"
-                f"_{sorted(list(spread_severity_state.active_severity))}"
-                f"_{sorted(list(state.active_cells))}"
-            )
-            WorkoutTable(
-                all_intervals,
-                interval_columns,
-                rows_per_page=_ROWS_PER_PAGE,
-                default_sort_col="date",
-                visible_ids=visible_ids,
-                on_event={"structure_click": _on_structure_click},
-                reset_token=reset_token,
-            )
+                WorkoutTable(
+                    all_intervals,
+                    interval_columns,
+                    rows_per_page=_ROWS_PER_PAGE,
+                    default_sort_col="date",
+                    visible_ids=visible_ids,
+                    on_event={"structure_click": _on_structure_click},
+                    reset_token=reset_token,
+                )

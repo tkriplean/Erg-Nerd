@@ -2012,9 +2012,9 @@ def workout_page(workout_id: int) -> None:
     # ── Title ────────────────────────────────────────────────────────────────
 
     if is_interval:
-        title = workout.get("intervals_label") or workout["structure_key"]
+        title = workout.get("intervals_full_label") or [workout["structure_key"]]
     else:
-        title = fmt_distance_label(workout)
+        title = [fmt_distance_label(workout)]
 
     # ── Callbacks ────────────────────────────────────────────────────────────
 
@@ -2042,7 +2042,10 @@ def workout_page(workout_id: int) -> None:
 
             with hd.box(padding_top=1, gap=0, align="start"):
                 hd.text(fmt_date(workout["date"]), font_color="neutral-500")
-                hd.text(title, font_weight="bold", font_size="2x-large")
+                with hd.box():
+                    for i, t in enumerate(title):
+                        with hd.scope(f"{i}-{t}"):
+                            hd.text(t, font_weight="bold", font_size="2x-large")
 
                 if workout.get("comments"):
                     with hd.hbox(gap=0.25):

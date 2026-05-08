@@ -101,7 +101,7 @@ _LAYOUT_KEYS = frozenset({"header", "width", "align", "sortable", "default_asc"}
 _SPREAD_BAR_WIDTH = 5.0
 _SPREAD_BAR_HEIGHT = 0.5
 
-_DEFAULT_ROWS_PER_PAGE = 25
+_DEFAULT_ROWS_PER_PAGE = 100
 
 
 # ---------------------------------------------------------------------------
@@ -227,9 +227,7 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
     "glycogen_used": ColumnDef(
         "glycogen_used", "Gly Used", "5rem", format="glycogen_used"
     ),
-    "stimulus": ColumnDef(
-        "stimulus", "Stimulus", "5.5rem", renderer="stimulus"
-    ),
+    "stimulus": ColumnDef("stimulus", "Stimulus", "5.5rem", renderer="stimulus"),
     # ── Stateful columns ─────────────────────────────────────────────────
     "structure_filter": ColumnDef(
         "structure_filter",
@@ -642,6 +640,7 @@ def WorkoutTable(
     # so the JS-rendered "view" anchors don't drop the viewer out of the
     # public dashboard.  The owner mode prefix is empty.
     from components.app_context import AppContext as _AppContext
+
     _ctx = _AppContext()
     _link_prefix = f"/u/{_ctx.user_id}" if _ctx.is_public else ""
 

@@ -96,6 +96,7 @@ from services.interval_utils import (
     get_rep_count,
     interval_structure_key,
     interval_structure_label,
+    build_interval_lines,
 )
 from services.reference_watts import input_hash
 from services.rowing_utils import (
@@ -184,7 +185,11 @@ def enrich_for_storage(w: dict) -> dict:
     if w["is_interval"]:
         w["reps"] = get_rep_count(w)
         w["structure_key"] = interval_structure_key(w, compact=True)
-        w["intervals_label"] = interval_structure_label(w, compact=True)
+        label_lines = build_interval_lines(w, compact=True)
+        w["intervals_full_label"] = tuple(label_lines)
+        w["intervals_label"] = interval_structure_label(
+            w, compact=True, lines=label_lines
+        )
         w["work_pace"] = avg_workpace_tenths(w)
         w["work_spm"] = avg_work_spm(w)
 
