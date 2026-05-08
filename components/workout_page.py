@@ -71,6 +71,11 @@ from services.rowing_utils import compute_watts
 
 from components.hyperdiv_extensions import radio_group
 from components.concept2_sync import sync_workouts, strokes_for
+from components import indexed_db
+from components.indexed_db import SESSIONS_STORE, WORKOUTS_STORE
+from services import time_overrides
+from services.sessions import assign_sessions_incremental
+from services.workout_enrichment import enrich_for_storage
 
 
 # ---------------------------------------------------------------------------
@@ -224,9 +229,7 @@ def _session_rollup(workout: dict) -> None:
                 _stat("Glycogen Used", f"{gly_pct}%{gly_warn}")
             if per_workout_recs:
                 stim_text = (
-                    " + ".join(
-                        BIN_NAMES[BAND_TO_BIN[d]] for d in session_stim_systems
-                    )
+                    " + ".join(BIN_NAMES[BAND_TO_BIN[d]] for d in session_stim_systems)
                     if session_stim_systems
                     else "—"
                 )
@@ -266,9 +269,10 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
     rest_time = workout.get("rest_time")
 
     is_dark = hd.theme().is_dark
-    has_intensity = workout.get("_if_eff") is not None and workout.get(
-        "_zone_bin_fractions"
-    ) is not None
+    has_intensity = (
+        workout.get("_if_eff") is not None
+        and workout.get("_zone_bin_fractions") is not None
+    )
     has_hr_spread = workout.get("_hr_spread_score") is not None
     has_ess = workout.get("_ess") is not None
 
@@ -1408,6 +1412,517 @@ def _render_similar_workouts(workout, all_workouts, max_hr, profile, state):
 
 
 # ---------------------------------------------------------------------------
+# Time-of-day override editor (for manually-added workouts)
+# ---------------------------------------------------------------------------
+
+
+_NO_TOD_SUFFIX = " 00:00:00"
+
+
+def _format_hhmmss_friendly(hhmmss: str) -> str:
+    """``"09:30:00"`` → ``"9:30 AM"``.  Drops seconds when zero."""
+    try:
+        h = int(hhmmss[0:2])
+        m = int(hhmmss[3:5])
+        s = int(hhmmss[6:8])
+    except (ValueError, IndexError):
+        return hhmmss
+    ampm = "AM" if h < 12 else "PM"
+    h12 = h % 12 or 12
+    if s:
+        return f"{h12}:{m:02d}:{s:02d} {ampm}"
+    return f"{h12}:{m:02d} {ampm}"
+
+
+def _hhmmss_from_seconds(total_s: int) -> Optional[str]:
+    """Clamp-or-reject: returns ``"HH:MM:SS"`` if ``total_s`` lies inside
+    a single day, else None (caller should skip the shortcut)."""
+    if total_s < 0 or total_s >= 86400:
+        return None
+    h = total_s // 3600
+    m = (total_s % 3600) // 60
+    s = total_s % 60
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def _seconds_from_hhmmss(hhmmss: str) -> Optional[int]:
+    try:
+        h = int(hhmmss[0:2])
+        m = int(hhmmss[3:5])
+        s = int(hhmmss[6:8])
+    except (ValueError, IndexError):
+        return None
+    return h * 3600 + m * 60 + s
+
+
+def _workout_duration_seconds(w: dict) -> int:
+    """Total elapsed seconds (work + rest for intervals)."""
+    base = (w.get("time") or 0) // 10
+    if w.get("is_interval"):
+        base += (w.get("rest_time") or 0) // 10
+    return int(base)
+
+
+#: Fields added by ``enrich_for_storage`` — must be stripped before
+#: writing a workout back to IDB so the persisted shape matches the
+#: post-normalize / pre-enrich canonical form (``concept2_sync`` writes
+#: workouts before enrichment for the same reason).  ``date_dt`` is the
+#: critical one: it's a ``datetime.date`` and won't JSON-serialise.
+_ENRICHMENT_FIELDS = (
+    "date_dt",
+    "date_ms",
+    "day",
+    "season",
+    "machine",
+    "cat_key",
+    "is_interval",
+    "reps",
+    "structure_key",
+    "intervals_label",
+    "work_pace",
+    "work_spm",
+    "pace",
+    "watts",
+)
+
+
+def _persistable_workout(w: dict) -> dict:
+    """Return a shallow copy of ``w`` stripped of enrichment-only fields,
+    suitable for writing to ``WORKOUTS_STORE``."""
+    return {k: v for k, v in w.items() if k not in _ENRICHMENT_FIELDS}
+
+
+def _apply_override_to_live_state(
+    workout_id_str: str,
+    new_date: str,
+    workouts_dict: dict,
+    sessions_dict: dict,
+) -> None:
+    """Mutate workout date in place, recluster the affected sessions, and
+    write the changes through to IndexedDB.
+
+    A re-cluster can shift session_ids on workouts the user did NOT edit
+    (e.g. workout B that joins the edited workout A's new session).  Every
+    such workout is persisted back to IDB so its stored ``session_id``
+    matches the live session record.  Without this, workouts on the same
+    day end up referencing dropped session uuids and the dashboard fails
+    to attach session-level metrics on the next reload.
+
+    Re-runs ``enrich_for_storage`` on the mutated workout so the derived
+    fields (``date_dt``, ``date_ms``, ``day``, ``season`` …) match the
+    new date.
+
+    No-op when ``workout_id_str`` is missing from ``workouts_dict``.
+    """
+    w = workouts_dict.get(workout_id_str)
+    if w is None:
+        return
+    w["date"] = new_date
+
+    # Re-run Stage-2 enrichment so derived fields stay consistent with the
+    # new date.  ``enrich_for_storage`` is idempotent.
+    enrich_for_storage(w)
+
+    # Recluster only the (machine, day) buckets touched by this workout.
+    new_sessions, mutations, dropped_sids = assign_sessions_incremental(
+        workouts_dict, sessions_dict or {}, {workout_id_str}
+    )
+
+    # Apply the new session_ids to in-memory workouts.  Note that
+    # ``mutations`` covers EVERY workout in the rebuilt bucket whose
+    # session_id changed — when the edited workout joins an existing
+    # session, the other members of that session are reassigned too
+    # because ``_build_for_bucket`` always mints fresh session uuids.
+    for wid, sid in mutations.items():
+        if wid in workouts_dict:
+            workouts_dict[wid]["session_id"] = sid
+
+    # Push session-record changes to IDB.  ``new_sessions`` is the full
+    # post-cluster dict (carried-over + freshly built); identity-compare
+    # against the in-memory ``sessions_dict`` to write only the records
+    # that actually changed.
+    for sid in dropped_sids:
+        indexed_db.delete(SESSIONS_STORE, sid)
+        sessions_dict.pop(sid, None)
+    session_writes: dict = {}
+    for sid, rec in new_sessions.items():
+        if sid in dropped_sids:
+            continue
+        if sessions_dict.get(sid) is not rec:
+            session_writes[sid] = rec
+            sessions_dict[sid] = rec
+    if session_writes:
+        indexed_db.put_many(SESSIONS_STORE, session_writes)
+
+    # Persist every workout whose session_id changed (plus the edited
+    # workout, whose ``date`` field also changed).  Without this, sibling
+    # workouts in the rebuilt bucket would carry stale session_ids on
+    # their next IDB read — referring to sessions we just dropped.
+    affected_wids = set(mutations.keys()) | {workout_id_str}
+    workout_writes = {
+        wid: _persistable_workout(workouts_dict[wid])
+        for wid in affected_wids
+        if wid in workouts_dict
+    }
+    if workout_writes:
+        indexed_db.put_many(WORKOUTS_STORE, workout_writes)
+
+
+def _republish_after_edit(
+    user_id: str, profile: dict, workouts_dict: dict, sessions_dict: dict
+) -> None:
+    """Mirror the edited workouts + sessions to the public profile, when the
+    owner has opted in.  Best-effort: errors are logged, not surfaced."""
+    if not (profile or {}).get("public"):
+        return
+    try:
+        from services import public_profiles
+
+        snapshot = {wid: _persistable_workout(w) for wid, w in workouts_dict.items()}
+        public_profiles.publish_workouts(user_id, snapshot)
+        public_profiles.publish_sessions(user_id, sessions_dict)
+    except Exception as exc:
+        print(f"[time_overrides] post-edit republish failed: {exc}")
+
+
+def _workout_short_label(w: dict) -> str:
+    """Compact label for the shortcut workout selector.
+
+    Time-prefixed so the user can pick by when-it-happened, with a short
+    distance / structure tag for disambiguation when several workouts on
+    the day are similar."""
+    raw = w.get("date") or ""
+    time_lbl = (
+        _format_hhmmss_friendly(raw[11:19])
+        if len(raw) >= 19 and not raw.endswith(_NO_TOD_SUFFIX)
+        else ""
+    )
+    if w.get("is_interval"):
+        body = w.get("intervals_label") or w.get("structure_key") or ""
+    else:
+        body = ""
+        d = w.get("distance")
+        t = w.get("time")
+        if d:
+            if d >= 1000:
+                k = d / 1000
+                body = f"{int(k)}k" if k == int(k) else f"{k:.1f}k"
+            else:
+                body = f"{int(d)}m"
+        elif t:
+            mins = t // 600
+            body = f"{int(mins)}min"
+    if time_lbl and body:
+        return f"{time_lbl} — {body}"
+    return time_lbl or body or f"workout {w.get('id')}"
+
+
+def _same_day_workouts_with_times(
+    workout: dict,
+    workouts_dict: dict,
+) -> list[dict]:
+    """Return workouts on the same (machine, day) as ``workout`` that have
+    a real time-of-day (i.e. their date does not end in ``00:00:00``).
+
+    Excludes the current workout itself.  Sorted by start time.
+    """
+    own_id = str(workout.get("id"))
+    own_day = (workout.get("date") or "")[:10]
+    own_machine = workout.get("type") or "rower"
+    if not own_day:
+        return []
+    out: list[dict] = []
+    for w in (workouts_dict or {}).values():
+        if str(w.get("id")) == own_id:
+            continue
+        if (w.get("type") or "rower") != own_machine:
+            continue
+        date = w.get("date") or ""
+        if date[:10] != own_day:
+            continue
+        if date.endswith(_NO_TOD_SUFFIX):
+            continue  # another manually-added workout — no time to anchor on
+        if len(date) < 19:
+            continue
+        out.append(w)
+    out.sort(key=lambda w: (w.get("date") or "")[11:19])
+    return out
+
+
+def _hhmmss_for_anchor(
+    anchor: dict,
+    position: str,
+    gap_minutes: float,
+    duration_s: int,
+) -> Optional[str]:
+    """Compute the override hhmmss (workout end) when inserting the current
+    workout ``position`` (``"before"`` or ``"after"``) the ``anchor``
+    workout with a ``gap_minutes``-minute gap.
+
+    Returns None when the result would cross a midnight boundary.
+    """
+    raw = anchor.get("date") or ""
+    if len(raw) < 19:
+        return None
+    anchor_end_s = _seconds_from_hhmmss(raw[11:19])
+    if anchor_end_s is None:
+        return None
+    anchor_duration = _workout_duration_seconds(anchor)
+    anchor_start_s = anchor_end_s - anchor_duration
+    gap_s = int(round(gap_minutes * 60))
+    if position == "before":
+        # Our end is at anchor_start - gap.  ``date`` is the workout end.
+        new_end_s = anchor_start_s - gap_s
+        if new_end_s - duration_s < 0:
+            return None
+        return _hhmmss_from_seconds(new_end_s)
+    # "after": our start is at anchor_end + gap; our end = start + duration.
+    new_start_s = anchor_end_s + gap_s
+    new_end_s = new_start_s + duration_s
+    if new_end_s >= 86400:
+        return None
+    return _hhmmss_from_seconds(new_end_s)
+
+
+def _time_of_day_editor(
+    workout: dict,
+    workouts_dict: dict,
+    sessions_dict: dict,
+) -> None:
+    """Render the time-of-day editor panel for a manually-added workout.
+
+    Visibility:
+      Renders only when the workout's current date ends with ``00:00:00``
+      OR an override is currently set (so the user can revisit / clear).
+
+    Owner gate:
+      Saves are gated on ``AppContext().is_owner``; for public viewers
+      the panel renders read-only (showing the value but not the form).
+    """
+    ctx = AppContext()
+    user_id = ctx.user_id
+    is_owner = ctx.is_owner and bool(user_id)
+
+    raw_date = workout.get("date") or ""
+    is_manually_added = raw_date.endswith(_NO_TOD_SUFFIX)
+
+    # Detect existing overrides via the on-disk record.  Owner-only check:
+    # public viewers see the override-applied date directly (already baked
+    # into the published workouts.zb64) and don't need this panel.
+    overrides = time_overrides.load_overrides(user_id) if is_owner else {}
+    wid_str = str(workout["id"])
+    has_override = wid_str in overrides
+
+    if not is_manually_added and not has_override:
+        return
+
+    # In public mode we have no editor — bail silently.  Owners get the
+    # full UI even when no override is set yet (since is_manually_added).
+    if not is_owner:
+        return
+
+    # ── Local state ──────────────────────────────────────────────────────
+    # Pre-populate the text input with the current override (if any) so the
+    # user sees what's saved and can fine-tune from there.
+    initial_text = _format_hhmmss_friendly(overrides[wid_str]) if has_override else ""
+    same_day = _same_day_workouts_with_times(workout, workouts_dict)
+    initial_anchor = str(same_day[0]["id"]) if same_day else ""
+
+    edit_state = hd.state(
+        text=initial_text,
+        error="",
+        feedback="",
+        feedback_kind="",  # "" | "saved" | "cleared"
+        # Insert-relative-to UI state.
+        rel_position="after",  # "before" | "after"
+        rel_anchor_id=initial_anchor,
+        rel_gap_text="5",  # minutes between, free-form text
+    )
+
+    profile = ctx.profile or {}
+
+    def _commit(hhmmss: str) -> None:
+        """Persist + apply: write to disk, mutate live workouts/sessions,
+        and trigger a public republish if opted in."""
+        try:
+            time_overrides.save_override(user_id, wid_str, hhmmss)
+        except Exception as exc:
+            edit_state.error = f"Save failed: {exc}"
+            edit_state.feedback = ""
+            return
+        new_date = (
+            raw_date[: -len(_NO_TOD_SUFFIX)] + " " + hhmmss
+            if is_manually_added
+            else (raw_date[:10] + " " + hhmmss)
+        )
+        _apply_override_to_live_state(wid_str, new_date, workouts_dict, sessions_dict)
+        _republish_after_edit(user_id, profile, workouts_dict, sessions_dict)
+        edit_state.error = ""
+        edit_state.feedback = f"Saved {_format_hhmmss_friendly(hhmmss)}."
+        edit_state.feedback_kind = "saved"
+        edit_state.text = _format_hhmmss_friendly(hhmmss)
+
+    def _on_clear() -> None:
+        try:
+            time_overrides.clear_override(user_id, wid_str)
+        except Exception as exc:
+            edit_state.error = f"Clear failed: {exc}"
+            return
+        # Live revert: reset the date's time component to 00:00:00 so the
+        # downstream consumers (table flag, session clustering) see the
+        # original "no time-of-day" state again.
+        reset_date = raw_date[:10] + _NO_TOD_SUFFIX
+        _apply_override_to_live_state(wid_str, reset_date, workouts_dict, sessions_dict)
+        _republish_after_edit(user_id, profile, workouts_dict, sessions_dict)
+        edit_state.error = ""
+        edit_state.feedback = "Override cleared."
+        edit_state.feedback_kind = "cleared"
+        edit_state.text = ""
+
+    # ── Layout ───────────────────────────────────────────────────────────
+    current_hhmmss = overrides.get(wid_str) or (raw_date[11:19] or "")
+    with hd.box(
+        padding=(0.75, 1.25, 0.75, 1.25),
+        gap=0.5,
+        border="1px solid neutral-200",
+        background_color="warning-50",
+        border_radius="medium",
+        margin_bottom=1,
+        width="100%",
+    ):
+        with hd.hbox(gap=0.5, align="center"):
+            hd.icon("exclamation-triangle", font_color="warning-700")
+            hd.text(
+                (
+                    "This workout was added manually and has no recorded "
+                    "time-of-day."
+                    if is_manually_added
+                    else f"Time-of-day override: {_format_hhmmss_friendly(current_hhmmss)}"
+                ),
+                font_size="small",
+                font_color="warning-700",
+                font_weight="semibold",
+            )
+
+        with hd.hbox(gap=0.5, align="center"):
+            hd.text("Set time:", font_size="small", font_color="neutral-700")
+            ti = hd.text_input(
+                value=edit_state.text,
+                placeholder="9:30 AM",
+                width=12,
+                size="small",
+            )
+            if ti.changed:
+                edit_state.text = ti.value
+                edit_state.error = ""
+            save_btn = hd.button("Save", size="small", variant="primary")
+            if save_btn.clicked:
+                hhmmss, err = time_overrides.parse_time_input(edit_state.text)
+                if err or hhmmss is None:
+                    edit_state.error = err or "Invalid time."
+                else:
+                    _commit(hhmmss)
+            if has_override:
+                clear_btn = hd.button("Clear", size="small", variant="default")
+                if clear_btn.clicked:
+                    _on_clear()
+
+        if edit_state.error:
+            hd.text(
+                edit_state.error,
+                font_size="x-small",
+                font_color="danger-700",
+            )
+        elif edit_state.feedback:
+            hd.text(
+                edit_state.feedback,
+                font_size="x-small",
+                font_color="success-700",
+            )
+
+        # ── Insert-relative-to-another-workout selector ──────────────────
+        if same_day:
+            hd.text(
+                f"Or insert relative to another workout on {fmt_date(raw_date)}:",
+                font_size="x-small",
+                font_color="neutral-500",
+            )
+            duration_s = _workout_duration_seconds(workout)
+
+            # Resolve current selections, falling back to defaults if state
+            # is stale (e.g. another workout's override removed it from the
+            # list since the last render).
+            anchor_ids = [str(w["id"]) for w in same_day]
+            if edit_state.rel_anchor_id not in anchor_ids:
+                edit_state.rel_anchor_id = anchor_ids[0]
+            anchor = next(
+                (w for w in same_day if str(w["id"]) == edit_state.rel_anchor_id),
+                same_day[0],
+            )
+
+            with hd.hbox(gap=0.5, align="center", wrap="wrap"):
+                pos_sel = hd.select(value=edit_state.rel_position, size="small")
+                with pos_sel:
+                    with hd.scope("before"):
+                        hd.option("Before", value="before")
+                    with hd.scope("after"):
+                        hd.option("After", value="after")
+                if pos_sel.changed:
+                    edit_state.rel_position = pos_sel.value
+
+                anchor_sel = hd.select(
+                    value=edit_state.rel_anchor_id,
+                    size="small",
+                )
+                with anchor_sel:
+                    for w in same_day:
+                        wid = str(w["id"])
+                        with hd.scope(wid):
+                            hd.option(_workout_short_label(w), value=wid)
+                if anchor_sel.changed:
+                    edit_state.rel_anchor_id = anchor_sel.value
+
+                hd.text("with", font_size="small", font_color="neutral-700")
+                gap_input = hd.text_input(
+                    value=edit_state.rel_gap_text,
+                    width=4,
+                    size="small",
+                )
+                if gap_input.changed:
+                    edit_state.rel_gap_text = gap_input.value
+                hd.text("min gap", font_size="small", font_color="neutral-700")
+
+                apply_btn = hd.button(
+                    "Apply",
+                    size="small",
+                    variant="primary",
+                )
+                if apply_btn.clicked:
+                    try:
+                        gap_minutes = float(edit_state.rel_gap_text)
+                    except ValueError:
+                        edit_state.error = "Gap must be a number of minutes."
+                        gap_minutes = None
+                    if gap_minutes is not None:
+                        if gap_minutes < 0:
+                            edit_state.error = "Gap must be non-negative."
+                        else:
+                            hhmmss = _hhmmss_for_anchor(
+                                anchor,
+                                edit_state.rel_position,
+                                gap_minutes,
+                                duration_s,
+                            )
+                            if hhmmss is None:
+                                edit_state.error = (
+                                    "That insertion would cross midnight — "
+                                    "set the time directly above instead."
+                                )
+                            else:
+                                _commit(hhmmss)
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -1464,13 +1979,16 @@ def workout_page(workout_id: int) -> None:
 
     max_hr, _ = resolve_max_hr(profile, all_workouts)
     try:
-        attach_spread([workout], all_workouts, max_hr)
+        attach_spread(same_day, all_workouts, max_hr)
     except Exception:
         pass
 
+    # All workouts done on this day
+    same_day = [w for w in all_workouts if w.get("day") == workout.get("day")]
+
     try:
         attach_ess_metrics(
-            [workout],
+            same_day,
             all_workouts,
             AppContext().sessions_dict or {},
             profile,
@@ -1539,6 +2057,13 @@ def workout_page(workout_id: int) -> None:
             # ── Summary stats ─────────────────────────────────────────────────
 
             _summary_section(workout, strokes)
+
+        # ── Time-of-day editor (manually-added workouts only) ────────────
+        _time_of_day_editor(
+            workout,
+            _workouts_dict,
+            AppContext().sessions_dict or {},
+        )
 
         # ── Chart + Splits side by side ───────────────────────────────────
 
@@ -1698,6 +2223,7 @@ def workout_page(workout_id: int) -> None:
 
         # ── Effort & Stress (IF_eff + W'bal time-series) ─────────────────
         ess_cfg = build_effort_stress_chart_config(workout, is_dark=_theme.is_dark)
+
         if ess_cfg:
             with hd.box(gap=0.5, width="100%"):
                 hd.h2(
@@ -1709,22 +2235,8 @@ def workout_page(workout_id: int) -> None:
                 EffortStressChart(config=ess_cfg, height=220)
 
         # ── All workouts done on this day ────────────────────────────────
-        same_day = [w for w in all_workouts if w.get("day") == workout.get("day")]
+
         if len(same_day) > 1:
-            try:
-                attach_spread(same_day, all_workouts, max_hr)
-            except Exception:
-                pass
-            try:
-                attach_ess_metrics(
-                    same_day,
-                    all_workouts,
-                    AppContext().sessions_dict or {},
-                    profile,
-                    max_hr,
-                )
-            except Exception:
-                pass
             with hd.box(align="center", padding_top=2):
                 hd.h2(
                     "All workouts on this day",
@@ -1762,20 +2274,19 @@ def workout_page(workout_id: int) -> None:
                 _session_rollup(workout)
                 day_cols = [
                     "date",
-                    "type",
-                    "structure",
-                    "distance",
-                    "time",
+                    "time_of_day",
+                    "main_work",
+                    "work_duration",
                     "pace",
                     "watts",
+                    "distance_combined",
                     "spm",
+                    "drag",
                     "hr",
-                    "ess",
-                    "if_eff",
                     "severity",
-                    "anaerobic_strain",
-                    "glycogen_used",
                     "stimulus",
+                    "ess",
+                    "glycogen_used",
                     {"key": "link", "current_id": str(workout["id"])},
                 ]
                 WorkoutTable(
@@ -1785,7 +2296,8 @@ def workout_page(workout_id: int) -> None:
                     default_sort_asc=True,
                     paginate=False,
                     highlight=lambda r: str(r.get("id")) == str(workout["id"]),
+                    tree_mode=True,
                 )
 
         # ── Similar workouts ─────────────────────────────────────────────
-        _render_similar_workouts(workout, all_workouts, max_hr, profile, state)
+        # _render_similar_workouts(workout, all_workouts, max_hr, profile, state)

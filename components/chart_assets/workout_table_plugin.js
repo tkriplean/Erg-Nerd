@@ -132,6 +132,20 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       font-size: var(--sl-font-size-x-small);
     }
 
+    /* Manually-added workouts — Concept2 stores them with date suffix
+       " 00:00:00" (no real time-of-day).  Flag the relevant cell so the
+       user can spot them and override the time on the WorkoutPage. */
+    .manually-added,
+    .manually-added .tod-main,
+    .manually-added .date-main {
+      color: var(--sl-color-warning-700, #b8651e);
+    }
+    .manually-added .manual-icon {
+      display: inline-block;
+      margin-right: 0.2rem;
+      font-size: 0.7rem;
+    }
+
     .cell .lines .distance-sub {
       font-size: var(--sl-font-size-x-small);
       color: var(--sl-color-neutral-500);    
@@ -394,6 +408,21 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
   }
   function capitalize(s) {
     return s ? s[0].toUpperCase() + s.slice(1) : "";
+  }
+
+  // True when this row represents a manually-added workout (or a
+  // session whose only member is one) — Concept2 stores these with a
+  // date suffix " 00:00:00" since there's no recorded time-of-day.
+  // The owner can override the time on the WorkoutPage; until then we
+  // flag the cell visually.
+  function _isManuallyAdded(r) {
+    if (!r) return false;
+    if (r._row_kind === "session") {
+      const sd = r._session_start_dt || r.date || "";
+      return typeof sd === "string" && sd.endsWith(" 00:00:00");
+    }
+    const d = r.date || "";
+    return typeof d === "string" && d.endsWith(" 00:00:00");
   }
 
   // Workout start time as "h:mm am/pm".  ``r.date`` is the workout end
@@ -677,7 +706,10 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     },
 
     tree_date(r) {
-      const wrap = el("div", { class: "tree-date" });
+      const manual = _isManuallyAdded(r);
+      const wrap = el("div", {
+        class: "tree-date" + (manual ? " manually-added" : ""),
+      });
       if (r._row_kind === "session" && (r._member_count || 1) > 1) {
         const open = state.expanded.has(r.session_id);
         const chev = el("span",
@@ -695,8 +727,13 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       }
       const textWrap = el("div", { class: "tree-date-text" });
       if (r._row_kind === "session") {
-        textWrap.appendChild(el("div", { class: "date-main" },
+        const dateMain = el("div", { class: "date-main" });
+        if (manual) {
+          dateMain.appendChild(el("span", { class: "manual-icon" }, "⚠ "));
+        }
+        dateMain.appendChild(document.createTextNode(
           fmtShortDate(r._session_start_dt || r.date)));
+        textWrap.appendChild(dateMain);
       } else {
         // Child workout row — role badge.  Singletons stay parents and
         // never reach here, so "single" is a defensive skip.
@@ -746,9 +783,24 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       return wrap;
     },
     time_of_day(r) {
+      const manual = _isManuallyAdded(r);
       // Parent (session) row: colloquial period above total session duration.
       if (r._row_kind === "session") {
-        const wrap = el("div", { class: "tod-cell" });
+        const cls = "tod-cell" + (manual ? " manually-added" : "");
+        const wrap = el("div", { class: cls });
+        if (manual) {
+          // Singleton session of a manually-added workout — no real
+          // time-of-day.  Flag with "Manual" instead of "Night".
+          wrap.appendChild(el("div", { class: "tod-main" }, [
+            el("span", { class: "manual-icon" }, "⚠"),
+            "Manual",
+          ]));
+          if (r._session_total_duration_s) {
+            wrap.appendChild(el("div", { class: "tod-sub" },
+              fmtDurationReadable(r._session_total_duration_s, true)));
+          }
+          return wrap;
+        }
         if (r._session_tod) {
           wrap.appendChild(el("div", { class: "tod-main" }, r._session_tod));
         }
@@ -761,6 +813,13 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       }
       // Child workout row — its precise start time so the user can see
       // the rhythm of the session.
+      if (manual) {
+        return el("div", { class: "tod-cell child manually-added" },
+          el("div", { class: "tod-main" }, [
+            el("span", { class: "manual-icon" }, "⚠"),
+            "Manual",
+          ]));
+      }
       const start = workoutStartHHMM(r);
       if (!start) return document.createDocumentFragment();
       return el("div", { class: "tod-cell child" },
@@ -1366,6 +1425,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       const sameBlockNext = state.treeMode && next != null
         && next._row_kind !== "session" && nextSid === thisSid;
 
+      const rowManual = !isGap && _isManuallyAdded(row);
       let idx = 0;
       const colCount = state.cols.length;
       for (const col of state.cols) {
@@ -1378,7 +1438,17 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
         const childCls = isChild ? " is-child" : "";
         const gapCls = isGap ? " gap-cell session-internal" : "";
         const internalCls = (!isGap && sameBlockNext) ? " session-internal" : "";
-        const cls = `cell row-cell ${align}${bgCls}${childCls}${gapCls}${internalCls}`
+        // Flag the date cell on manually-added rows.  Tree mode: only the
+        // session row's date cell flags (the child rows show the "Manual"
+        // marker in the time-of-day column instead, and the tree_date
+        // renderer doesn't print a date for child rows anyway).  Non-tree
+        // mode: every manually-added row's date cell flags since there's
+        // no time-of-day column to surface the warning.
+        const flagDateCell = rowManual && col.key === "date" && (
+          !state.treeMode || row._row_kind === "session"
+        );
+        const manualCls = flagDateCell ? " manually-added" : "";
+        const cls = `cell row-cell ${align}${bgCls}${childCls}${gapCls}${internalCls}${manualCls}`
           + (isEnd ? " end" : "");
         const cell = el("div", { class: cls });
         const renderer = isGap
@@ -1386,6 +1456,13 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
           : (RENDERERS[col.renderer] || RENDERERS.text);
         const node = renderer(row, col);
         if (node != null) cell.appendChild(node);
+        // Non-tree mode: the date renderer is plain text, so prepend a
+        // glyph at the cell level.  Tree mode: the tree_date renderer
+        // already injects the glyph inside its .date-main wrapper.
+        if (flagDateCell && !state.treeMode) {
+          cell.insertBefore(
+            el("span", { class: "manual-icon" }, "⚠ "), cell.firstChild);
+        }
         grid.appendChild(cell);
         idx += 1;
       }

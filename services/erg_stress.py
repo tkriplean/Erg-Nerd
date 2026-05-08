@@ -207,9 +207,9 @@ def _tau(d: int) -> float:
 #:     ≈ 36 min, so even a 90–120 min workout climbs to ≤ 0.93 peak;
 #:     0.75 is required to accommodate this.
 STIMULUS_S_THRESH: dict[int, float] = {
-    20: 0.60,    # Sprint
-    90: 0.65,    # Anaerobic
-    300: 0.75,   # VO2max     — 0.70 leaks 5 min @ FTP into "full"; 0.75 excludes
+    20: 0.60,  # Sprint
+    90: 0.65,  # Anaerobic
+    300: 0.75,  # VO2max     — 0.70 leaks 5 min @ FTP into "full"; 0.75 excludes
     1200: 0.80,  # Threshold
     3600: 0.85,  # Tempo
     7200: 0.75,  # Endurance
@@ -360,9 +360,9 @@ def _compute_stimulus_doses(
     if Z_w.size == 0 or not work_mask.any():
         return {int(d): 0.0 for d in ZONE_BANDS_S}
 
-    Z_work = Z_w[:, work_mask]   # (6, n_work)
+    Z_work = Z_w[:, work_mask]  # (6, n_work)
     work_s = int(Z_work.shape[1])
-    peaks = Z_work.max(axis=1)   # (6,)
+    peaks = Z_work.max(axis=1)  # (6,)
 
     s_thresh_arr = np.array([STIMULUS_S_THRESH[d] for d in ZONE_BANDS_S])
     min_work_arr = np.array([STIMULUS_MIN_WORK_S[d] for d in ZONE_BANDS_S])
@@ -371,7 +371,7 @@ def _compute_stimulus_doses(
     dose = np.zeros(len(ZONE_BANDS_S), dtype=np.float64)
 
     # Mask out bands where total work duration is insufficient.
-    duration_pass = work_s >= min_work_arr   # (6,) boolean
+    duration_pass = work_s >= min_work_arr  # (6,) boolean
     # Above-threshold branch.
     above_thresh = (peaks >= s_thresh_arr) & duration_pass
     # Below-threshold-but-passing-duration branch.
@@ -382,8 +382,8 @@ def _compute_stimulus_doses(
         denom = np.maximum(0.01, 1.0 - s_thresh_arr)
         dose[above_thresh] = np.minimum(
             3.0,
-            1.0 + (peaks[above_thresh] - s_thresh_arr[above_thresh])
-            / denom[above_thresh],
+            1.0
+            + (peaks[above_thresh] - s_thresh_arr[above_thresh]) / denom[above_thresh],
         )
     # Below threshold: quadratic partial credit
     if below_thresh.any():
@@ -402,10 +402,7 @@ def _compute_stimulus_doses(
             if cumulative <= 0.0:
                 dose[i] = 0.0
 
-    return {
-        int(ZONE_BANDS_S[i]): float(dose[i])
-        for i in range(len(ZONE_BANDS_S))
-    }
+    return {int(ZONE_BANDS_S[i]): float(dose[i]) for i in range(len(ZONE_BANDS_S))}
 
 
 #: The scale factor in
@@ -531,7 +528,10 @@ def _workout_total_duration_s(w: dict) -> float:
     """Total elapsed seconds for a workout, including interval rest_time."""
     base = (w.get("time") or 0) / 10.0
     if w.get("is_interval"):
+        from services.interval_utils import interval_structure_label
+
         base += (w.get("rest_time") or 0) / 10.0
+
     return float(base)
 
 
@@ -964,7 +964,9 @@ def _attach_per_workout_records(
             zone_time_fractions = {int(d): 0.0 for d in ZONE_BANDS_S}
             stimulus_doses = {int(d): 0.0 for d in ZONE_BANDS_S}
 
-        stimulus_systems = sorted(d for d, dose in stimulus_doses.items() if dose >= 1.0)
+        stimulus_systems = sorted(
+            d for d, dose in stimulus_doses.items() if dose >= 1.0
+        )
 
         slc = I_w_arr if I_w_arr.size else np.zeros(1, dtype=np.float64)
         pk5 = _peak_rolling_mean(slc, 300)

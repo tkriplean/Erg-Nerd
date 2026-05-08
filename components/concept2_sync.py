@@ -71,6 +71,7 @@ from services.sessions import (
     assign_sessions_incremental,
     build_sessions_from_scratch,
 )
+from services import time_overrides
 from services.workout_enrichment import enrich_all
 from services.concept2_records import (
     age_category as wr_age_category,
@@ -113,14 +114,23 @@ def _affected_workout_ids(
 
     Catches:
       * new workouts (not in the trusted seed),
-      * workouts whose timing fields shifted (e.g. interval repair),
+      * workouts whose timing fields shifted (e.g. interval repair, or a
+        time-of-day override applied via ``services.time_overrides``),
       * workouts that lack a ``session_id`` (cold-start of feature on an
         existing user with workouts already in IDB),
+      * workouts whose ``session_id`` points to a session that's no
+        longer in the cache (self-heal: an edit may have dropped and
+        rebuilt sessions on one tab while another tab held a stale view,
+        or an earlier edit may have failed to persist all sibling
+        workouts back to IDB).  Without this guard the dashboard would
+        try to look up a missing session and either crash or silently
+        skip session-level metrics.
       * workouts referenced by a session record but missing from the
         current dict (defensive — Concept2 doesn't currently delete).
     """
     affected: set[str] = set()
     initial = initial_workouts or {}
+    sessions = initial_sessions or {}
     for wid, w in workouts_dict.items():
         prev = initial.get(wid)
         if prev is None:
@@ -129,9 +139,13 @@ def _affected_workout_ids(
         if _workout_timing_signature(prev) != _workout_timing_signature(w):
             affected.add(wid)
             continue
-        if not w.get("session_id"):
+        sid = w.get("session_id")
+        if not sid:
             affected.add(wid)
-    for sid, rec in (initial_sessions or {}).items():
+            continue
+        if sid not in sessions:
+            affected.add(wid)
+    for sid, rec in sessions.items():
         for wid in rec.get("workout_ids") or []:
             if wid not in workouts_dict:
                 affected.add(wid)
@@ -201,6 +215,7 @@ def concept2_sync(client) -> None:
     inline at the call site while the API sync runs.  No-op on subsequent
     renders once the snapshot is cached on the context.
     """
+
     ctx = AppContext()
     if ctx.workouts_dict is not None:
         return  # Already synced this session.
@@ -234,12 +249,17 @@ def concept2_sync(client) -> None:
             with hd.box(align="center", padding=4):
                 hd.spinner()
             return
+
         # Fire schema-version + getAll in parallel; the IDB queue serialises
         # them on the JS side but the polling handles resolve independently.
         schema_cmd = indexed_db.get(META_STORE, SCHEMA_VERSION_KEY)
+
         sessions_schema_cmd = indexed_db.get(META_STORE, SESSIONS_SCHEMA_VERSION_KEY)
+
         workouts_cmd = indexed_db.get_all(WORKOUTS_STORE)
+
         sessions_cmd = indexed_db.get_all(SESSIONS_STORE)
+
         if not (
             schema_cmd.done
             and sessions_schema_cmd.done
@@ -340,6 +360,19 @@ def concept2_sync(client) -> None:
                 write_quarantine(c2_user_id, quarantined)
             except Exception as exc:
                 print(f"[concept2_sync] quarantine write failed: {exc}")
+
+        # Time-of-day overrides for manually-added workouts.  Concept2 stores
+        # manually-added workouts with ``date`` ending in ``00:00:00``; the
+        # user can override this from the WorkoutPage.  Apply BEFORE session
+        # clustering so the override-applied date drives bucketing.  The
+        # mutation shifts the timing signature, which ``_affected_workout_ids``
+        # picks up to recluster on subsequent syncs.
+        if c2_user_id:
+            try:
+                overrides = time_overrides.load_overrides(c2_user_id)
+                time_overrides.apply_overrides(workouts_dict, overrides)
+            except Exception as exc:
+                print(f"[concept2_sync] time_overrides apply failed: {exc}")
 
         # Sessions: cluster workouts into session records and stamp each
         # workout with its ``session_id``.  Cold path rebuilds everything;
