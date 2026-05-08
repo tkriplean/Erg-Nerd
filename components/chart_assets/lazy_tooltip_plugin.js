@@ -309,6 +309,24 @@ window.hyperdiv.registerPlugin("LazyTooltip", (ctx) => {
       // The mouseenter that armed us has already fired; show explicitly so
       // there's no perceptible delay before the tooltip appears.
       requestAnimationFrame(() => {
+        // Enforce a single visible tooltip at a time: register this one and
+        // dismiss any others before showing.  The registry self-cleans via
+        // sl-after-hide, so it stays accurate however a tooltip gets closed.
+        const reg = (window._wtTooltipRegistry = window._wtTooltipRegistry || {
+          active: new Set(),
+          register(t) {
+            if (this.active.has(t)) return;
+            this.active.add(t);
+            t.addEventListener("sl-after-hide", () => this.active.delete(t));
+          },
+          hideOthers(keep) {
+            for (const t of this.active) {
+              if (t !== keep) { try { t.hide(); } catch (e) {} }
+            }
+          },
+        });
+        reg.register(slTooltip);
+        reg.hideOthers(slTooltip);
         try {
           slTooltip.show();
         } catch (e) {

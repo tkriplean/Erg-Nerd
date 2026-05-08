@@ -583,6 +583,23 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
   // is reliable: we *know* when the cursor is over the trigger, so we
   // *know* when the tooltip should hide.
   function lazyTooltipWrap(triggerNode, buildBody, placement) {
+    // Single-tooltip rule: register every tooltip we show in a global
+    // registry, then dismiss the others before showing this one.  Shared
+    // with the LazyTooltip plugin via the same window key, so the rule
+    // covers both implementations cohesively.
+    const reg = (window._wtTooltipRegistry = window._wtTooltipRegistry || {
+      active: new Set(),
+      register(t) {
+        if (this.active.has(t)) return;
+        this.active.add(t);
+        t.addEventListener("sl-after-hide", () => this.active.delete(t));
+      },
+      hideOthers(keep) {
+        for (const t of this.active) {
+          if (t !== keep) { try { t.hide(); } catch (e) {} }
+        }
+      },
+    });
     let tt = null;
     let isOver = false;
     const ensureTooltip = () => {
@@ -604,6 +621,8 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       // Defer to next frame so the tooltip is in the DOM before we show.
       requestAnimationFrame(() => {
         if (isOver && tt) {
+          reg.register(tt);
+          reg.hideOthers(tt);
           try { tt.show(); } catch (e) {}
         }
       });
@@ -615,7 +634,11 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     triggerNode.addEventListener("focusin", () => {
       isOver = true;
       ensureTooltip();
-      if (tt) { try { tt.show(); } catch (e) {} }
+      if (tt) {
+        reg.register(tt);
+        reg.hideOthers(tt);
+        try { tt.show(); } catch (e) {}
+      }
     });
     triggerNode.addEventListener("focusout", () => {
       isOver = false;
