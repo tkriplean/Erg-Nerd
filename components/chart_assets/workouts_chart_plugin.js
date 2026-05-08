@@ -229,29 +229,36 @@ window.hyperdiv.registerPlugin("WorkoutsChart", (ctx) => {
 
   function yRange() {
     if (!points.length) return showWatts ? { yMin: 50, yMax: 300 } : { yMin: 100, yMax: 300 };
-    let lo = Infinity, hi = -Infinity, hiR = 4;
-    for (const p of points) {
-      if (p.y < lo) lo = p.y;
-      if (p.y > hi) { hi = p.y; hiR = p.r || 4; }
-    }
+
+    // Trim only the slowest 2% of pieces — typically warm-ups, aborted
+    // pieces, or easy recovery rows that compress the visible distribution.
+    // The fast end is preserved so sprint efforts and PRs stay in view.
+    const sortedY = points.map(p => p.y).sort((a, b) => a - b);
+    const n = sortedY.length;
+    const quantile = (q) => {
+      if (n === 1) return sortedY[0];
+      const pos = (n - 1) * q;
+      const i = Math.floor(pos), j = Math.ceil(pos);
+      return i === j ? sortedY[i] : sortedY[i] + (sortedY[j] - sortedY[i]) * (pos - i);
+    };
+
+    console.log(points)
 
     if (showWatts) {
-      // Watts: higher = faster = top; pad 15% above and below, no hard cap.
-      const pad = Math.max(10, (hi - lo) * 0.08);
-      return { yMin: Math.max(0, lo - pad), yMax: hi + pad };
+      // Watts: low watts = slow → trim bottom at 2nd percentile; preserve
+      // high-watts head with the usual 8% top padding.
+      const lo = quantile(0.03);
+      const hi = sortedY[n - 1];
+      const pad = Math.max(5, (hi - lo) * 0.04);
+      return { yMin: Math.max(0, lo), yMax: hi + pad };
     }
 
-    const yMin = Math.max(70, lo - 5);
-
-    // Convert hiR (px) → pace (sec/500m) so the slowest circle isn't clipped.
-    // mainWrap.clientHeight reflects the actual rendered container height; subtract
-    // the fixed top and bottom margins to get the true plot area height.
-    const plotH = Math.max(150, (mainWrap.clientHeight || 400) - CA_TOP - CA_BOTTOM);
-    const provisionalRange = hi - yMin;
-    const pacePerPx = provisionalRange / plotH;
-    // Add one full radius worth of pace units + 4px breathing room.
-    const yMax = Math.min(420, hi + (hiR + 4) * pacePerPx);
-
+    // Pace: high pace = slow → trim top at 98th percentile; preserve fast
+    // tail with the usual 5 sec/500m bottom padding.
+    const lo = sortedY[0];
+    const hi = quantile(0.97);
+    const yMin = lo;
+    const yMax = Math.min(420, hi);
     return { yMin, yMax };
   }
 
