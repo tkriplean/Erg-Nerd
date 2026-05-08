@@ -15,6 +15,14 @@ Exports:
 import hyperdiv as hd
 
 
+####
+# So we can send lots of strokes and workouts over web sockets
+import hyperdiv.connection
+
+hyperdiv.connection.Connection.max_message_size = 256 * 1024 * 1024  # 256 MB
+####
+
+
 class radio_group(hd.radio_group):
     """hd.radio_group with an explicit `size` prop (default "medium")."""
 
