@@ -38,6 +38,39 @@ window.hyperdiv.registerPlugin("VolumeChart", (ctx) => {
     return v + "m";
   }
 
+  /**
+   * In percent mode, re-normalise each period so the visible datasets sum
+   * to 100 % — `raw_m` is the source of truth, the displayed `data` array
+   * gets recomputed against the visible-only per-period total.  No-op when
+   * not in percent mode.
+   */
+  function recomputePercents(chart) {
+    if (!chart || !chart.options || chart.options.value_mode !== "percent") return;
+
+    const datasets = chart.data.datasets || [];
+    const numLabels = (chart.data.labels || []).length;
+
+    const visibleTotals = new Array(numLabels).fill(0);
+    for (let di = 0; di < datasets.length; di++) {
+      if (!chart.isDatasetVisible(di)) continue;
+      const rawM = datasets[di].raw_m || [];
+      for (let i = 0; i < numLabels; i++) {
+        visibleTotals[i] += rawM[i] || 0;
+      }
+    }
+
+    for (let di = 0; di < datasets.length; di++) {
+      const rawM = datasets[di].raw_m || [];
+      datasets[di].data = rawM.map((m, i) =>
+        visibleTotals[i] > 0
+          ? Math.round((m / visibleTotals[i]) * 10000) / 100
+          : 0
+      );
+    }
+
+    chart.update("none");
+  }
+
   // ── Options post-processing: attach JS callbacks ─────────────────────────
 
   function buildOptions(options) {
@@ -55,9 +88,29 @@ window.hyperdiv.registerPlugin("VolumeChart", (ctx) => {
         : (val) => fmtMeters(val);
     }
 
+    // Override the legend's default onClick so that toggling a series in
+    // percent mode re-normalises the remaining (visible) series back to 100 %
+    // instead of leaving short bars.  In meters mode the default behaviour
+    // (just hide the dataset) is fine.
+    opts.plugins = opts.plugins || {};
+    opts.plugins.legend = opts.plugins.legend || {};
+    opts.plugins.legend.onClick = function (e, legendItem, legend) {
+      const index = legendItem.datasetIndex;
+      const ci = legend.chart;
+      const meta = ci.getDatasetMeta(index);
+      const currentlyVisible = ci.isDatasetVisible(index);
+      meta.hidden = currentlyVisible ? true : null;
+      legendItem.hidden = currentlyVisible;
+
+      if (ci.options.value_mode === "percent") {
+        recomputePercents(ci);
+      } else {
+        ci.update();
+      }
+    };
+
     // Custom tooltip: index mode (shows all datasets for a bar on hover).
     // In percent mode values display as % only; in meters mode as meters.
-    opts.plugins = opts.plugins || {};
     opts.plugins.tooltip = {
       mode: "index",
       intersect: false,
@@ -113,6 +166,11 @@ window.hyperdiv.registerPlugin("VolumeChart", (ctx) => {
         options: processedOpts,
       });
     }
+
+    // Visibility state on chart meta survives prop updates.  If the user
+    // had hidden a series in percent mode, Python's freshly-computed data
+    // still assumes everything visible, so re-normalise once here.
+    recomputePercents(chartInstance);
   }
 
   // ── Initialise and respond to Python prop updates ─────────────────────────
