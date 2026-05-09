@@ -209,7 +209,6 @@ def compute_timeline_snapshot(
         lifetime_best=lb,
         lifetime_best_anchor=lb_anchor,
         all_lifetime_best=lb_all,
-        all_lifetime_best_anchor=lb_all_anchor,
         critical_power_params=cp_params,
         rl_predictions=rl_predictions,
         pauls_k=pauls_k,

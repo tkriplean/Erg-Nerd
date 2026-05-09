@@ -437,9 +437,7 @@ def _compute_predictor_raws(
     # CP is formulated as watts(t), so for timed events evaluate directly.
     # Composing _solve_timed_pace with cp_pace_at's own inversion fails to
     # bracket a root in brentq.
-    cp_raw = (
-        cp_pace_at(cp_params, dist_m) if is_dist else cp_pace_at_time(cp_params, T)
-    )
+    cp_raw = cp_pace_at(cp_params, dist_m) if is_dist else cp_pace_at_time(cp_params, T)
 
     return {
         "cp_raw": cp_raw,
@@ -461,7 +459,6 @@ def build_prediction_table_data(
     lifetime_best: dict,
     lifetime_best_anchor: dict,
     all_lifetime_best: dict,
-    all_lifetime_best_anchor: dict,
     critical_power_params: Optional[dict] = None,
     rl_predictions: Optional[dict] = None,
     pauls_k: float = 5.0,
@@ -477,7 +474,7 @@ def build_prediction_table_data(
 
     ``lifetime_best`` / ``lifetime_best_anchor`` are the *filtered* bests (the
     same set used by the chart) and drive the prediction columns.
-    ``all_lifetime_best`` / ``all_lifetime_best_anchor`` are unfiltered (only
+    ``all_lifetime_best`` are unfiltered (only
     gated on timeline_date and excluded seasons) and are used for the "Your PB"
     column so that PBs in events the user has hidden still appear.
 
@@ -573,9 +570,7 @@ def build_prediction_table_data(
     # ── Distance events ───────────────────────────────────────────────────────
     dist_labels = {d: lbl for d, lbl in ranked_distances(machine)}
     for dist_m, _ in ranked_distances(machine):
-        rows.append(
-            _build_row("dist", dist_m, dist_labels.get(dist_m, f"{dist_m:,}m"))
-        )
+        rows.append(_build_row("dist", dist_m, dist_labels.get(dist_m, f"{dist_m:,}m")))
 
     # ── Timed events ──────────────────────────────────────────────────────────
     for time_tenths, label in ranked_times(machine):
@@ -608,10 +603,14 @@ def build_prediction_table_data(
             if r.get(f"{_ck}_raw") is not None
             and r.get("pb_raw") is not None
             and (
-                (r["event_type"] == "dist"
-                 and (_dist_ok or r["event_value"] in selected_dist_set))
-                or (r["event_type"] == "time"
-                    and (_time_ok or r["event_value"] in selected_time_set))
+                (
+                    r["event_type"] == "dist"
+                    and (_dist_ok or r["event_value"] in selected_dist_set)
+                )
+                or (
+                    r["event_type"] == "time"
+                    and (_time_ok or r["event_value"] in selected_time_set)
+                )
             )
         ]
         if _pairs:

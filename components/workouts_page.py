@@ -23,9 +23,8 @@ from services.rowing_utils import (
 from services.formatters import fmt_date
 
 from services.interval_utils import (
-    wrap_parts as _wrap_parts,
     build_interval_lines as _build_interval_lines,
-    interval_totals as _interval_totals,
+    interval_totals as _interval_totals
 )
 from services.critical_power_model import (
     critical_power_model,

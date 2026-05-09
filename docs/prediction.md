@@ -191,7 +191,7 @@ Two sets of lifetime bests flow through the system:
 | Name | Used for | Gated by |
 |---|---|---|
 | `lifetime_best` / `lifetime_best_anchor` | All prediction columns (drives model fit) | Sim date + season + event filter |
-| `all_lifetime_best` / `all_lifetime_best_anchor` | "Your PB" column only | Sim date + season only (event filter ignored) |
+| `all_lifetime_best` | "Your PB" column only | Sim date + season only (event filter ignored) |
 
 This distinction means the "Your PB" column always shows a PB even for events the
 user has hidden from the chart — you can hide the Marathon from the graph without
