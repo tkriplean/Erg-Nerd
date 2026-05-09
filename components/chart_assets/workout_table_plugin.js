@@ -1004,7 +1004,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
             const total = fractions.reduce(
               (acc, m, idx) => skip.has(idx) ? acc : acc + (m > 0 ? m : 0), 0);
             const body = el("div", { class: "tt-body" });
-            body.appendChild(el("div", { class: "tt-title" }, "Zone Spread"));
+            body.appendChild(el("div", { class: "tt-title" }, "Approx. Spread of Time in Zone"));
             for (let idx = 0; idx < swatches.length; idx++) {
               if (skip.has(idx)) continue;
               const v = fractions[idx] || 0;
@@ -1187,13 +1187,27 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     for (let i = 0; i < N; i++) {
       const band = bands[i];
       const dose = (doses && doses[band]) || (doses && doses[String(band)]) || 0;
-      if (dose <= 0) continue;  // empty cell — no rect, no outline
-      const x = i * (cellW + gap);
-      const color = colors[i] || "rgba(160,160,160,0.85)";
-      const fillFrac = Math.min(1.0, dose);  // clamp at 1.0 visually
-      const fillH = (H - 2) * fillFrac;
-      const fillY = H - 1 - fillH;
-      const fill = document.createElementNS(SVG_NS, "rect");
+
+      // make a gray shape in each cell
+      x = i * (cellW + gap);
+      color = "rgba(160,160,160,0.25)";
+      fillFrac = 1.0
+      fillH = (H - 2) * fillFrac;
+      fillY = H - 1 - fillH;
+      fill = document.createElementNS(SVG_NS, "rect");
+      fill.setAttribute("x", x + 1);
+      fill.setAttribute("y", fillY);
+      fill.setAttribute("width", cellW - 2);
+      fill.setAttribute("height", fillH);
+      fill.setAttribute("fill", color);
+      svg.appendChild(fill);
+
+      if (dose <= 0) continue;  // no stimulus
+      color = colors[i] || "rgba(160,160,160,0.85)";
+      fillFrac = Math.min(1.0, dose);  // clamp at 1.0 visually
+      fillH = (H - 2) * fillFrac;
+      fillY = H - 1 - fillH;
+      fill = document.createElementNS(SVG_NS, "rect");
       fill.setAttribute("x", x + 1);
       fill.setAttribute("y", fillY);
       fill.setAttribute("width", cellW - 2);
@@ -1246,7 +1260,9 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
         row.appendChild(el("span", { class: "zname" }, name));
         if (dose > 0) {
           row.appendChild(el("span", { class: "pct" },
-            `${dose.toFixed(2)}× (${state})`));
+            //`${dose.toFixed(2)}× (${state})`));
+            `${10 * Math.round(10 * dose)}%`));
+
         } else {
           row.appendChild(el("span", { class: "pct muted" }, "—"));
         }
@@ -1255,9 +1271,13 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       const headline = stimulated.length
         ? `Stimulated: ${stimulated.join(" + ")}`
         : (anyDose ? "Sub-threshold stimulus only" : "Recovery row");
-      body.appendChild(el("div", { class: "tt-title" }, "Training Stimulus"));
+      // body.insertBefore(
+      //   el("div", { class: "tt-headline" }, headline), body.firstChild);
       body.insertBefore(
-        el("div", { class: "tt-headline" }, headline), body.firstChild);
+        el("div", { class: "tt-headline" }, "very approx. % of full dose"), body.firstChild);
+
+      body.insertBefore(el("div", { class: "tt-title" }, "Training Stimulus"), body.firstChild);
+
       return body;
     };
     lazyTooltipWrap(trigger, buildBody, "top");

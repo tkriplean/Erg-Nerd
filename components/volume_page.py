@@ -278,19 +278,19 @@ def _distribution_table(rows: list, view: str, zone_mode: str = "power_spread") 
             ("Total", "total", "7rem", lambda r: r["total"]),
             ("Rest", "rest", "7rem", lambda r: r["rest"]),
             (
-                "Z1 Easy",
+                "Easy",
                 "z1",
                 "minmax(9rem,1fr)",
                 lambda r: f"{r['z1_m']}  ({r['z1_pct']})",
             ),
             (
-                "Z2 Threshold",
+                "Threshold",
                 "z2",
                 "minmax(9rem,1fr)",
                 lambda r: f"{r['z2_m']}  ({r['z2_pct']})",
             ),
             (
-                "Z3 Hard",
+                "Hard",
                 "z3",
                 "minmax(9rem,1fr)",
                 lambda r: f"{r['z3_m']}  ({r['z3_pct']})",
