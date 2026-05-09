@@ -37,12 +37,9 @@ from components.app_context import get_profile, AppContext
 from components.reference_watts_loader import reference_watts_loader
 from components.shared_ui import global_filter_ui, header_dropdown
 from components.spread_quality_legends import spread_severity_legends, SpreadSeverityFilters
-from services.heartrate_utils import (
-    hr_bin_passes,
-    resolve_max_hr,
-)
+from services.heartrate_utils import resolve_max_hr
 from services.reference_watts import get_reference_watts
-from services.volume_bins import power_bin_passes
+from services.workout_filters import apply_workout_filters
 from components.add_metrics import add_metrics
 from services.erg_stress import SEVERITY_STYLE
 
@@ -418,55 +415,23 @@ def workouts_page() -> None:
     add_metrics(workouts, with_timeline=False)
 
     # ── Apply filters ──────────────────────────────────────────────────────────
-
-    filtered = workouts
-
-    if state.filter_10k:
-        filtered = [
-            r
-            for r in filtered
-            if (r.get("distance") or 0) + (r.get("rest_distance") or 0) >= 10_000
-        ]
-
-    if state.filter_ivl == "Intervals":
-        filtered = [
-            r for r in filtered if r["is_interval"]
-        ]
-    elif state.filter_ivl == "Continuous":
-        filtered = [
-            r for r in filtered if not r["is_interval"]
-        ]
-
-
+    # The chart visualizes individual workouts so filters are applied per-workout.
+    # The table renders a session-level tree, so filters are applied per-session
+    # there — without that, severity/spread filters strip the main work from a
+    # session and leave only the warm-up + cool-down rows.
     spread_severity_filters = SpreadSeverityFilters()
-    # Apply Power Spread / HR Spread / Severity legend filters (disjunctive within,
-    # conjunctive across).
-    if spread_severity_filters.active_bins:
-        sel = set(spread_severity_filters.active_bins)
-        filtered = [
-            r for r in filtered
-            if any(
-                power_bin_passes(r.get("_zone_bin_fractions") or [], i)
-                for i in sel
-            )
-        ]
-    if spread_severity_filters.active_hr_bins:
-        sel = set(spread_severity_filters.active_hr_bins)
-        filtered = [
-            r for r in filtered
-            if any(hr_bin_passes(r.get("_hr_bin_meters"), i) for i in sel)
-        ]
-    if spread_severity_filters.active_severity:
-        sel = set(spread_severity_filters.active_severity)
-        filtered = [r for r in filtered if r.get("_severity") in sel]
-    if spread_severity_filters.active_stimulus_bands:
-        sel = set(spread_severity_filters.active_stimulus_bands)
-        # Workout passes if dose ≥ 1.0 for *any* selected band.
-        # ``_stimulus_doses`` is a dict keyed by band-seconds (int).
-        def _stim_passes(r: dict) -> bool:
-            doses = r.get("_stimulus_doses") or {}
-            return any(float(doses.get(b, 0.0)) >= 1.0 for b in sel)
-        filtered = [r for r in filtered if _stim_passes(r)]
+    filter_kwargs = dict(
+        filter_10k=state.filter_10k,
+        filter_ivl=state.filter_ivl,
+        active_power_bins=spread_severity_filters.active_bins,
+        active_hr_bins=spread_severity_filters.active_hr_bins,
+        active_severity=spread_severity_filters.active_severity,
+        active_stimulus_bands=spread_severity_filters.active_stimulus_bands,
+    )
+    filtered = apply_workout_filters(workouts, **filter_kwargs)
+    filtered_for_table = apply_workout_filters(
+        workouts, **filter_kwargs, filter_at_session_level=True
+    )
 
     sb_ids = compute_sb_ids(filtered)
     pts = prepare_points(
@@ -593,7 +558,7 @@ def workouts_page() -> None:
             # ── Workouts-in-view table ────────────────────────────────────────────────
             in_window = [
                 r
-                for r in filtered
+                for r in filtered_for_table
                 if target_start <= r["date_ms"] <= target_end
             ]
             in_window.sort(key=lambda r: r["date"], reverse=True)
