@@ -35,10 +35,11 @@
 window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
   const root = ctx.domElement;
 
+
   // ── Style ────────────────────────────────────────────────────────────────
   const style = document.createElement("style");
   style.textContent = `
-    :host { display: block; width: 100%; }
+
     .grid {
       display: grid;
       width: 100%;
@@ -58,11 +59,8 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     .cell.align-end    { justify-content: flex-end; text-align: right; }
     .cell.align-center { justify-content: center; text-align: center; }
     .cell.end { padding-right: 24px; }
-    /* Sticky header — sticks to top of viewport as the table scrolls past. */
+
     .hdr {
-      position: sticky;
-      top: 0;
-      z-index: 2;
       background: var(--sl-color-neutral-100);
       border-bottom: 1px solid var(--sl-color-neutral-200);
       color: var(--sl-color-neutral-900);

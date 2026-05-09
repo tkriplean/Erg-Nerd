@@ -279,15 +279,6 @@ def build_volume_chart_config(
             d = _month_key_to_date(k)
             year = d.year if d else None
             show_year = True or year is not None and year != last_year
-            print(
-                k,
-                d,
-                year,
-                show_year,
-                _month_label_parts(k, show_year),
-                _month_tooltip_title(k),
-            )
-
             labels.append(_month_label_parts(k, show_year))
             tooltip_titles.append(_month_tooltip_title(k))
             if year is not None:
@@ -338,7 +329,6 @@ def build_volume_chart_config(
     tick_color = "rgba(200,200,200,0.85)" if is_dark else "rgba(50,50,50,0.85)"
     title_color = "rgba(210,210,210,0.9)" if is_dark else "rgba(35,35,35,0.9)"
 
-    print(tooltip_titles)
     return {
         "type": "bar",
         "data": {

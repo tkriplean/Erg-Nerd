@@ -399,7 +399,7 @@ def workouts_page() -> None:
 
     # ── Pace-vs-date scatter + windowed workouts table ────────────────────────
     all_workouts = result[1]
-
+    
 
     # ── Attach Power Spread + HR Spread fields ────────────────────────────────
     # Block on the reference-watts loader so the spread metrics resolve.

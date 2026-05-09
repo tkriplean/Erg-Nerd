@@ -241,6 +241,7 @@ def attach_spread(
     ``(metric, workout_id, input_hash[, max_hr])`` so subsequent renders
     are O(1) per workout.
     """
+
     ref_watts_for = _resolver(all_workouts, ref_watts_for)
 
     h = input_hash(all_workouts)
@@ -401,9 +402,9 @@ def _assign_ess(r: dict, sm: Optional[dict], wid) -> None:
     # Zone Spread fields — overwrite anything attach_spread
     # produced.  Same closest-RW-band classification, just sharing the
     # session pass's per-second power array instead of rebuilding it.
-    if pw and pw.get("zone_time_fractions"):
-        r["_zone_time_fractions"] = pw["zone_time_fractions"]
-        r["_zone_bin_fractions"] = zone_fractions_to_bin_list(pw["zone_time_fractions"])
+    # if pw and pw.get("zone_time_fractions"):
+    #     r["_zone_time_fractions"] = pw["zone_time_fractions"]
+    #     r["_zone_bin_fractions"] = zone_fractions_to_bin_list(pw["zone_time_fractions"])
     # Session-level values for the Workout Page summary / rollup widget.
     r["_ess_session"] = sm.get("ess")
     r["_if_eff_session"] = sm.get("intensity_session")

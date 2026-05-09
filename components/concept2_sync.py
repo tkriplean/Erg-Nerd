@@ -171,7 +171,7 @@ def _reconcile_machine_filter(ctx) -> str:
     return new_machine
 
 
-def get_all_workouts():
+def get_all_workouts(apply_season_filters=True):
     result = sync_workouts()
     if result is None:
         return None
@@ -179,6 +179,11 @@ def get_all_workouts():
 
     # Apply global filters
     machine = _reconcile_machine_filter(AppContext())
+    all_workouts = [w for w in all_workouts if w.get("type", "rower") == machine]
+
+    if not apply_season_filters:
+        return workouts_dict, all_workouts
+
     gstate = GlobalFilters()
     excluded_seasons = gstate.excluded_seasons
 
@@ -186,7 +191,6 @@ def get_all_workouts():
         all_workouts = [
             w for w in all_workouts if w["season"] not in set(excluded_seasons)
         ]
-    all_workouts = [w for w in all_workouts if w.get("type", "rower") == machine]
 
     return workouts_dict, all_workouts
 

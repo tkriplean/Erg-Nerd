@@ -167,6 +167,7 @@ def input_hash(all_workouts: list) -> str:
         and _HASH_MEMO["first_id"] == first_id
     ):
         return _HASH_MEMO["hash"]
+
     ids = sorted(
         (
             w["day"],
@@ -233,9 +234,7 @@ def reference_watts_at_duration(
     return _interp_watts_at_duration(refs, duration_s)
 
 
-def _interp_watts_at_duration(
-    refs: dict, duration_s: float
-) -> Optional[float]:
+def _interp_watts_at_duration(refs: dict, duration_s: float) -> Optional[float]:
     """Pure helper: log-log interpolation of (duration, watts) anchors.
 
     Split out from :func:`reference_watts_at_duration` so hot-loop callers can

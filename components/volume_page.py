@@ -519,11 +519,14 @@ def _volume_section(
         elif zone_mode == "severity":
             # Severity comes from attach_ess_metrics — needs the reference-
             # watts index too (for the multi-band intensity model).
+
+            _, every_single_workout = get_all_workouts(apply_season_filters=False)
+
             if not reference_watts_loader(all_workouts):
                 return
             attach_ess_metrics(
                 all_workouts,
-                all_workouts,
+                every_single_workout,
                 AppContext().sessions_dict or {},
                 profile,
                 max_hr,
@@ -562,11 +565,22 @@ def _volume_section(
             if not reference_watts_loader(all_workouts):
                 return
 
+            _, every_single_workout = get_all_workouts(apply_season_filters=False)
+
             # Populate ``_zone_time_fractions`` / ``_zone_bin_fractions`` on
             # each workout via the central metrics cache; subsequent renders
             # are O(1).  Pass max_hr=None to skip HR-spread computation —
             # we don't need it for the Power Spread aggregation.
-            attach_spread(all_workouts, all_workouts, None)
+            print(len(all_workouts), len(every_single_workout))
+            attach_spread(all_workouts, every_single_workout, None)
+            attach_ess_metrics(
+                all_workouts,
+                every_single_workout,
+                AppContext().sessions_dict or {},
+                profile,
+                max_hr,
+                with_timeline=False,
+            )
 
             aggregated = aggregate_workouts(
                 all_workouts,
@@ -878,13 +892,13 @@ def volume_page() -> None:
         # drives mass_kg for glycogen / severity, which is not used by the
         # training-load panel itself but matches the standard enrichment path.
         if AppContext().sessions_dict is not None:
-            _, _all = result
+            _, every_single_workout = get_all_workouts(apply_season_filters=False)
             from services.heartrate_utils import resolve_max_hr
 
-            _max_hr, _ = resolve_max_hr(profile or {}, _all)
+            _max_hr, _ = resolve_max_hr(profile or {}, every_single_workout)
             attach_ess_metrics(
                 all_workouts,
-                _all,
+                every_single_workout,
                 AppContext().sessions_dict or {},
                 profile=profile,
                 max_hr=_max_hr,
