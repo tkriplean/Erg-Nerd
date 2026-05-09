@@ -13,6 +13,10 @@
  *   paginate        bool
  *   rows_per_page   int
  *   reset_token     str           When this changes, sort + page reset.
+ *   searchable      bool          Render a search bar above the grid.
+ *                                 Filter is text + fuzzy number/duration/
+ *                                 distance + "NxM" interval pattern; in
+ *                                 tree mode it's session-aware.
  *
  * Props (JS → Python):
  *   event_out       {name, payload, seq} | null
@@ -245,6 +249,75 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       font-size: var(--sl-font-size-x-small);
     }
 
+    /* Top-of-table toolbar — search on the left, pagination on the right.
+       The toolbar (and the search-bar inside it) is persistent across
+       renders so the input keeps focus / selection while typing; only the
+       pagination-slot's children are swapped on each render. */
+    .table-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+      padding: 0.4rem 0;
+    }
+    .table-toolbar .pagination-slot {
+      display: flex;
+      align-items: center;
+      flex: 0 0 auto;
+    }
+    .table-toolbar .pagination-slot .pagination {
+      padding: 0;
+    }
+    .search-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .search-input-wrap {
+      position: relative;
+      flex: 0 1 24rem;
+      display: flex;
+      align-items: center;
+      min-width: 0;
+    }
+    .search-input-wrap .search-icon {
+      position: absolute;
+      left: 0.55rem;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--sl-color-neutral-600);
+      font-size: 0.95rem;
+      pointer-events: none;
+      display: inline-flex;
+      align-items: center;
+    }
+    .search-bar .search-input {
+      width: 100%;
+      padding: 0.35rem 0.65rem 0.35rem 2rem;
+      font: inherit;
+      font-size: var(--sl-font-size-small);
+      color: var(--sl-color-neutral-900);
+      background: var(--sl-color-neutral-0);
+      border: 1px solid var(--sl-color-neutral-200);
+      border-radius: var(--sl-border-radius-medium, 0.25rem);
+      box-sizing: border-box;
+      outline: none;
+    }
+    .search-bar .search-input:focus {
+      border-color: var(--sl-color-primary-500);
+      box-shadow: 0 0 0 2px var(--sl-color-primary-100, rgba(59,130,246,0.18));
+    }
+    .search-bar .search-input::placeholder {
+      color: var(--sl-color-neutral-400);
+    }
+    .search-bar .search-count {
+      font-size: var(--sl-font-size-x-small);
+      color: var(--sl-color-neutral-500);
+      white-space: nowrap;
+    }
+
     /* Cell-internal styles */
     a.link { font-size: var(--sl-font-size-small); text-decoration: none; color: var(--sl-color-primary-600); }
     a.link:hover { text-decoration: underline; }
@@ -324,6 +397,11 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     treeMode: !!ctx.initialProps.tree_mode,
     expanded: new Set(),
     linkPrefix: ctx.initialProps.link_prefix || "",
+    // Search state.  searchable is locked at mount time; searchQuery is
+    // updated by the input element directly (no Python round-trip) and
+    // persisted alongside sort / page / expanded.
+    searchable: !!ctx.initialProps.searchable,
+    searchQuery: "",
   };
 
   // ── State persistence across remount ─────────────────────────────────────
@@ -341,6 +419,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
         if (typeof _saved.sortAsc === "boolean") state.sortAsc = _saved.sortAsc;
         if (typeof _saved.page === "number") state.page = _saved.page;
         if (Array.isArray(_saved.expanded)) state.expanded = new Set(_saved.expanded);
+        if (typeof _saved.searchQuery === "string") state.searchQuery = _saved.searchQuery;
       }
     }
   } catch (e) { /* sessionStorage unavailable — fall back to defaults */ }
@@ -352,6 +431,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
         sortAsc: state.sortAsc,
         page: state.page,
         expanded: Array.from(state.expanded),
+        searchQuery: state.searchQuery,
       }));
     } catch (e) { /* quota / disabled — ignore */ }
   }
@@ -1397,6 +1477,265 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     return body;
   }
 
+  // ── Search ───────────────────────────────────────────────────────────────
+  // The search bar above the grid filters rows on the fly.  Matching rules
+  // are applied per-term (whitespace-separated, AND across terms):
+  //
+  //   • Substring match against a per-row haystack — comments, machine,
+  //     workout_type, intervals_label / structure_key, severity bucket,
+  //     season, main-work descriptions, and stimulus-system synonyms
+  //     (e.g. "vo2" matches a workout that fully stimulates the 300s band).
+  //   • Numeric / duration / distance: "1hr", "60min", "5k", "2000m", or
+  //     bare numbers like "60" — exact-matched against the workout's
+  //     duration or distance and (if interval) each interval's work and
+  //     rest leg.  "Exact" allows ±0.5s on durations to absorb fractional-
+  //     second rounding; distances are integer-equal.
+  //   • "NxM[unit]" patterns ("4x4", "5×500m") — rep count must match
+  //     exactly; the work amount exact-matches against any interval leg.
+  //   • Leading "~" on any numeric / interval term flips it to fuzzy
+  //     (±10 %, ±15 s / ±50 m floor; intervals get ±15 %).  E.g. "5k"
+  //     hits only true 5000m efforts, "~5k" hits anything 4500–5500m.
+  //
+  // In tree mode, a session row matches when any term hits either the
+  // parent or any of its workouts.  Sessions matched only via children
+  // are auto-expanded so the user can see what triggered the match.
+
+  // Stimulus band → searchable synonyms.  Indexed by the band-seconds
+  // key under ``_stimulus_doses``; each entry expands into the haystack
+  // when the workout's dose for that band ≥ 1.0.
+  const _STIM_SYNONYMS = {
+    20:   ["sprint"],
+    90:   ["anaerobic"],
+    300:  ["vo2", "vo2max"],
+    1200: ["threshold", "ftp"],
+    3600: ["tempo"],
+    7200: ["endurance", "aerobic"],
+  };
+
+  function _buildHaystack(row) {
+    const parts = [];
+    const push = (v) => { if (v != null && v !== "") parts.push(String(v)); };
+    push(row.comments);
+    push(row.type);
+    push(MACHINE_LABELS[(row.type || "").toLowerCase()]);
+    push(row.intervals_label);
+    push(row.structure_key);
+    push(row.workout_type);
+    push(row._severity);
+    push(row.season);
+    if (Array.isArray(row._main_work_lines)) {
+      push(row._main_work_lines.join(" "));
+    }
+    if (row.is_interval) push("interval");
+    if (row._stimulus_doses && typeof row._stimulus_doses === "object") {
+      for (const k in row._stimulus_doses) {
+        const dose = +row._stimulus_doses[k] || 0;
+        if (dose >= 1.0) {
+          const syns = _STIM_SYNONYMS[parseInt(k, 10)];
+          if (syns) for (const s of syns) push(s);
+        }
+      }
+    }
+    return parts.join("").toLowerCase();
+  }
+
+  function _hayFor(row) {
+    if (row._wt_search_hay == null) row._wt_search_hay = _buildHaystack(row);
+    return row._wt_search_hay;
+  }
+
+  // Convert num+unit to (sec, m) target candidates.  No unit ⇒ try
+  // multiple interpretations so a bare "60" hits 60s, 60min, 60m, 60km.
+  function _numTargets(num, unit) {
+    if (unit === "hr" || unit === "h") return [{sec: num * 3600}];
+    if (unit === "min") return [{sec: num * 60}];
+    if (unit === "s" || unit === "sec" || unit === '"') return [{sec: num}];
+    if (unit === "km" || unit === "k") return [{m: num * 1000}];
+    if (unit === "m") return [{m: num}];
+    if (unit === "'") return [{sec: num * 60}];
+    return [
+      {sec: num},
+      {sec: num * 60},
+      {sec: num * 3600},
+      {m: num},
+      {m: num * 1000},
+    ];
+  }
+
+  // Tolerance helpers.  ``fuzzy`` widens the window to ±10 %; otherwise
+  // we hold the bar tight: integer-equal for distance, ±0.5 s for
+  // duration so a 1hr workout recorded as 60:00.3 still hits "1hr".
+  function _durTol(target, fuzzy) {
+    return fuzzy ? Math.max(15, target * 0.10) : 0.5;
+  }
+  function _distTol(target, fuzzy) {
+    return fuzzy ? Math.max(50, target * 0.10) : 0;
+  }
+  // Interval-leg tolerances are slightly looser in fuzzy mode (the user
+  // is targeting a specific shape rather than a rough total) but the
+  // exact tolerance is the same as whole-row.
+  function _ivlDurTol(target, fuzzy) {
+    return fuzzy ? Math.max(2, target * 0.15) : 0.5;
+  }
+  function _ivlDistTol(target, fuzzy) {
+    return fuzzy ? Math.max(50, target * 0.10) : 0;
+  }
+
+  function _matchDuration(row, target, fuzzy) {
+    const tol = _durTol(target, fuzzy);
+    const sec = (row.time || 0) / 10;
+    if (sec > 0 && Math.abs(sec - target) <= tol) return true;
+    const ivs = (row.workout && row.workout.intervals) || [];
+    for (const iv of ivs) {
+      const s = (iv.time || 0) / 10;
+      if (s > 0 && Math.abs(s - target) <= tol) return true;
+      const rs = (iv.rest_time || 0) / 10;
+      if (rs > 0 && Math.abs(rs - target) <= tol) return true;
+    }
+    // Tree-mode parent: total work duration is on _work_duration_s.
+    if (row._row_kind === "session") {
+      const wsec = row._work_duration_s || 0;
+      if (wsec > 0 && Math.abs(wsec - target) <= tol) return true;
+      const tsec = row._session_total_duration_s || 0;
+      if (tsec > 0 && Math.abs(tsec - target) <= tol) return true;
+    }
+    return false;
+  }
+
+  function _matchDistance(row, target, fuzzy) {
+    const tol = _distTol(target, fuzzy);
+    const m = row.distance || 0;
+    if (m > 0 && Math.abs(m - target) <= tol) return true;
+    const ivs = (row.workout && row.workout.intervals) || [];
+    for (const iv of ivs) {
+      if (iv.distance && Math.abs(iv.distance - target) <= tol) return true;
+      if (iv.rest_distance && Math.abs(iv.rest_distance - target) <= tol) return true;
+    }
+    if (row._row_kind === "session") {
+      const wm = row._work_distance_m || 0;
+      if (wm > 0 && Math.abs(wm - target) <= tol) return true;
+    }
+    return false;
+  }
+
+  // True when at least one interval leg matches the parsed (num, unit).
+  function _matchIvlAmount(row, num, unit, fuzzy) {
+    const ivs = (row.workout && row.workout.intervals) || [];
+    if (!ivs.length) return false;
+    const targets = _numTargets(num, unit);
+    for (const t of targets) {
+      if (t.sec != null) {
+        const tol = _ivlDurTol(t.sec, fuzzy);
+        for (const iv of ivs) {
+          const s = (iv.time || 0) / 10;
+          if (s > 0 && Math.abs(s - t.sec) <= tol) return true;
+        }
+      }
+      if (t.m != null) {
+        const tol = _ivlDistTol(t.m, fuzzy);
+        for (const iv of ivs) {
+          if (iv.distance && Math.abs(iv.distance - t.m) <= tol) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Parse a single search term:
+  //   "4x4", "5×500m"      → {kind:"interval", reps, num, unit, fuzzy}
+  //   "1hr", "60min", "5k" → {kind:"number",   num, unit, fuzzy}
+  //   "60", "1.5"          → {kind:"number",   num, unit:"", fuzzy}
+  //   anything else        → {kind:"text"}
+  //
+  // A leading "~" turns numeric / interval matching fuzzy.  It's
+  // ignored for plain text terms (the substring matcher strips it
+  // separately so haystacks don't need to contain a literal tilde).
+  function _parseTerm(term) {
+    let fuzzy = false;
+    let t = term;
+    if (t.length > 1 && t[0] === "~") {
+      fuzzy = true;
+      t = t.slice(1);
+    }
+    let m = /^(\d+)\s*[x×]\s*(\d+(?:\.\d+)?)\s*([a-z'"]*)$/i.exec(t);
+    if (m) {
+      return {
+        kind: "interval",
+        reps: parseInt(m[1], 10),
+        num: parseFloat(m[2]),
+        unit: m[3].toLowerCase(),
+        fuzzy,
+      };
+    }
+    m = /^(\d+(?:\.\d+)?)\s*([a-z'"]*)$/i.exec(t);
+    if (m) {
+      return {
+        kind: "number",
+        num: parseFloat(m[1]),
+        unit: m[2].toLowerCase(),
+        fuzzy,
+      };
+    }
+    return {kind: "text"};
+  }
+
+  // True iff `term` matches `row` directly (without descending into
+  // children — caller handles tree-mode parent/child fallthrough).
+  function _termMatchesNode(term, row) {
+    const lower = term.toLowerCase();
+    // Substring match: strip a leading "~" so the numeric-only modifier
+    // doesn't have to appear in the haystack to land a hit.
+    const textTerm = lower.length > 1 && lower[0] === "~" ? lower.slice(1) : lower;
+    if (textTerm && _hayFor(row).indexOf(textTerm) !== -1) return true;
+    const parsed = _parseTerm(lower);
+    if (parsed.kind === "number") {
+      const targets = _numTargets(parsed.num, parsed.unit);
+      for (const t of targets) {
+        if (t.sec != null && _matchDuration(row, t.sec, parsed.fuzzy)) return true;
+        if (t.m != null && _matchDistance(row, t.m, parsed.fuzzy)) return true;
+      }
+      return false;
+    }
+    if (parsed.kind === "interval") {
+      const reps = row.reps;
+      if (reps != null && reps === parsed.reps) {
+        if (_matchIvlAmount(row, parsed.num, parsed.unit, parsed.fuzzy)) return true;
+      }
+      return false;
+    }
+    return false;
+  }
+
+  function _tokenizeQuery(q) {
+    return (q || "").trim().split(/\s+/).filter(Boolean);
+  }
+
+  // Decide if a row matches the active query.  Returns
+  // {matched, viaChild}; viaChild is true when at least one term only
+  // matched through a child workout (used to drive auto-expand).
+  function _rowMatchesQuery(row, terms) {
+    if (!terms.length) return {matched: true, viaChild: false};
+    const isParent = row._row_kind === "session" && Array.isArray(row._children);
+    let viaChild = false;
+    for (const t of terms) {
+      if (_termMatchesNode(t, row)) continue;
+      if (isParent) {
+        let found = false;
+        for (const c of row._children) {
+          if (c._row_kind !== "workout") continue;
+          if (_termMatchesNode(t, c)) { found = true; break; }
+        }
+        if (found) { viaChild = true; continue; }
+      }
+      return {matched: false, viaChild: false};
+    }
+    return {matched: true, viaChild};
+  }
+
+  // Auto-expand set rebuilt on each filter pass.  Used by render() to
+  // open sessions whose match was driven only by their children.
+  let _autoExpandSessions = new Set();
+
   // ── Sort + visible-rows pipeline ─────────────────────────────────────────
   function _sortRows(rs) {
     const col = state.cols.find((c) => c.key === state.sortCol);
@@ -1415,26 +1754,51 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     });
   }
 
-  // Flat mode: filter by visibleIds, sort, return.
+  function _afterIdFilter() {
+    if (state.visibleIds == null) return state.rows;
+    const allow = new Set(state.visibleIds);
+    return state.rows.filter((r) => allow.has(r.id));
+  }
+
+  // Flat mode: filter by visibleIds, search, sort.  Returns
+  // ``{list, preSearchTotal}`` so render() can populate the search-count
+  // label without re-filtering.
   function visibleAndSorted() {
-    let rs = state.rows;
-    if (state.visibleIds != null) {
-      const allow = new Set(state.visibleIds);
-      rs = rs.filter((r) => allow.has(r.id));
+    const after = _afterIdFilter();
+    const preSearchTotal = after.length;
+    let rs = after;
+    if (state.searchable && state.searchQuery) {
+      const terms = _tokenizeQuery(state.searchQuery);
+      if (terms.length) {
+        rs = rs.filter((r) => _rowMatchesQuery(r, terms).matched);
+      }
     }
-    return _sortRows(rs);
+    return { list: _sortRows(rs), preSearchTotal };
   }
 
   // Tree mode: sort parents only; expanded children are spliced in
   // immediately below their parent.  Children are pre-sorted by start
   // time and stay in that order regardless of the active column sort.
+  // Sessions matched only via children are tracked in
+  // ``_autoExpandSessions`` so render() can open them.
   function visibleAndSortedTree() {
-    let parents = state.rows;
-    if (state.visibleIds != null) {
-      const allow = new Set(state.visibleIds);
-      parents = parents.filter((r) => allow.has(r.id));
+    const after = _afterIdFilter();
+    const preSearchTotal = after.length;
+    let parents = after;
+    _autoExpandSessions = new Set();
+    if (state.searchable && state.searchQuery) {
+      const terms = _tokenizeQuery(state.searchQuery);
+      if (terms.length) {
+        parents = parents.filter((p) => {
+          const m = _rowMatchesQuery(p, terms);
+          if (m.matched && m.viaChild && (p._member_count || 1) > 1) {
+            _autoExpandSessions.add(p.session_id);
+          }
+          return m.matched;
+        });
+      }
     }
-    return _sortRows(parents);
+    return { list: _sortRows(parents), preSearchTotal };
   }
 
   function toggleExpand(sid) {
@@ -1444,15 +1808,91 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     render();
   }
 
+  // ── Toolbar + search bar (persistent across renders so focus is preserved) ──
+  // The toolbar lives directly under ``root``, above the rebuilt-each-
+  // render ``container``.  It holds the search bar on the left and a
+  // ``paginationSlot`` on the right whose children are swapped each
+  // render — neither the input nor the toolbar itself is ever detached,
+  // so cursor / focus / selection survive every keystroke.
+  let toolbar = null;
+  let paginationSlot = null;
+  let searchBar = null;
+  let searchInput = null;
+  let searchCount = null;
+
+  function ensureSearchBar() {
+    if (searchBar) return;
+    searchBar = el("div", { class: "search-bar" });
+    const wrap = el("div", { class: "search-input-wrap" });
+    const icon = document.createElement("sl-icon");
+    icon.setAttribute("name", "search");
+    icon.setAttribute("class", "search-icon");
+    wrap.appendChild(icon);
+    searchInput = el("input", {
+      type: "search",
+      class: "search-input",
+      placeholder: "Try 5k or ~5k or 1hr or vo2 or 4x4",
+      value: state.searchQuery,
+      autocomplete: "off",
+      spellcheck: "false",
+    });
+    searchInput.addEventListener("input", (ev) => {
+      state.searchQuery = ev.target.value || "";
+      state.page = 0;
+      persistState();
+      render();
+    });
+    wrap.appendChild(searchInput);
+    searchBar.appendChild(wrap);
+    searchCount = el("span", { class: "search-count" });
+    searchBar.appendChild(searchCount);
+  }
+
+  function ensureToolbar() {
+    if (!state.searchable) {
+      if (toolbar) {
+        toolbar.remove();
+        toolbar = paginationSlot = null;
+      }
+      // Throw the searchBar away too — re-created on demand if searchable
+      // flips back on.
+      searchBar = searchInput = searchCount = null;
+      return;
+    }
+    if (toolbar) return;
+    ensureSearchBar();
+    toolbar = el("div", { class: "table-toolbar" });
+    toolbar.appendChild(searchBar);
+    paginationSlot = el("div", { class: "pagination-slot" });
+    toolbar.appendChild(paginationSlot);
+    // Append after the <style> so it lands at the top of the visible
+    // tree but doesn't get reordered relative to ``container`` on
+    // subsequent renders.
+    root.appendChild(toolbar);
+  }
+
+  function updateSearchCount(visibleN, totalN, kindLabel) {
+    if (!searchCount) return;
+    if (state.searchQuery && visibleN !== totalN) {
+      searchCount.textContent =
+        `${visibleN} of ${totalN} ${kindLabel}${totalN === 1 ? "" : "s"}`;
+    } else {
+      searchCount.textContent = "";
+    }
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
   let container = null;
   function render() {
+    ensureToolbar();
+    if (paginationSlot) paginationSlot.replaceChildren();
     if (container) container.remove();
     container = document.createElement("div");
     root.appendChild(container);
 
     if (!state.rows.length) {
       container.appendChild(el("div", { class: "empty" }, "No results."));
+      updateSearchCount(0, 0, "workout");
       return;
     }
 
@@ -1465,10 +1905,14 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     let countLabel;          // tail of the pagination bar text
 
     if (state.treeMode) {
-      const parents = visibleAndSortedTree();
+      const { list: parents, preSearchTotal } = visibleAndSortedTree();
       total = parents.length;
+      updateSearchCount(total, preSearchTotal, "session");
       if (!total) {
-        container.appendChild(el("div", { class: "empty" }, "No results."));
+        const msg = state.searchQuery
+          ? "No sessions match the search."
+          : "No results.";
+        container.appendChild(el("div", { class: "empty" }, msg));
         return;
       }
       const perPage = state.paginate ? state.perPage : total;
@@ -1480,16 +1924,22 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       pageRows = [];
       for (const p of pageParents) {
         pageRows.push(p);
-        if (state.expanded.has(p.session_id) && Array.isArray(p._children)) {
+        const expanded = state.expanded.has(p.session_id)
+          || _autoExpandSessions.has(p.session_id);
+        if (expanded && Array.isArray(p._children)) {
           for (const c of p._children) pageRows.push(c);
         }
       }
       countLabel = `${total} session${total === 1 ? "" : "s"}`;
     } else {
-      const sorted = visibleAndSorted();
+      const { list: sorted, preSearchTotal } = visibleAndSorted();
       total = sorted.length;
+      updateSearchCount(total, preSearchTotal, "workout");
       if (!total) {
-        container.appendChild(el("div", { class: "empty" }, "No results."));
+        const msg = state.searchQuery
+          ? "No workouts match the search."
+          : "No results.";
+        container.appendChild(el("div", { class: "empty" }, msg));
         return;
       }
       const perPage = state.paginate ? state.perPage : total;
@@ -1606,38 +2056,44 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     });
 
 
-    function drawPagination() {
-      // Pagination
-      if (state.paginate && totalPages > 1) {
-        const bar = el("div", { class: "pagination" });
-        const prev = el("sl-icon-button", {
-          name: "chevron-left", label: "Previous page",
-          ...(state.page === 0 ? { disabled: true } : {}),
-        });
-        prev.addEventListener("click", () => {
-          if (state.page > 0) { state.page -= 1; persistState(); render(); }
-        });
-        bar.appendChild(prev);
-        bar.appendChild(text(`Page ${state.page + 1} of ${totalPages}`));
-        const next = el("sl-icon-button", {
-          name: "chevron-right", label: "Next page",
-          ...(state.page >= totalPages - 1 ? { disabled: true } : {}),
-        });
-        next.addEventListener("click", () => {
-          if (state.page < totalPages - 1) { state.page += 1; persistState(); render(); }
-        });
-        bar.appendChild(next);
-        container.appendChild(bar);
-      }
-
+    function buildPaginationBar() {
+      if (!(state.paginate && totalPages > 1)) return null;
+      const bar = el("div", { class: "pagination" });
+      const prev = el("sl-icon-button", {
+        name: "chevron-left", label: "Previous page",
+        ...(state.page === 0 ? { disabled: true } : {}),
+      });
+      prev.addEventListener("click", () => {
+        if (state.page > 0) { state.page -= 1; persistState(); render(); }
+      });
+      bar.appendChild(prev);
+      bar.appendChild(text(`Page ${state.page + 1} of ${totalPages}`));
+      const next = el("sl-icon-button", {
+        name: "chevron-right", label: "Next page",
+        ...(state.page >= totalPages - 1 ? { disabled: true } : {}),
+      });
+      next.addEventListener("click", () => {
+        if (state.page < totalPages - 1) { state.page += 1; persistState(); render(); }
+      });
+      bar.appendChild(next);
+      return bar;
     }
 
-    drawPagination();
+    // Top pagination: lives in the toolbar's slot when one exists (so it
+    // sits on the same line as the search bar), otherwise it goes at the
+    // top of the rebuilt container — same place the un-toolbar'd flow
+    // had it.
+    const topPag = buildPaginationBar();
+    if (topPag) {
+      if (paginationSlot) paginationSlot.appendChild(topPag);
+      else container.appendChild(topPag);
+    }
 
     container.appendChild(grid);
 
-    drawPagination();
-
+    // Bottom pagination always lives inside the container, centered.
+    const bottomPag = buildPaginationBar();
+    if (bottomPag) container.appendChild(bottomPag);
   }
 
   function onSortClick(col) {
@@ -1672,6 +2128,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       case "paginate":        state.paginate = value !== false; break;
       case "rows_per_page":   state.perPage = value || 25; break;
       case "tree_mode":       state.treeMode = !!value; break;
+      case "searchable":      state.searchable = !!value; break;
       case "link_prefix":     state.linkPrefix = value || ""; break;
       case "reset_token":
         if (value !== state.resetToken) {

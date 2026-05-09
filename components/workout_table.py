@@ -390,6 +390,13 @@ class _WorkoutTablePlugin(hd.Plugin):
     rows_per_page = hd.Prop(hd.Int, _DEFAULT_ROWS_PER_PAGE)
     reset_token = hd.Prop(hd.String, "")
     tree_mode = hd.Prop(hd.Bool, False)
+    # When true, the JS plugin renders a free-text search bar above the
+    # grid that filters rows on the fly.  Search is session-aware in
+    # tree mode (a session matches when the parent OR any of its
+    # workouts match).  See workout_table_plugin.js for the matching
+    # rules — text, fuzzy number/distance/duration, "NxM" interval
+    # patterns, and stimulus-system synonyms.
+    searchable = hd.Prop(hd.Bool, True)
     # Prefix prepended to "/workout/<id>" links rendered by the plugin.
     # Empty in owner mode; "/u/{uid}" when viewing a public profile so the
     # link stays within the public dashboard's URL space.
@@ -588,6 +595,7 @@ def WorkoutTable(
     reset_token: str = "",
     tree_mode: bool = False,
     sessions_dict: dict | None = None,
+    searchable: bool = True,
 ) -> None:
     """Render a sortable, paginated table.  See module docstring for column
     entry shape and event names.
@@ -619,6 +627,10 @@ def WorkoutTable(
                      are shipped to the JS plugin.  ``sessions_dict`` is
                      required.
     sessions_dict    AppContext sessions dict.  Used only when ``tree_mode``.
+    searchable       When true, render a search bar above the grid.  The
+                     bar's value filters the visible rows in JS; in tree
+                     mode the filter is session-aware (a session matches
+                     if the parent or any of its workouts match).
     """
     if not results:
         hd.text("No results.", font_color="neutral-500", font_size="small")
@@ -658,6 +670,7 @@ def WorkoutTable(
         rows_per_page=rows_per_page,
         reset_token=reset_token,
         tree_mode=tree_mode,
+        searchable=searchable,
         link_prefix=_link_prefix,
     )
 
