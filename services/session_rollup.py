@@ -11,9 +11,9 @@ member workout already has its ``session_id`` set during sync, and
 session-level metrics (ESS, severity, anaerobic_strain, intensity_session,
 total duration) are already computed and attached to every member as
 ``r["_ess_session_summary"]`` (see
-:func:`services.workout_enrichment.attach_ess_metrics`).  This module
-composes the per-workout fields into a per-session parent row that the JS
-plugin renders as the top of an expandable group.
+:func:`components.add_metrics.add_metrics`).  This module composes the
+per-workout fields into a per-session parent row that the JS plugin
+renders as the top of an expandable group.
 
 Public API
 ----------

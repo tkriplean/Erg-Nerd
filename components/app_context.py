@@ -362,8 +362,8 @@ def populate_public(user_id: str) -> bool:
     sessions_dict = load_public_sessions(user_id)
     if not sessions_dict:
         # Fallback: rebuild in memory.  We also stamp session_id onto each
-        # workout so attach_ess_metrics can resolve sessions via the same
-        # lookup path used in owner mode.
+        # workout so add_metrics can resolve sessions via the same lookup
+        # path used in owner mode.
         sessions_dict, mutations = build_sessions_from_scratch(workouts_dict)
         for wid, sid in mutations.items():
             if wid in workouts_dict:

@@ -2,8 +2,8 @@
 build_effort_stress_chart_config — Python config builder for EffortStressChart.
 
 Turns a workout's session-aware ``_ess_session_summary`` + ``_ess_timeline``
-fields (attached by :func:`services.workout_enrichment.attach_ess_metrics`)
-into a JSON-shaped config dict that the Chart.js plugin in
+fields (attached by :func:`components.add_metrics.add_metrics`) into a
+JSON-shaped config dict that the Chart.js plugin in
 ``components/chart_assets/ess_chart_plugin.js`` consumes.
 
 Under the v2 multi-band PDC-saturation model the chart has two y-axes:

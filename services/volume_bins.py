@@ -4,8 +4,7 @@ Volume aggregation and Zone-Spread binning for the Workouts charts.
 This module replaces the v1 watts-classification scheme with a multi-band
 duration-saturation classification that consumes the per-workout
 ``_zone_time_fractions`` field (set by
-:func:`services.workout_enrichment.attach_spread` and
-:func:`services.workout_enrichment.attach_ess_metrics`).
+:func:`components.add_metrics.add_metrics`).
 
 The seven-bin layout is preserved for downstream compatibility — bin 0 is
 Rest (interval rest distance) and bins 1–6 are the six duration bands of

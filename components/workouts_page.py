@@ -43,7 +43,7 @@ from services.heartrate_utils import (
 )
 from services.reference_watts import get_reference_watts
 from services.volume_bins import power_bin_passes
-from services.workout_enrichment import attach_ess_metrics, attach_spread
+from components.add_metrics import add_metrics
 from services.erg_stress import SEVERITY_STYLE
 
 from components.concept2_sync import get_all_workouts
@@ -409,21 +409,13 @@ def workouts_page() -> None:
     workouts = all_workouts #_apply_outlier_filter(all_workouts)
 
     max_hr, _ = resolve_max_hr(profile, workouts)
-    attach_spread(workouts, workouts, max_hr)
-    # ``with_timeline=False`` skips the per-second timeline build inside
-    # ``compute_session_metrics``: the workouts table never reads
-    # ``_ess_timeline`` (it's stripped from the JS row payload via
-    # ``_TABLE_IRRELEVANT_KEYS``), so the ~1.8 M dict allocations are pure
-    # waste here.  The workout detail page calls ``attach_ess_metrics``
-    # again with the default and renders the chart from that scope.
-    attach_ess_metrics(
-        workouts,
-        workouts,
-        AppContext().sessions_dict or {},
-        profile,
-        max_hr,
-        with_timeline=False,
-    )
+    # ``with_timeline=False`` skips the per-second timeline build: the
+    # workouts table never reads ``_ess_timeline`` (it's stripped from
+    # the JS row payload via ``_TABLE_IRRELEVANT_KEYS``), so the ~1.8 M
+    # dict allocations are pure waste here.  The workout detail page
+    # calls ``add_metrics`` again with ``with_timeline=True`` and renders
+    # the chart from that scope.
+    add_metrics(workouts, with_timeline=False)
 
     # ── Apply filters ──────────────────────────────────────────────────────────
 

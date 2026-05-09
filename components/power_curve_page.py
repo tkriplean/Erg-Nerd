@@ -130,7 +130,7 @@ from components.concept2_sync import sync_workouts
 from components.app_context import AppContext, get_profile
 from services.rowing_utils import profile_complete
 from services.heartrate_utils import resolve_max_hr
-from services.workout_enrichment import attach_ess_metrics, attach_spread
+from components.add_metrics import add_metrics
 from services.rowinglevel import fetch_rowinglevel
 
 from services.concept2_records import wr_category_label, wr_machine_supported
@@ -1174,20 +1174,7 @@ def power_curve_page() -> None:
                 "link",
             ]
             try:
-                _all = sync_result[1]
-                _max_hr, _ = resolve_max_hr(profile or {}, _all)
-                attach_spread(
-                    efforts_filtered_by_event_and_display,
-                    efforts_filtered_by_event_and_display,
-                    _max_hr,
-                )
-                attach_ess_metrics(
-                    efforts_filtered_by_event_and_display,
-                    _all,
-                    AppContext().sessions_dict or {},
-                    profile or {},
-                    _max_hr,
-                )
+                add_metrics(efforts_filtered_by_event_and_display, with_timeline=True)
             except Exception:
                 # Defensive: if ref-watts haven't loaded, ESS columns
                 # render "—" rather than blocking.

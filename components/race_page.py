@@ -56,8 +56,7 @@ from services.rowing_utils import (
     is_30r20,
 )
 from services.formatters import format_time, fmt_split
-from services.heartrate_utils import resolve_max_hr
-from services.workout_enrichment import attach_ess_metrics
+from components.add_metrics import add_metrics
 from services.stroke_utils import (
     build_races_data,
     build_boat_label,
@@ -748,15 +747,8 @@ def race_page() -> None:
             # ── Results table ─────────────────────────────────────────────────────────
             with hd.box():
                 if racing_workouts:
-                    _max_hr, _ = resolve_max_hr(profile or {}, all_workouts)
                     try:
-                        attach_ess_metrics(
-                            racing_workouts,
-                            all_workouts,
-                            AppContext().sessions_dict or {},
-                            profile or {},
-                            _max_hr,
-                        )
+                        add_metrics(racing_workouts, with_timeline=False)
                     except Exception:
                         # Defensive: if ref-watts haven't loaded, the ESS
                         # columns simply render "—" rather than blocking.

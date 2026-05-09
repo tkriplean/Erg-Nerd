@@ -101,8 +101,7 @@ import hyperdiv as hd
 
 from components.concept2_sync import get_all_workouts
 from components.reference_watts_loader import reference_watts_loader
-from services.threshold_cache import make_thresholds_resolver
-from services.workout_enrichment import attach_spread, attach_ess_metrics
+from components.add_metrics import add_metrics
 from services.volume_bins import (
     BIN_COLORS,
     Z3_BINS,
@@ -549,11 +548,7 @@ def _compute_grid_placement(r: dict) -> tuple[int, int]:
 # so no local memoization layer is needed.
 
 
-def _enrich_workouts(
-    workouts: list[dict],
-    ref_watts_for,
-    max_hr: int | None,
-) -> list[dict]:
+def _enrich_workouts(workouts: list[dict]) -> list[dict]:
     """
     Filter to interval workout types (excluding single-rep workouts) and
     attach the page-specific grid-placement fields.  Spread + severity
@@ -577,22 +572,7 @@ def _enrich_workouts(
         if r["is_interval"] and (not r["workout_type"][:5] == "Fixed" or r["reps"] != 1)
     ]
     if interval_workouts:
-        attach_spread(
-            interval_workouts,
-            workouts,
-            max_hr,
-            ref_watts_for=ref_watts_for,
-        )
-
-        attach_ess_metrics(
-            interval_workouts,
-            workouts,
-            AppContext().sessions_dict or {},
-            get_profile() or {},
-            max_hr,
-            with_timeline=False,
-            ref_watts_for=ref_watts_for,
-        )
+        add_metrics(interval_workouts, with_timeline=False)
 
     for r in interval_workouts:
         r = dict(r)  # shallow copy so per-page fields don't leak back to AppContext
@@ -932,11 +912,7 @@ def intervals_page() -> None:
     if not reference_watts_loader(all_workouts):
         return
 
-    # Per-date cache so we don't recompute reference watts when many workouts
-    # share a date.
-    _ref_watts_for = make_thresholds_resolver(all_workouts)
-
-    all_intervals = _enrich_workouts(all_workouts, _ref_watts_for, max_hr)
+    all_intervals = _enrich_workouts(all_workouts)
 
     if not all_intervals:
         with hd.box(padding=4, align="center"):

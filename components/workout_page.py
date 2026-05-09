@@ -54,7 +54,7 @@ from services.heartrate_utils import (
     resolve_max_hr,
 )
 from services.volume_bins import BAND_TO_BIN, BIN_COLORS, BIN_NAMES
-from services.workout_enrichment import attach_ess_metrics, attach_spread
+from components.add_metrics import add_metrics
 
 from components.workout_chart_builder import (
     build_interval_rows_and_bands,
@@ -1322,17 +1322,7 @@ def _render_similar_workouts(workout, all_workouts, max_hr, profile, state):
     similar = _find_similar(workout, all_workouts)
     if similar:
         try:
-            attach_spread(similar, all_workouts, max_hr)
-        except Exception:
-            pass
-        try:
-            attach_ess_metrics(
-                similar,
-                all_workouts,
-                AppContext().sessions_dict or {},
-                profile,
-                max_hr,
-            )
+            add_metrics(similar, with_timeline=True)
         except Exception:
             pass
         with hd.box(align="center"):
@@ -1973,27 +1963,16 @@ def workout_page(workout_id: int) -> None:
         hd.box(padding=2, min_height="80vh")
         return
 
-    # Attach Power Spread, HR Spread, Quality, and ESS family fields so the
-    # summary cells can render them.  Best-effort: if reference watts haven't
-    # loaded yet, the fields stay as None and the summary row hides the cells.
-
-    max_hr, _ = resolve_max_hr(profile, all_workouts)
-    try:
-        attach_spread(same_day, all_workouts, max_hr)
-    except Exception:
-        pass
-
     # All workouts done on this day
     same_day = [w for w in all_workouts if w.get("day") == workout.get("day")]
+    print(len(same_day))
 
+    # Attach Power Spread, HR Spread, and ESS family fields so the summary
+    # cells can render them.  Best-effort: if reference watts haven't loaded
+    # yet, the fields stay as None and the summary row hides the cells.
+    max_hr, _ = resolve_max_hr(profile, all_workouts)
     try:
-        attach_ess_metrics(
-            same_day,
-            all_workouts,
-            AppContext().sessions_dict or {},
-            profile,
-            max_hr,
-        )
+        add_metrics(same_day, with_timeline=True)
     except Exception:
         pass
 

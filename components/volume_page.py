@@ -40,7 +40,7 @@ from components.reference_watts_loader import reference_watts_loader
 from components.app_context import AppContext, your
 from services.formatters import fmt_meters
 from services.rowing_utils import profile_complete
-from services.workout_enrichment import attach_ess_metrics, attach_spread
+from components.add_metrics import add_metrics
 
 from services.volume_bins import (
     SEVERITY_BIN_NAMES,
@@ -517,21 +517,11 @@ def _volume_section(
                 no_data_bins=_HR_NO_DATA_BINS,
             )
         elif zone_mode == "severity":
-            # Severity comes from attach_ess_metrics — needs the reference-
-            # watts index too (for the multi-band intensity model).
-
-            _, every_single_workout = get_all_workouts(apply_season_filters=False)
-
+            # Severity comes from add_metrics — needs the reference-watts
+            # index too (for the multi-band intensity model).
             if not reference_watts_loader(all_workouts):
                 return
-            attach_ess_metrics(
-                all_workouts,
-                every_single_workout,
-                AppContext().sessions_dict or {},
-                profile,
-                max_hr,
-                with_timeline=False,
-            )
+            add_metrics(all_workouts, with_timeline=False)
             unrated_count = sum(1 for w in all_workouts if w.get("_severity") is None)
             if unrated_count:
                 # An unrated workout is generally a bug — flag it once per
@@ -565,22 +555,10 @@ def _volume_section(
             if not reference_watts_loader(all_workouts):
                 return
 
-            _, every_single_workout = get_all_workouts(apply_season_filters=False)
-
             # Populate ``_zone_time_fractions`` / ``_zone_bin_fractions`` on
             # each workout via the central metrics cache; subsequent renders
-            # are O(1).  Pass max_hr=None to skip HR-spread computation —
-            # we don't need it for the Power Spread aggregation.
-            print(len(all_workouts), len(every_single_workout))
-            attach_spread(all_workouts, every_single_workout, None)
-            attach_ess_metrics(
-                all_workouts,
-                every_single_workout,
-                AppContext().sessions_dict or {},
-                profile,
-                max_hr,
-                with_timeline=False,
-            )
+            # are O(1).
+            add_metrics(all_workouts, with_timeline=False)
 
             aggregated = aggregate_workouts(
                 all_workouts,
@@ -888,21 +866,7 @@ def volume_page() -> None:
 
         # Training-load section needs ESS metrics on each workout — attach
         # them now if not already present.  The cache makes repeat renders
-        # cheap (and severity mode above already populated them).  Profile
-        # drives mass_kg for glycogen / severity, which is not used by the
-        # training-load panel itself but matches the standard enrichment path.
-        if AppContext().sessions_dict is not None:
-            _, every_single_workout = get_all_workouts(apply_season_filters=False)
-            from services.heartrate_utils import resolve_max_hr
-
-            _max_hr, _ = resolve_max_hr(profile or {}, every_single_workout)
-            attach_ess_metrics(
-                all_workouts,
-                every_single_workout,
-                AppContext().sessions_dict or {},
-                profile=profile,
-                max_hr=_max_hr,
-                with_timeline=False,
-            )
+        # cheap (and severity mode above already populated them).
+        add_metrics(all_workouts, with_timeline=False)
 
         _training_load_section(all_workouts, is_dark=hd.theme().is_dark)
