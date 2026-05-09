@@ -447,6 +447,9 @@ def _enrich_opts(key: str, opts: dict) -> dict:
                 s: {"label": v["label"], "bg": _rgba_css(v["bg"])}
                 for s, v in SEVERITY_STYLE.items()
             },
+            # Band-seconds → display name, used by the per-workout tooltip
+            # to label which physiological systems received a full dose.
+            "band_names": {int(b): BIN_NAMES[BAND_TO_BIN[b]] for b in ZONE_BANDS_S},
         }
     if key == "stimulus":
         is_dark = hd.theme().is_dark

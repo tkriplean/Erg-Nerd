@@ -1041,9 +1041,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       if (!style) return text(sev);
       const pill = el("div", { class: "quality-pill", style: { background: style.bg } },
         el("span", { class: "label" }, style.label || sev));
-      const score = r._severity_score || 0;
-      const strain = r._anaerobic_strain || 0;
-      lazyTooltipWrap(pill, () => _severityTooltipBody(sev, score, strain), "top");
+      lazyTooltipWrap(pill, () => _severityTooltipBody(r, col), "top");
       return pill;
     },
 
@@ -1330,17 +1328,52 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     return trigger;
   }
 
-  function _severityTooltipBody(sev, score, strain) {
+  // Severity = max(pk5, pk60, pk20) + 0.50·W'_used + 0.40·glycogen_used.
+  // The tooltip decomposes the score into those three contributors, names
+  // the dominant one, and lists which physiological systems received a
+  // full adaptation-grade dose — so the description reflects what the
+  // workout actually was, not the bucket's generic archetype.
+  function _severityTooltipBody(r, col) {
+    const sev = r._severity;
+    const score = r._severity_score || 0;
+    const strain = r._anaerobic_strain || 0;
+    const glycogen = r._glycogen_used; // may be null when no profile mass
+    const stimSystems = r._stimulus_systems || [];
+
+    const strainTerm = 0.5 * strain;
+    const glyTerm = 0.4 * (glycogen || 0);
+    const peakTerm = Math.max(0, score - strainTerm - glyTerm);
+
+    const contribs = [
+      { label: "peak rolling intensity", value: peakTerm },
+      { label: "W' depletion", value: strainTerm },
+    ];
+    if (glycogen != null) {
+      contribs.push({ label: "glycogen drain", value: glyTerm });
+    }
+    const dominant = contribs.reduce((a, b) => (a.value >= b.value ? a : b));
+
     const body = el("div", { class: "tt-body quality" });
-    body.appendChild(el("div", { class: "tt-title" }, `${sev} severity`));
-    let headline;
-    if (sev === "Low") headline = `Severity ${score.toFixed(2)} — easy / recovery / base workout.`;
-    else if (sev === "Moderate") headline = `Severity ${score.toFixed(2)} — solid moderate workout.`;
-    else if (sev === "High") headline = `Severity ${score.toFixed(2)} — sharp threshold / VO2 / intervals.`;
-    else headline = `Severity ${score.toFixed(2)} — race-pace or max effort; high recovery demand.`;
-    body.appendChild(el("div", { class: "tt-headline" }, headline));
+    body.appendChild(el("div", { class: "tt-title" },
+      `${sev} severity — ${score.toFixed(2)}`));
+    body.appendChild(el("div", { class: "tt-headline" },
+      `Driven by ${dominant.label}.`));
+
     body.appendChild(el("div", { class: "tt-label" },
-      `W' depleted: ${Math.round(strain * 100)}%`));
+      `Peak intensity: +${peakTerm.toFixed(2)}`));
+    body.appendChild(el("div", { class: "tt-label" },
+      `W' depleted ${Math.round(strain * 100)}%: +${strainTerm.toFixed(2)}`));
+    if (glycogen != null) {
+      body.appendChild(el("div", { class: "tt-label" },
+        `Glycogen used ${Math.round(glycogen * 100)}%: +${glyTerm.toFixed(2)}`));
+    }
+
+    const bandNames = (col && col.opts && col.opts.band_names) || {};
+    const stimText = stimSystems.length
+      ? stimSystems.map(b => bandNames[b] || bandNames[String(b)] || `${b}s`).join(" + ")
+      : "no system reached full dose";
+    body.appendChild(el("div", { class: "tt-label" }, `Stimulus: ${stimText}`));
+
     return body;
   }
 

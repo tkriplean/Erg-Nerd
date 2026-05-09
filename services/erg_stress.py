@@ -467,11 +467,28 @@ SEVERITY_STYLE: dict[str, dict] = {
     },
 }
 
+#: Bucket prose hews to the metric itself (severity = peak rolling I(t) +
+#: 0.50·W' depleted + 0.40·glycogen depleted) rather than naming workout
+#: archetypes — multiple shapes of work can land in the same bucket via
+#: different contributors (e.g. a marathon reaches High via glycogen drain;
+#: 4×4 VO2 reaches High via peak intensity + W' debt).
 SEVERITY_DEFINITION_TEXT: dict[str, str] = {
-    "Low": "Severity below 0.70 — easy / recovery / base session.",
-    "Moderate": "Severity 0.70–1.00 — solid moderate / aerobic session.",
-    "High": "Severity 1.00–1.40 — sharp threshold / VO2 / hard intervals.",
-    "Maximal": "Severity ≥ 1.40 — race-pace or PB territory; high recovery demand.",
+    "Low": (
+        "Severity < 0.70 — peak rolling intensity stays below tempo and "
+        "the W' / glycogen reservoirs are largely intact."
+    ),
+    "Moderate": (
+        "Severity 0.70–1.00 — meaningful peak intensity, W' depletion, "
+        "or glycogen drain, but none reaches threshold-grade."
+    ),
+    "High": (
+        "Severity 1.00–1.40 — threshold-grade peak intensity, deep W' "
+        "debt, or significant glycogen drain (any one or in combination)."
+    ),
+    "Maximal": (
+        "Severity ≥ 1.40 — race-pace or PB-territory load: peak intensity, "
+        "W' debt, and glycogen drain stack into very high recovery demand."
+    ),
 }
 
 SEVERITY_FILTER_TEXT: dict[str, str] = {
