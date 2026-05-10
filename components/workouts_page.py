@@ -26,10 +26,7 @@ from services.interval_utils import (
     build_interval_lines as _build_interval_lines,
     interval_totals as _interval_totals
 )
-from services.critical_power_model import (
-    critical_power_model,
-    fit_critical_power,
-)
+from services.critical_power_model import critical_power_model
 from components.workouts_chart_plugin import WorkoutsChart
 from components.workout_table import WorkoutTable
 from components.app_context import get_profile, AppContext

@@ -129,12 +129,12 @@ def fit_critical_power(pb_list: list[dict]) -> Optional[dict]:
     log_t = np.log(durations)
     log_p = np.log(powers)
 
-    def _log_model(log_t_arr, Pow1, tau1, Pow2, tau2):
-        t_arr = np.exp(log_t_arr)
-        p_arr = critical_power_model(t_arr, Pow1, tau1, Pow2, tau2)
+    def _log_model(_log_t_arr, Pow1, tau1, Pow2, tau2):
+        # ``durations`` (closure) is the unlogged form of curve_fit's xdata —
+        # using it directly avoids a per-iteration np.exp on the same array.
+        p_arr = critical_power_model(durations, Pow1, tau1, Pow2, tau2)
         # Guard against non-positive predictions before taking log.
-        p_arr = np.clip(p_arr, 1e-3, None)
-        return np.log(p_arr)
+        return np.log(np.clip(p_arr, 1e-3, None))
 
     # Initial guesses derived from the data.
     p0 = [

@@ -876,6 +876,8 @@ def _attach_per_workout_records(
     wid_idx_arr,
     ess_per_second,
     mass_kg,
+    *,
+    Z_session: Optional[np.ndarray] = None,
 ):
     # ----- Per-workout records -----
     # Per-workout severity / intensity use a *workout-isolated* EMA
@@ -902,6 +904,13 @@ def _attach_per_workout_records(
     # ``workout_windows`` (-1 for gap seconds).  Last-painter-wins for
     # overlapping segments falls out of the slice-assignment order.
     n_w = len(workout_windows)
+    # Single-workout sessions: workout-isolated EMAs are identical to the
+    # session-level EMAs already computed in ``_calculate_intensity``.
+    # ``session_start = annotated[0][0]`` is the only workout's start, so
+    # ``t_start == 0`` and ``P_w == P_arr``; both lfilter passes zero-init
+    # and produce the same Z. Skip the n_bands per-workout lfilter pass and
+    # slice the session matrix instead.
+    reuse_session_Z = n_w == 1 and Z_session is not None
     if n_w and total_session_s:
         mask = wid_idx_arr >= 0
         if mask.any():
@@ -924,10 +933,13 @@ def _attach_per_workout_records(
         P_w = P_arr[t_start:t_end]
         kind_w = kind_arr[t_start:t_end]
         if P_w.size:
-            Z_w = np.empty((n_bands, P_w.size), dtype=np.float64)
-            for i in range(n_bands):
-                a = inv_taus[i]
-                Z_w[i] = lfilter([a], [1.0, a - 1.0], P_w) * inv_rws[i]
+            if reuse_session_Z:
+                Z_w = Z_session[:, t_start:t_end]
+            else:
+                Z_w = np.empty((n_bands, P_w.size), dtype=np.float64)
+                for i in range(n_bands):
+                    a = inv_taus[i]
+                    Z_w[i] = lfilter([a], [1.0, a - 1.0], P_w) * inv_rws[i]
             if SIGNAL_AMPLIFIER == 3:
                 sum_amp_w = (Z_w * Z_w * Z_w).sum(axis=0)
             else:
@@ -1211,6 +1223,7 @@ def _calculate_intensity(
         inv_taus,
         inv_amp,
         zone_arrs,
+        Z,
         P_arr,
         kind_arr,
         wid_idx_arr,
@@ -1241,29 +1254,32 @@ def _compute_wbal(cp, w_prime, total_session_s, P_arr, kind_arr):
         is_gap = kind_arr == "gap"
         is_above = (~is_gap) & (P_arr > cp)
         # Depletion magnitude is constant per-second: store it once.
-        depletion = np.where(is_above, P_arr - cp, 0.0)
         # ``recover_mask[t]`` is True iff this second is a recovery
         # (i.e. either a gap, or a work second with P ≤ cp).
-        recover_mask = ~is_above
+        # Convert both to Python lists before the loop — list element access
+        # is several times faster than scalar indexing into a numpy array,
+        # and the recurrence is genuinely sequential so there's no way to
+        # vectorise it cleanly.
+        depletion_list = np.where(is_above, P_arr - cp, 0.0).tolist()
+        recover_list = (~is_above).tolist()
         inv_tau_w = 1.0 / tau_w
 
         w_bal = w_prime
-        w_bal_trough = w_prime
-        w_bal_curve = np.empty(total_session_s, dtype=np.float64)
+        out = [0.0] * total_session_s
         for t in range(total_session_s):
-            if recover_mask[t]:
+            if recover_list[t]:
                 dW = (w_prime - w_bal) * inv_tau_w
             else:
-                dW = -depletion[t]
+                dW = -depletion_list[t]
             new_w = w_bal + dW
             if new_w < 0.0:
                 new_w = 0.0
             elif new_w > w_prime:
                 new_w = w_prime
             w_bal = new_w
-            w_bal_curve[t] = new_w
-            if new_w < w_bal_trough:
-                w_bal_trough = new_w
+            out[t] = new_w
+        w_bal_curve = np.asarray(out, dtype=np.float64)
+        w_bal_trough = float(w_bal_curve.min())
         anaerobic_strain = max(0.0, min(1.0, 1.0 - w_bal_trough / w_prime))
     return anaerobic_strain, w_bal_curve, w_bal_trough
 
@@ -1345,6 +1361,7 @@ def compute_session_metrics(
         inv_taus,
         inv_amp,
         zone_arrs,
+        Z_session,
         P_arr,
         kind_arr,
         wid_idx_arr,
@@ -1416,6 +1433,7 @@ def compute_session_metrics(
         wid_idx_arr,
         ess_per_second,
         mass_kg,
+        Z_session=Z_session,
     )
 
     # ----- Session-level intensity -----
