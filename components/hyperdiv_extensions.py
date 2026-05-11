@@ -41,6 +41,12 @@ class aligned_button(hd.button):
     align = hd.Prop(hd.CSSField("align-items", hd.String))
 
 
+class blockquote(hd.box):
+    _name = "box"
+    _tag = "blockquote"
+    _classes = ["box"]
+
+
 class grid_box(hd.box):
     """
     hd.box with CSS Grid layout.

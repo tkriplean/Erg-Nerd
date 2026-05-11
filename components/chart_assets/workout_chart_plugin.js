@@ -495,6 +495,21 @@ window.hyperdiv.registerPlugin("StrokeChart", (ctx) => {
       };
     });
 
+    // Sub-split tick lines — thin dashed verticals inside parent work bands.
+    const subBandXs = cfg.subBandXs || [];
+    subBandXs.forEach((entry, i) => {
+      const x = typeof entry === "number" ? entry : entry.x;
+      annotations[`sub${i}`] = {
+        type: "line",
+        xScaleID: "x",
+        xMin: x,
+        xMax: x,
+        borderColor: isDark ? "rgba(217,119,6,0.45)" : "rgba(180,120,0,0.45)",
+        borderWidth: 1,
+        borderDash: [3, 3],
+      };
+    });
+
     // Check if annotation plugin is available
     const hasAnnotation =
       window.Chart &&

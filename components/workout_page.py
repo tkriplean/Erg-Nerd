@@ -68,8 +68,18 @@ from components.workout_chart_plugin import StrokeChart
 from components.ess_chart_plugin import EffortStressChart
 from components.ess_chart_builder import build_effort_stress_chart_config
 from services.rowing_utils import compute_watts
+from services.splits import (
+    TIME_BASED_WORKOUT_TYPES,
+    recalculate_interval_sub_splits,
+    recalculate_splits,
+)
+from components.workout_splits_modal import (
+    normalize_entry,
+    render_ranked_events_modal,
+    render_splits_modal,
+)
 
-from components.hyperdiv_extensions import radio_group
+from components.hyperdiv_extensions import radio_group, blockquote
 from components.concept2_sync import sync_workouts, strokes_for
 from components import indexed_db
 from components.indexed_db import SESSIONS_STORE, WORKOUTS_STORE
@@ -364,464 +374,18 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Custom splits UI
+# Custom splits — localStorage key
 # ---------------------------------------------------------------------------
 #
-# Persisted shape (localStorage key "custom_splits"):
-#     {str(workout_id): {"unit": "m" | "s", "values": [int, ...]}}
+# Persisted shape (per workout_id), managed by the splits modal:
+#     {
+#       "<id>": {
+#         "splits": {"values": [{"u": "m"|"s", "v": int}, ...]},
+#         "interval_sub": {...}    # Phase 3
+#       }
+#     }
 
 _CUSTOM_SPLITS_LS_KEY = "custom_splits"
-
-_TIME_BASED_WORKOUT_TYPES = {"FixedTimeSplits"}
-
-
-def _format_mmss(seconds: int) -> str:
-    """Integer seconds → 'M:SS' (e.g. 90 → '1:30', 30 → '0:30')."""
-    s = max(0, int(seconds))
-    m, sec = divmod(s, 60)
-    return f"{m}:{sec:02d}"
-
-
-def _parse_time_input(text: str):
-    """Parse chip text into integer seconds.
-
-    Accepts bare integer seconds ("90") or M:SS ("1:30").  M:SS requires a
-    2-digit seconds side so that ambiguous inputs like "1:5" are rejected
-    (could mean 65s or 105s).
-
-    Returns (seconds: int, None) on success, (None, error_message: str) on
-    failure.
-    """
-    raw = (text or "").strip()
-    if not raw:
-        return None, "Enter a duration."
-    if ":" in raw:
-        parts = raw.split(":")
-        if len(parts) != 2:
-            return None, 'Use "M:SS" format.'
-        m_str, s_str = parts
-        if len(s_str) != 2:
-            return (
-                None,
-                'Use seconds ("90") or M:SS ("1:30"). '
-                f'"{raw}" is ambiguous — write "{m_str}:{s_str.zfill(2)}".',
-            )
-        try:
-            m_val = int(m_str)
-            s_val = int(s_str)
-        except ValueError:
-            return None, f'Could not parse "{raw}" as M:SS.'
-        if m_val < 0 or s_val < 0 or s_val >= 60:
-            return None, f'"{raw}" is out of range.'
-        total = m_val * 60 + s_val
-        if total <= 0:
-            return None, "Duration must be positive."
-        return total, None
-    # Bare integer seconds.
-    try:
-        v = int(raw)
-    except ValueError:
-        return None, 'Use seconds ("90") or M:SS ("1:30").'
-    if v <= 0:
-        return None, "Duration must be positive."
-    return v, None
-
-
-_DEFAULT_SPLIT_COUNT = 5
-_SPLIT_COUNT_OPTIONS = (2, 3, 4, 5, 6, 8, 10, 12, 15, 16, 20, 21, 42)
-
-
-def _even_splits(total: int, n: int) -> list:
-    """Divide `total` into `n` integer splits as evenly as possible.
-
-    Distributes the remainder onto the trailing splits (each gets +1) so the
-    list sums exactly to `total`.  Example: _even_splits(5001, 5) →
-    [1000, 1000, 1000, 1000, 1001].
-    """
-    if n <= 0 or total <= 0:
-        return []
-    base = total // n
-    rem = total - base * n
-    return [base + (1 if i >= n - rem else 0) for i in range(n)]
-
-
-def _normalize_saved_entry(saved):
-    """Coerce a localStorage value to the new shape.
-
-    Returns {"unit": "m"|"s", "values": [int,...]} or None.
-    """
-    if isinstance(saved, dict) and "unit" in saved and "values" in saved:
-        return {
-            "unit": saved["unit"],
-            "values": [int(v) for v in saved["values"]],
-        }
-    return None
-
-
-def _custom_splits_ui(workout: dict, strokes: list, on_splits_change) -> None:
-    """Chip-row editor for custom split distances or durations.
-
-    For distance-based workouts, chips are meters.  For FixedTimeSplits,
-    chips are integer seconds displayed as M:SS; the text input accepts
-    either bare seconds or M:SS.
-    """
-    workout_id = workout["id"]
-    wtype = workout.get("workout_type", "")
-    is_time_based = wtype in _TIME_BASED_WORKOUT_TYPES
-    total_dist_m = workout.get("distance") or 0
-    total_time_s = (workout.get("time") or 0) // 10
-
-    target = total_time_s if is_time_based else total_dist_m
-    target_unit = "s" if is_time_based else "m"
-
-    s = hd.state(
-        loaded=False,
-        store={},
-        editing=False,
-        inputs=[],
-        unit=target_unit,
-        error="",
-    )
-
-    if not s.loaded:
-        ls = hd.local_storage.get_item(_CUSTOM_SPLITS_LS_KEY)
-        if not ls.done:
-            return
-        raw = ls.result
-        parsed = json.loads(raw) if raw else {}
-
-        store = {}
-        for k, v in parsed.items():
-            normalized = _normalize_saved_entry(v)
-            if normalized is not None:
-                store[k] = normalized
-        s.store = store
-        saved = store.get(str(workout_id))
-        if saved and saved["unit"] == target_unit:
-            s.inputs = list(saved["values"])
-            s.unit = saved["unit"]
-        else:
-            # Smart default: divide the workout into 5 as-even-as-possible
-            # splits (e.g. 5k → 5×1000m, 30min → 5×6:00).  Beats the old
-            # fixed 500m / 60s defaults on longer workouts.
-            s.inputs = _even_splits(target, _DEFAULT_SPLIT_COUNT)
-            s.unit = target_unit
-        s.loaded = True
-
-    with hd.box(gap=0.5, padding_bottom=0.5):
-        with hd.hbox(gap=1, align="center"):
-            toggle_btn = hd.button(
-                "Edit" if not s.editing else "Cancel",
-                variant="text",
-                size="small",
-            )
-        if toggle_btn.clicked:
-            s.editing = not s.editing
-
-        if s.editing:
-            with hd.box(gap=0.75):
-                with hd.hbox(gap=0.5, wrap="wrap", align="center"):
-                    for i, v in enumerate(s.inputs):
-                        with hd.scope(i):
-                            display = _format_mmss(v) if s.unit == "s" else str(v)
-                            ti = hd.text_input(value=display, width=5, size="small")
-                            if ti.changed:
-                                if s.unit == "s":
-                                    val, err = _parse_time_input(ti.value)
-                                else:
-                                    try:
-                                        val = max(1, int(ti.value))
-                                        err = None
-                                    except ValueError:
-                                        val = None
-                                        err = "Distances must be whole numbers."
-                                if val is None:
-                                    s.error = err or "Invalid input."
-                                else:
-                                    lst = list(s.inputs)
-                                    lst[i] = val
-                                    s.inputs = lst
-                                    s.error = ""
-
-                    add_btn = hd.icon_button(
-                        "plus-circle", font_size="small", font_color="primary"
-                    )
-                    if add_btn.clicked:
-                        default = 60 if s.unit == "s" else 500
-                        s.inputs = list(s.inputs) + [default]
-
-                    if len(s.inputs) > 1:
-                        rem_btn = hd.icon_button(
-                            "dash-circle", font_size="small", font_color="neutral-400"
-                        )
-                        if rem_btn.clicked:
-                            s.inputs = list(s.inputs)[:-1]
-
-                # Even-split helper: regenerate chips as N as-equal-as-
-                # possible splits covering the whole workout.
-                with hd.hbox(gap=0.5, align="center"):
-                    hd.text(
-                        "Divide into",
-                        font_size="x-small",
-                        font_color="neutral-500",
-                    )
-                    with hd.dropdown(f"{len(s.inputs)} splits") as _n_dd:
-                        with hd.box(
-                            background_color="neutral-0",
-                            align="start",
-                            padding=0.25,
-                        ):
-                            for n in _SPLIT_COUNT_OPTIONS:
-                                with hd.scope(f"n_{n}"):
-                                    n_btn = hd.button(
-                                        f"{n} splits",
-                                        variant="text",
-                                        size="small",
-                                        font_weight="bold"
-                                        if n == len(s.inputs)
-                                        else "normal",
-                                    )
-                                    if n_btn.clicked:
-                                        new_vals = _even_splits(target, n)
-                                        if new_vals:
-                                            s.inputs = new_vals
-                                            s.error = ""
-                                        _n_dd.opened = False
-
-                actual_sum = sum(s.inputs)
-                diff = actual_sum - target
-                unit_noun = "s" if s.unit == "s" else "m"
-                target_display = (
-                    _format_mmss(target) if s.unit == "s" else f"{target:,}m"
-                )
-                sum_display = (
-                    _format_mmss(actual_sum) if s.unit == "s" else f"{actual_sum:,}m"
-                )
-                if s.error:
-                    hd.text(s.error, font_color="danger", font_size="x-small")
-                elif abs(diff) > 2:
-                    hd.text(
-                        f"Sum ({sum_display}) must equal workout "
-                        f"{'time' if s.unit == 's' else 'distance'} "
-                        f"({target_display}) — off by {diff:+,}{unit_noun}.",
-                        font_color="warning-600",
-                        font_size="x-small",
-                    )
-                else:
-                    hd.text(
-                        f"✓ Sum: {sum_display}",
-                        font_color="success",
-                        font_size="x-small",
-                    )
-
-                recalc_btn = hd.button(
-                    "Recalculate",
-                    variant="primary",
-                    size="small",
-                    disabled=(abs(diff) > 2 or bool(s.error)),
-                )
-                if recalc_btn.clicked:
-                    obj = {"unit": s.unit, "values": list(s.inputs)}
-                    s.store[str(workout_id)] = obj
-                    hd.local_storage.set_item(
-                        _CUSTOM_SPLITS_LS_KEY, json.dumps(s.store)
-                    )
-                    s.editing = False
-                    on_splits_change(obj)
-
-
-# ---------------------------------------------------------------------------
-# Split recalculation from stroke data
-# ---------------------------------------------------------------------------
-
-
-def _build_interp(strokes: list, workout: dict):
-    """Build (interp_time, interp_distance) helpers over a synthetic-extended
-    stroke stream.
-
-    A synthetic final entry is appended at (total_distance, total_time) when
-    the last real stroke tails short of either total.  This guarantees that
-    interp_time(total_distance) == total_time and interp_distance(total_time)
-    == total_distance, so split sums reconcile to the workout totals.
-
-    The synthetic sentinel is used for interpolation only; callers that need
-    per-stroke aggregations (SPM, HR, watts averages) should iterate the
-    original `strokes` list, not these helpers' backing arrays.
-    """
-    if not strokes:
-        return None, None
-
-    total_d_dm = (workout.get("distance") or 0) * 10  # decimeters
-    total_t_tenths = workout.get("time") or 0  # tenths of seconds
-
-    last = strokes[-1]
-    last_d_dm = last.get("d", 0)
-    last_t = last.get("t", 0)
-    need_synth = (total_d_dm > 0 and last_d_dm < total_d_dm - 5) or (
-        total_t_tenths > 0 and last_t < total_t_tenths - 1
-    )
-
-    extended = list(strokes)
-    if need_synth:
-        synth_d = max(total_d_dm, last_d_dm)
-        synth_t = max(total_t_tenths, last_t)
-        extended.append({"d": synth_d, "t": synth_t})
-
-    d_m = [s.get("d", 0) / 10.0 for s in extended]
-    t_t = [s.get("t", 0) for s in extended]
-
-    def interp_time(target_m: float):
-        if target_m <= 0:
-            return 0.0
-        if target_m >= d_m[-1]:
-            return float(t_t[-1])
-        lo, hi = 0, len(d_m) - 1
-        while lo < hi - 1:
-            mid = (lo + hi) // 2
-            if d_m[mid] < target_m:
-                lo = mid
-            else:
-                hi = mid
-        span = d_m[hi] - d_m[lo]
-        if span <= 0:
-            return float(t_t[lo])
-        frac = (target_m - d_m[lo]) / span
-        return t_t[lo] + frac * (t_t[hi] - t_t[lo])
-
-    def interp_distance(target_t: float):
-        if target_t <= 0:
-            return 0.0
-        if target_t >= t_t[-1]:
-            return float(d_m[-1])
-        lo, hi = 0, len(t_t) - 1
-        while lo < hi - 1:
-            mid = (lo + hi) // 2
-            if t_t[mid] < target_t:
-                lo = mid
-            else:
-                hi = mid
-        span = t_t[hi] - t_t[lo]
-        if span <= 0:
-            return float(d_m[lo])
-        frac = (target_t - t_t[lo]) / span
-        return d_m[lo] + frac * (d_m[hi] - d_m[lo])
-
-    return interp_time, interp_distance
-
-
-def _recalculate_splits(strokes: list, workout: dict, custom_splits) -> list:
-    """
-    Interpolate stroke data to compute split metrics at custom boundaries.
-
-    `custom_splits` is {"unit": "m"|"s", "values": [int,...]}.  For "m" the
-    values are meter-lengths of successive splits; for "s" they are integer
-    seconds.  A synthetic final stroke is appended at the workout's reported
-    totals so that sum(distance) == total_distance and sum(time) ==
-    total_time within ±1 (see _build_interp).
-
-    Returns a list of dicts:
-        {distance, time_tenths, pace_tenths, spm, hr_avg, hr_max, max_watts}
-
-    Stroke d is in decimeters; t is in tenths of a second.
-    """
-    if not strokes or not custom_splits:
-        return []
-    values = custom_splits.get("values") or []
-    if not values:
-        return []
-    unit = custom_splits.get("unit", "m")
-
-    interp_time, interp_distance = _build_interp(strokes, workout)
-    if interp_time is None:
-        return []
-
-    # Aggregation windows use the original strokes only so the synthetic
-    # sentinel never skews SPM/HR/watts averages.
-    d_m_real = [s.get("d", 0) / 10.0 for s in strokes]
-    t_t_real = [s.get("t", 0) for s in strokes]
-
-    def strokes_in_d_range(lo_m: float, hi_m: float) -> list:
-        return [s for s, dm in zip(strokes, d_m_real) if lo_m <= dm <= hi_m]
-
-    def strokes_in_t_range(lo_t: float, hi_t: float) -> list:
-        return [s for s, tt in zip(strokes, t_t_real) if lo_t <= tt <= hi_t]
-
-    result = []
-    if unit == "s":
-        cumulative_tenths = 0.0
-        for dur_s in values:
-            t_start_tenths = cumulative_tenths
-            t_end_tenths = cumulative_tenths + dur_s * 10
-            d_start = interp_distance(t_start_tenths)
-            d_end = interp_distance(t_end_tenths)
-            dist_m = max(0.0, d_end - d_start)
-            dur_tenths = dur_s * 10
-
-            window = strokes_in_t_range(t_start_tenths, t_end_tenths)
-            spm_vals = [s.get("spm") for s in window if s.get("spm")]
-            hr_vals = [s.get("hr") for s in window if s.get("hr")]
-            pace_tenths = (dur_tenths * 500.0 / dist_m) if dist_m > 0 else None
-            max_w = None
-            if window:
-                wl = [
-                    compute_watts(s["p"] / 10.0)
-                    for s in window
-                    if s.get("p") and s["p"] > 0
-                ]
-                if wl:
-                    max_w = max(wl)
-
-            result.append(
-                {
-                    "distance": dist_m,
-                    "time_tenths": dur_tenths,
-                    "pace_tenths": pace_tenths,
-                    "spm": (sum(spm_vals) / len(spm_vals)) if spm_vals else None,
-                    "hr_avg": (sum(hr_vals) / len(hr_vals)) if hr_vals else None,
-                    "hr_max": max(hr_vals) if hr_vals else None,
-                    "max_watts": max_w,
-                }
-            )
-            cumulative_tenths = t_end_tenths
-        return result
-
-    # unit == "m"
-    cumulative = 0.0
-    for dist_m in values:
-        start_m = cumulative
-        end_m = cumulative + dist_m
-        t_start = interp_time(start_m) or 0.0
-        t_end = interp_time(end_m) or 0.0
-        dur_tenths = t_end - t_start
-
-        window = strokes_in_d_range(start_m, end_m)
-        spm_vals = [s.get("spm") for s in window if s.get("spm")]
-        hr_vals = [s.get("hr") for s in window if s.get("hr")]
-        pace_tenths = (dur_tenths * 500.0 / dist_m) if dist_m > 0 else None
-        max_w = None
-        if window:
-            wl = [
-                compute_watts(s["p"] / 10.0)
-                for s in window
-                if s.get("p") and s["p"] > 0
-            ]
-            if wl:
-                max_w = max(wl)
-
-        result.append(
-            {
-                "distance": dist_m,
-                "time_tenths": dur_tenths,
-                "pace_tenths": pace_tenths,
-                "spm": (sum(spm_vals) / len(spm_vals)) if spm_vals else None,
-                "hr_avg": (sum(hr_vals) / len(hr_vals)) if hr_vals else None,
-                "hr_max": max(hr_vals) if hr_vals else None,
-                "max_watts": max_w,
-            }
-        )
-        cumulative = end_m
-
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -832,15 +396,26 @@ def _recalculate_splits(strokes: list, workout: dict, custom_splits) -> list:
 def _splits_table(
     workout: dict,
     strokes: Optional[list],
-    custom_splits: Optional[dict],
+    custom_splits: Optional[list],
     focused_idx: int = -1,
     on_focus=None,
+    interval_sub: Optional[dict] = None,
+    expanded_intervals: Optional[tuple] = None,
+    on_interval_expand=None,
 ) -> None:
     """
     Render splits or intervals table.
 
-    Clicking a row calls on_focus(i, row) to zoom the chart to that band.
-    focused_idx highlights the currently zoomed row.
+    ``custom_splits`` is the mixed-unit chip list ``[{u,v},...]`` from
+    ``state.custom_splits`` (or ``None`` when no custom splits are applied).
+
+    For interval workouts, ``interval_sub`` carries the sub-split spec
+    (e.g. ``{"mode": "n_pieces", "n": 4}``) and ``expanded_intervals`` is the
+    set of band indices currently expanded.  ``on_interval_expand(i, opening)``
+    toggles the expansion of band index ``i``.
+
+    Clicking a row calls ``on_focus(i, row)`` to zoom the chart to that
+    band; ``focused_idx`` highlights the currently zoomed row.
     """
     header_color = "neutral-500"
     ts = "small"
@@ -856,13 +431,17 @@ def _splits_table(
             on_focus=on_focus,
             strokes=strokes,
             ess_segments=workout.get("_ess_segments"),
+            workout=workout,
+            interval_sub=interval_sub,
+            expanded=expanded_intervals,
+            on_expand=on_interval_expand,
         )
         return
 
     # For split-based workouts
     splits_data = None
     if custom_splits and strokes:
-        splits_data = _recalculate_splits(strokes, workout, custom_splits)
+        splits_data = recalculate_splits(strokes, workout, custom_splits)
     elif wo.get("splits"):
         splits_data = []
         for sp in wo["splits"]:
@@ -934,7 +513,7 @@ def _split_row(i, sp, col_w, ts, has_hr, ess_segments=None):
 
     cells = [
         (str(i + 1), col_w[0], "neutral-500"),
-        (fmt_distance(round(sp.get("distance"), 1)), col_w[1], None),
+        (fmt_distance(int(round(sp.get("distance") or 0))), col_w[1], None),
         (
             format_time(round(sp.get("time_tenths", 0)))
             if sp.get("time_tenths")
@@ -965,6 +544,10 @@ def _intervals_table(
     on_focus=None,
     strokes: Optional[list] = None,
     ess_segments: Optional[list] = None,
+    workout: Optional[dict] = None,
+    interval_sub: Optional[dict] = None,
+    expanded: Optional[tuple] = None,
+    on_expand=None,
 ) -> None:
     """
     Render interval-workout intervals table.
@@ -973,6 +556,11 @@ def _intervals_table(
     which is the single source of truth shared with _build_bands() in
     workout_chart_builder.py.  This guarantees row index i always corresponds
     to band index i for click-to-focus zoom.
+
+    When ``interval_sub`` is provided, each work row gets a chevron and
+    expands inline to show its sub-splits (computed via
+    ``recalculate_interval_sub_splits``).  Sub-rows are non-focusable and
+    do not shift the parent row index.
     """
     rows, _ = build_interval_rows_and_bands(intervals, strokes)
 
@@ -985,9 +573,17 @@ def _intervals_table(
     if has_hr:
         col_w.append(5.5)
         headers.append("HR")
-    # if has_if:
-    #     col_w.append(4.5)
-    #     headers.append("IF eff")
+
+    # Compute sub-splits per band when a spec is supplied.  The returned
+    # list is aligned with ``rows`` (work entries carry sub-rows, rest
+    # entries carry []).
+    children = None
+    if interval_sub and strokes and workout is not None:
+        sub_lists = recalculate_interval_sub_splits(
+            strokes, workout, intervals, interval_sub
+        )
+        # Pad to len(rows) defensively (rest-segment indices match []).
+        children = list(sub_lists) + [[]] * max(0, len(rows) - len(sub_lists))
 
     _table_frame(
         rows,
@@ -1000,7 +596,47 @@ def _intervals_table(
         row_renderer=lambda i, r, cw: _interval_row(
             i, r, cw, ts, has_hr, ess_segments if False and has_if else None
         ),
+        children=children,
+        child_renderer=(
+            (lambda parent_i, sub, cw: _interval_sub_row(parent_i, sub, cw, ts, has_hr))
+            if children
+            else None
+        ),
+        expanded=expanded,
+        on_expand=on_expand,
     )
+
+
+def _interval_sub_row(parent_i, sub, col_w, ts, has_hr):
+    """Render one sub-split row indented under its parent interval row.
+
+    Uses the same column widths as the parent so cells line up under the
+    parent's columns.  No focus indicator, no chevron, smaller / muted font.
+    """
+    pace_t = sub.get("pace_tenths")
+    avg_w = round(compute_watts(pace_t / 10.0)) if pace_t else None
+    hr_avg = sub.get("hr_avg")
+    spm = sub.get("spm")
+    dist = sub.get("distance") or 0
+    t = sub.get("time_tenths") or 0
+
+    cells = [
+        ("·", col_w[0], "neutral-400"),
+        (fmt_distance(int(round(dist))) if dist else "—", col_w[1], "neutral-500"),
+        (format_time(int(round(t))) if t else "—", col_w[2], "neutral-500"),
+        (fmt_split(pace_t), col_w[3], "neutral-500"),
+        (str(avg_w) if avg_w is not None else "—", col_w[4], "neutral-500"),
+        (f"{spm:.0f}" if spm else "—", col_w[5], "neutral-500"),
+    ]
+    if has_hr:
+        cells.append((f"{hr_avg:.0f}" if hr_avg else "—", col_w[6], "neutral-500"))
+
+    for idx, (val, w, color) in enumerate(cells):
+        with hd.scope(f"sub_c_{idx}"):
+            kwargs = {"font_size": "x-small", "width": w}
+            if color:
+                kwargs["font_color"] = color
+            hd.text(val, **kwargs)
 
 
 def _interval_row(i, r, col_w, ts, has_hr, ess_segments=None):
@@ -1046,16 +682,43 @@ def _interval_row(i, r, col_w, ts, has_hr, ess_segments=None):
 
 
 def _table_frame(
-    rows, col_w, headers, header_color, ts, focused_idx, on_focus, row_renderer
+    rows,
+    col_w,
+    headers,
+    header_color,
+    ts,
+    focused_idx,
+    on_focus,
+    row_renderer,
+    *,
+    children=None,
+    child_renderer=None,
+    expanded=None,
+    on_expand=None,
 ):
     """Shared table chrome: header + body rows with click-to-focus.
 
     Work rows (any row without _is_rest=True) are rendered as hd.link so the
     entire row is clickable; clicking toggles the zoom focus for that band.
     Rest rows are rendered as plain hboxes with no click target.
+
+    Optional expansion support (used by intervals + sub-splits):
+
+      ``children``   : list aligned with ``rows`` where each element is either
+                       a list of sub-row dicts or ``None``/``[]`` (no children).
+      ``child_renderer(parent_idx, sub_row, col_w)`` : renders a sub-row.  It
+                       receives the *outer* column widths so cells can align.
+      ``expanded``   : iterable/set of parent indices currently expanded.
+      ``on_expand(idx, opening: bool)`` : toggle callback.  When provided, a
+                       chevron icon is shown at the start of rows that have
+                       children.
+
+    Sub-rows are not focusable and don't participate in ``focused_idx``
+    accounting — band-index ↔ row-index alignment is preserved.
     """
     border = "1px solid neutral-200"
     focus_bg = "primary-50"
+    expanded_set = set(expanded or ())
 
     with hd.box(border=border, border_radius="medium"):
         # Header
@@ -1081,6 +744,11 @@ def _table_frame(
                 is_focused = i == focused_idx
                 is_rest = row.get("_is_rest", False)
                 is_focusable = on_focus is not None and not is_rest
+                row_children = (
+                    children[i] if children and i < len(children) else None
+                ) or []
+                has_children = bool(row_children) and child_renderer is not None
+                is_expanded = has_children and i in expanded_set
 
                 row_kwargs = dict(
                     gap=0.5,
@@ -1090,21 +758,63 @@ def _table_frame(
                 )
 
                 if is_focusable:
-                    with hd.link(
-                        href="#",
-                        target="_self",
-                        direction="horizontal",
-                        font_color="neutral-700",
-                        underline=False,
-                        hover_background_color="neutral-50",
-                        **row_kwargs,
-                    ) as row_el:
-                        row_renderer(i, row, col_w)
-                    if row_el.clicked:
-                        on_focus(None if is_focused else i, row)
+                    with hd.hbox(
+                        gap=0,
+                        align="center",
+                        background_color=focus_bg if is_focused else None,
+                    ):
+                        # Chevron column (only when row has children).
+                        if has_children and on_expand is not None:
+                            chev_icon = (
+                                "chevron-down" if is_expanded else "chevron-right"
+                            )
+                            with hd.scope("chev"):
+                                chev_btn = hd.icon_button(
+                                    chev_icon,
+                                    font_size="x-small",
+                                    font_color="neutral-500",
+                                )
+                                if chev_btn.clicked:
+                                    on_expand(i, not is_expanded)
+                        elif has_children:
+                            # Reserve width even if expand callback is missing
+                            # so columns stay aligned.
+                            hd.box(width=1.5)
+                        with hd.link(
+                            href="#",
+                            target="_self",
+                            direction="horizontal",
+                            font_color="neutral-700",
+                            underline=False,
+                            hover_background_color="neutral-50",
+                            grow=True,
+                            **row_kwargs,
+                        ) as row_el:
+                            row_renderer(i, row, col_w)
+                        if row_el.clicked:
+                            on_focus(None if is_focused else i, row)
                 else:
-                    with hd.hbox(**row_kwargs):
-                        row_renderer(i, row, col_w)
+                    with hd.hbox(gap=0, align="center"):
+                        if has_children:
+                            hd.box(width=1.5)
+                        with hd.hbox(grow=True, **row_kwargs):
+                            row_renderer(i, row, col_w)
+
+                if is_expanded:
+                    with hd.box(
+                        gap=0,
+                        padding=(0, 0, 0.2, 2.5),
+                        background_color="neutral-50",
+                        border_bottom=border,
+                    ):
+                        for j, sub in enumerate(row_children):
+                            with hd.scope(f"sub_{j}"):
+                                with hd.hbox(
+                                    padding=(0.25, 0.75, 0.25, 0.75),
+                                    gap=0.5,
+                                    align="center",
+                                ):
+                                    child_renderer(i, sub, col_w)
 
 
 # ---------------------------------------------------------------------------
@@ -1350,11 +1060,7 @@ def _render_similar_workouts(workout, all_workouts, max_hr, profile, state):
                     "watts",
                     "spm",
                     "hr",
-                    "ess",
-                    "if_eff",
                     "severity",
-                    "anaerobic_strain",
-                    "glycogen_used",
                     "stimulus",
                     "similarity",
                     compare_col_entry,
@@ -1371,11 +1077,7 @@ def _render_similar_workouts(workout, all_workouts, max_hr, profile, state):
                     "drag",
                     "spm",
                     "hr",
-                    "ess",
-                    "if_eff",
                     "severity",
-                    "anaerobic_strain",
-                    "glycogen_used",
                     "stimulus",
                     "similarity",
                     compare_col_entry,
@@ -1398,6 +1100,7 @@ def _render_similar_workouts(workout, all_workouts, max_hr, profile, state):
                 default_sort_col="similarity",
                 default_sort_asc=False,
                 on_event={"compare_toggle": _on_compare_toggle},
+                searchable=False,
             )
 
 
@@ -1924,7 +1627,13 @@ def workout_page(workout_id: int) -> None:
         metric="pace",  # "pace" | "watts"
         focused_interval=None,  # int | None  (raw band index)
         focused_interval_excluding_rest=None,  # int | None  (1-based work interval #)
-        custom_splits=None,  # {"unit": "m"|"s", "values": [int,...]} | None
+        custom_splits=None,  # list[{u:"m"|"s", v:int}] | None — applied chip list
+        interval_sub_splits=None,  # interval workouts: {mode, n|unit+value} | None
+        expanded_intervals=(),  # tuple[int,...] of band indices currently expanded
+        splits_store=None,  # full localStorage dict | None until first load
+        splits_loaded_for=None,  # workout_id we've populated splits state for
+        show_splits_modal=False,
+        show_ranked_modal=False,
         stack=False,  # stacked-intervals overlay mode
         show_pace=True,  # show pace/watts in stacked / compare mode
         show_spm=False,  # show SPM in stacked / compare mode
@@ -1947,6 +1656,29 @@ def workout_page(workout_id: int) -> None:
     if profile is None or workout is None or AppContext().sessions_dict is None:
         hd.box(padding=2, min_height="80vh")
         return
+
+    # ── Load custom splits from localStorage ────────────────────────────────
+    # We populate state.custom_splits and state.interval_sub_splits from the
+    # saved entry on first visit to a workout (and again on workout-id
+    # change).  Saved splits then drive the splits/intervals table and the
+    # chart annotation bands without requiring the user to reopen the modal.
+    if state.splits_loaded_for != workout_id:
+        ls = hd.local_storage.get_item(_CUSTOM_SPLITS_LS_KEY)
+        if not ls.done:
+            hd.box(padding=2, min_height="80vh")
+            return
+        try:
+            parsed = json.loads(ls.result) if ls.result else {}
+        except (json.JSONDecodeError, ValueError):
+            parsed = {}
+        state.splits_store = parsed if isinstance(parsed, dict) else {}
+        entry = normalize_entry(state.splits_store.get(str(workout_id)))
+        values = (entry or {}).get("splits", {}).get("values") if entry else None
+        sub_spec = (entry or {}).get("interval_sub") if entry else None
+        state.custom_splits = list(values) if values else None
+        state.interval_sub_splits = dict(sub_spec) if sub_spec else None
+        state.expanded_intervals = ()
+        state.splits_loaded_for = workout_id
 
     # ── Fetch stroke data (unified via concept2_sync.strokes_for) ────────────
 
@@ -2008,11 +1740,9 @@ def workout_page(workout_id: int) -> None:
 
     total_dist = workout.get("distance") or 0
     total_time_tenths = workout.get("time") or 0
-    is_time_based = wtype in _TIME_BASED_WORKOUT_TYPES
-    show_custom = (
-        has_strokes
-        and not is_interval
-        and (total_dist > 0 or (is_time_based and total_time_tenths > 0))
+    is_time_based = wtype in TIME_BASED_WORKOUT_TYPES
+    show_custom = has_strokes and (
+        total_dist > 0 or (is_time_based and total_time_tenths > 0) or is_interval
     )
 
     with hd.box(padding=(1, 2, 0, 4), gap=3, align="center", min_height="80vh"):
@@ -2027,14 +1757,16 @@ def workout_page(workout_id: int) -> None:
                             hd.text(t, font_weight="bold", font_size="2x-large")
 
                 if workout.get("comments"):
-                    with hd.hbox(gap=0.25):
-                        hd.icon("quote", font_color="neutral-500")
+                    with blockquote(
+                        border_left="3px solid neutral-200",
+                        padding_left="15px",
+                        margin_left=0,
+                    ):
                         hd.text(
                             workout["comments"],
                             font_color="neutral-500",
                             font_size="medium",
                         )
-                        hd.text('"')
 
             # ── Summary stats ─────────────────────────────────────────────────
 
@@ -2142,6 +1874,7 @@ def workout_page(workout_id: int) -> None:
                         show_spm=state.show_spm,
                         show_hr=state.show_hr,
                         custom_splits=state.custom_splits,
+                        interval_sub=state.interval_sub_splits,
                         compare_series=compare_series,
                     )
                     chart = StrokeChart(config=cfg, height="50vh")
@@ -2176,9 +1909,9 @@ def workout_page(workout_id: int) -> None:
                         font_size="small",
                     )
 
-            # Right: splits/intervals table + custom splits editor
+            # Right: splits/intervals table + modal trigger button
             with hd.box(gap=0.75):
-                with hd.hbox(gap=0.5):
+                with hd.hbox(gap=0.5, align="center"):
                     hd.h2(
                         "Intervals" if is_interval else "Splits",
                         font_weight="semibold",
@@ -2186,13 +1919,34 @@ def workout_page(workout_id: int) -> None:
                         font_color="neutral-800",
                     )
                     if show_custom:
-                        _custom_splits_ui(
-                            workout=workout,
-                            strokes=strokes or [],
-                            on_splits_change=lambda obj: setattr(
-                                state, "custom_splits", obj
-                            ),
-                        )
+                        if is_interval:
+                            edit_label = (
+                                "Edit interval splits"
+                                if state.interval_sub_splits
+                                else "Add splits to intervals"
+                            )
+                        else:
+                            edit_label = (
+                                "Edit splits" if state.custom_splits else "Add splits"
+                            )
+                        edit_btn = hd.button(edit_label, variant="text", size="small")
+                        if edit_btn.clicked:
+                            state.show_splits_modal = True
+                        if has_strokes:
+                            ranked_btn = hd.button(
+                                "Ranked events", variant="text", size="small"
+                            )
+                            if ranked_btn.clicked:
+                                state.show_ranked_modal = True
+
+                def _toggle_interval_expand(idx, opening):
+                    current = set(state.expanded_intervals or ())
+                    if opening:
+                        current.add(idx)
+                    else:
+                        current.discard(idx)
+                    state.expanded_intervals = tuple(sorted(current))
+
                 _splits_table(
                     workout,
                     strokes,
@@ -2201,6 +1955,9 @@ def workout_page(workout_id: int) -> None:
                     if state.focused_interval is not None
                     else -1,
                     on_focus=on_split_focus,
+                    interval_sub=state.interval_sub_splits,
+                    expanded_intervals=state.expanded_intervals,
+                    on_interval_expand=_toggle_interval_expand,
                 )
 
         # ── Effort & Stress (IF_eff + W'bal time-series) ─────────────────
@@ -2268,7 +2025,6 @@ def workout_page(workout_id: int) -> None:
                     "severity",
                     "stimulus",
                     "ess",
-                    "glycogen_used",
                     {"key": "link", "current_id": str(workout["id"])},
                 ]
                 WorkoutTable(
@@ -2279,7 +2035,102 @@ def workout_page(workout_id: int) -> None:
                     paginate=False,
                     highlight=lambda r: str(r.get("id")) == str(workout["id"]),
                     tree_mode=True,
+                    searchable=False,
                 )
 
         # ── Similar workouts ─────────────────────────────────────────────
-        # _render_similar_workouts(workout, all_workouts, max_hr, profile, state)
+        _render_similar_workouts(workout, all_workouts, max_hr, profile, state)
+
+        # ── Custom-splits modal ──────────────────────────────────────────
+        # The dialog is created at this top level so its component state
+        # survives re-renders of the right column above.  Visibility is
+        # driven by state.show_splits_modal; the modal contents short-
+        # circuit when dlg.opened is False (see render_splits_modal).
+        if show_custom:
+            dlg = hd.dialog(
+                "Edit interval splits" if is_interval else "Edit splits",
+                panel_style=hd.style(width="720px", max_width="95vw"),
+            )
+            if dlg.was_closed:
+                state.show_splits_modal = False
+            if state.show_splits_modal and not dlg.opened:
+                dlg.opened = True
+
+            def _on_splits_apply(payload):
+                """Persist whichever field of the payload was supplied.
+
+                payload is one of:
+                    {"values": [...]}        — non-interval: replace chip list
+                    {"values": None}         — non-interval: clear
+                    {"sub_spec": {...}}      — interval: replace sub-spec
+                    {"sub_spec": None}       — interval: clear sub-spec
+                """
+                store = dict(state.splits_store or {})
+                wid = str(workout["id"])
+                existing = dict(store.get(wid) or {})
+
+                if "values" in payload:
+                    new_values = payload["values"]
+                    if new_values:
+                        existing["splits"] = {"values": list(new_values)}
+                    else:
+                        existing.pop("splits", None)
+                    state.custom_splits = list(new_values) if new_values else None
+                if "sub_spec" in payload:
+                    new_sub = payload["sub_spec"]
+                    if new_sub:
+                        existing["interval_sub"] = dict(new_sub)
+                    else:
+                        existing.pop("interval_sub", None)
+                    state.interval_sub_splits = dict(new_sub) if new_sub else None
+                    # Collapse expanded interval rows when the sub-spec
+                    # changes — old expansion state references the prior
+                    # row count which may not match the new computation.
+                    state.expanded_intervals = ()
+
+                if existing:
+                    store[wid] = existing
+                else:
+                    store.pop(wid, None)
+                state.splits_store = store
+                hd.local_storage.set_item(_CUSTOM_SPLITS_LS_KEY, json.dumps(store))
+                state.show_splits_modal = False
+
+            def _on_splits_close():
+                # Cancel (and any other programmatic close from inside the
+                # modal) needs to drop the trigger flag — ``dialog.opened
+                # = False`` doesn't fire ``was_closed``, so without this
+                # callback workout_page would re-open the dialog on the
+                # next render.
+                state.show_splits_modal = False
+
+            render_splits_modal(
+                dlg,
+                workout,
+                strokes,
+                current_values=state.custom_splits,
+                current_sub_spec=state.interval_sub_splits,
+                on_apply=_on_splits_apply,
+                on_close=_on_splits_close,
+            )
+
+            # Ranked events modal — separate dialog so the splits editor
+            # stays single-purpose.
+            ranked_dlg = hd.dialog(
+                "Ranked events",
+                panel_style=hd.style(width="720px", max_width="95vw"),
+            )
+            if ranked_dlg.was_closed:
+                state.show_ranked_modal = False
+            if state.show_ranked_modal and not ranked_dlg.opened:
+                ranked_dlg.opened = True
+
+            def _on_ranked_close():
+                state.show_ranked_modal = False
+
+            render_ranked_events_modal(
+                ranked_dlg,
+                workout,
+                strokes,
+                on_close=_on_ranked_close,
+            )

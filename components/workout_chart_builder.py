@@ -26,7 +26,12 @@ import math
 from typing import Optional
 
 from services.rowing_utils import compute_watts, INTERVAL_WORKOUT_TYPES
-from services.stroke_utils import ensure_raw_stroke_origin
+from services.splits import (
+    build_interp,
+    format_mmss,
+    recalculate_interval_sub_splits,
+    stitch_interval_times,
+)
 from services.formatters import fmt_distance
 
 
@@ -35,60 +40,7 @@ from services.formatters import fmt_distance
 # ---------------------------------------------------------------------------
 
 
-def _stitch_interval_times(
-    strokes: list,
-    intervals: Optional[list] = None,
-) -> list:
-    """
-    Return a copy of strokes with t values made monotonically increasing.
-
-    The Concept2 API resets t to 0 at the start of each work interval.
-    t does NOT reset separately for rest periods — rest strokes (if any)
-    continue counting up from where the work strokes left off, and the
-    next reset happens only when the following work interval begins.
-    This means there is exactly one backward jump per interval boundary.
-
-    At each jump we know which interval just ended, so we advance the offset
-    by the full canonical duration of that interval (work time + rest time)
-    rather than by prev_t.  This is necessary because the last stroke before
-    a boundary may arrive several tenths before the interval actually ends,
-    and accumulating prev_t would compress the chart timeline by that gap on
-    every boundary.
-
-    Falls back to accumulating prev_t if interval metadata is absent or
-    exhausted.
-
-    Anomalous device-emitted strokes with small backward-t values are removed
-    upstream by concept2.get_strokes(), so every backward jump seen here is a
-    genuine section reset.
-    """
-    if not strokes:
-        return strokes
-
-    # Ensure the first sample sits at (t=0, d=0) so the chart x-axis starts
-    # at the catch rather than at the first recorded stroke (which the PM5
-    # sometimes emits 1-2 seconds into a short piece).
-    strokes = ensure_raw_stroke_origin(strokes)
-
-    result = []
-    offset = 0
-    prev_t = 0
-    interval_idx = 0  # index of the interval that just ended at each jump
-
-    for i, s in enumerate(strokes):
-        t = s.get("t", 0)
-        if i > 0 and t < prev_t:
-            if intervals and interval_idx < len(intervals):
-                iv = intervals[interval_idx]
-                offset += (iv.get("time") or 0) + (iv.get("rest_time") or 0)
-            else:
-                offset += prev_t  # fallback
-            interval_idx += 1
-        prev_t = t
-        stitched = dict(s)
-        stitched["t"] = t + offset
-        result.append(stitched)
-    return result
+_stitch_interval_times = stitch_interval_times  # re-export under the old name
 
 
 # ---------------------------------------------------------------------------
@@ -339,17 +291,17 @@ def _build_bands(
     wo: dict,
     wtype: str,
     *,
-    custom_splits: Optional[dict] = None,
+    custom_splits: Optional[list] = None,
     strokes: Optional[list] = None,
     workout: Optional[dict] = None,
 ) -> list:
     """Return annotation band dicts. Each band: {idx, xMin, xMax, label, work}.
 
-    When `custom_splits` is provided for a non-interval workout, bands are
-    derived by interpolating the stroke stream at each cumulative boundary.
-    For distance-unit splits (meters), boundaries map to elapsed time via
-    `interp_time`.  For time-unit splits (seconds), boundaries are the
-    cumulative time values themselves.
+    When ``custom_splits`` (a mixed-unit chip list ``[{u,v},...]``) is
+    provided for a non-interval workout, bands are derived by interpolating
+    the stroke stream at each chip boundary.  Each chip's boundary is
+    placed along its own axis; chip boundaries are reconciled across axes
+    via ``build_interp``.
     """
     intervals = wo.get("intervals")
     splits = wo.get("splits")
@@ -366,55 +318,127 @@ def _build_bands(
     return []
 
 
-def _bands_from_custom_splits(
-    custom_splits: dict, strokes: list, workout: dict
+def _build_sub_band_boundaries(
+    intervals: list,
+    strokes: list,
+    workout: dict,
+    interval_sub: dict,
 ) -> list:
-    """Convert custom split boundaries to elapsed-time bands."""
-    # Local import to avoid a circular dependency with components.workout_page.
-    from components.workout_page import _build_interp, _format_mmss
+    """Return interior sub-split boundaries as elapsed-second x-coordinates.
 
-    values = custom_splits.get("values") or []
-    if not values:
+    Iterates each work interval in the same order as
+    ``build_interval_rows_and_bands`` and emits one entry per *interior*
+    sub-split boundary (cumulative endpoint of each sub-split except the
+    last one, which coincides with the interval's outer boundary).  The JS
+    plugin draws these as light dashed tick lines within the parent
+    interval band.
+
+    Each entry: ``{"x": float, "parent_idx": int}``.
+    """
+    out: list = []
+    if not intervals or not strokes or not interval_sub:
+        return out
+
+    sub_lists = recalculate_interval_sub_splits(
+        strokes, workout, intervals, interval_sub
+    )
+
+    elapsed_s = 0.0
+    band_idx = 0
+    sub_idx = 0
+    for iv in intervals:
+        t_tenths = iv.get("time") or 0
+        if t_tenths <= 0:
+            continue
+        dur_s = t_tenths / 10.0
+        interval_start_s = elapsed_s
+
+        # Pick out this work band's sub-splits (sub_lists is band-aligned).
+        if sub_idx < len(sub_lists):
+            sub_rows = sub_lists[sub_idx]
+        else:
+            sub_rows = []
+        sub_idx += 1
+
+        # Interior boundaries: cumulative time at the END of each sub-split,
+        # except the very last (it coincides with the parent's end).
+        cur = 0.0
+        for k, sr in enumerate(sub_rows[:-1]):
+            cur += (sr.get("time_tenths") or 0) / 10.0
+            out.append(
+                {
+                    "x": round(interval_start_s + cur, 2),
+                    "parent_idx": band_idx,
+                }
+            )
+
+        elapsed_s += dur_s
+        band_idx += 1
+
+        rest_tenths = iv.get("rest_time") or 0
+        if rest_tenths > 0:
+            elapsed_s += rest_tenths / 10.0
+            sub_idx += 1  # rest band slot in sub_lists
+            band_idx += 1
+
+    return out
+
+
+def _bands_from_custom_splits(
+    custom_splits: list, strokes: list, workout: dict
+) -> list:
+    """Convert mixed-unit custom split boundaries to elapsed-time bands.
+
+    ``custom_splits`` is a chip list ``[{u:"m"|"s", v:int}, ...]``.
+    Boundaries on distance chips are mapped to elapsed seconds via
+    ``build_interp``; time chips use cumulative seconds directly.  Chip
+    boundaries are continuous across axes — the cursor advances on the
+    chip's own axis and the other axis tracks it via interpolation.
+    """
+    if not custom_splits:
         return []
-    unit = custom_splits.get("unit", "m")
 
-    interp_time, _ = _build_interp(strokes, workout)
+    interp_time, interp_distance = build_interp(strokes, workout)
     if interp_time is None:
         return []
 
     bands: list = []
-    if unit == "s":
-        cumulative_tenths = 0.0
-        for i, dur_s in enumerate(values):
-            start_s = cumulative_tenths / 10.0
-            end_s = (cumulative_tenths + dur_s * 10) / 10.0
-            bands.append(
-                {
-                    "idx": i,
-                    "xMin": round(start_s, 2),
-                    "xMax": round(end_s, 2),
-                    "label": _format_mmss(dur_s),
-                    "work": True,
-                }
-            )
-            cumulative_tenths += dur_s * 10
-        return bands
+    cursor_t = 0.0  # elapsed seconds at the start of the next chip
+    cursor_m = 0.0  # elapsed metres at the start of the next chip
 
-    # unit == "m"
-    cumulative = 0.0
-    for i, dist_m in enumerate(values):
-        start_t = interp_time(cumulative) or 0.0
-        end_t = interp_time(cumulative + dist_m) or 0.0
+    for i, chip in enumerate(custom_splits):
+        unit = chip.get("u", "m")
+        try:
+            v = int(chip.get("v", 0))
+        except (TypeError, ValueError):
+            continue
+        if v <= 0:
+            continue
+
+        if unit == "s":
+            start_s = cursor_t
+            end_s = cursor_t + v
+            label = format_mmss(v)
+            end_m = interp_distance(end_s * 10)
+        else:
+            start_s = cursor_t
+            end_t_tenths = interp_time(cursor_m + v) or 0.0
+            end_s = end_t_tenths / 10.0
+            label = f"{v}m"
+            end_m = cursor_m + v
+
         bands.append(
             {
                 "idx": i,
-                "xMin": round(start_t / 10.0, 2),
-                "xMax": round(end_t / 10.0, 2),
-                "label": f"{dist_m}m",
+                "xMin": round(start_s, 2),
+                "xMax": round(end_s, 2),
+                "label": label,
                 "work": True,
             }
         )
-        cumulative += dist_m
+        cursor_t = end_s
+        cursor_m = end_m
+
     return bands
 
 
@@ -702,7 +726,8 @@ def build_stroke_chart_config(
     show_pace: bool = True,
     show_spm: bool = True,
     show_hr: bool = True,
-    custom_splits: Optional[dict] = None,
+    custom_splits: Optional[list] = None,
+    interval_sub: Optional[dict] = None,
     compare_series: Optional[list] = None,
     primary_color: Optional[str] = None,
     primary_label: Optional[str] = None,
@@ -720,9 +745,9 @@ def build_stroke_chart_config(
     is_dark : apply dark-mode palette
     stack   : overlay all work intervals starting from t=0
     show_pace/show_spm/show_hr : series visibility (stacked mode and compare mode)
-    custom_splits : {"unit":"m"|"s","values":[int,...]} | None — when present on
-        a non-interval workout, drives both the band layout (so stacked mode
-        uses custom boundaries) and the chart labels.
+    custom_splits : list of mixed-unit chips ``[{u:"m"|"s", v:int}, ...]`` |
+        None — when present on a non-interval workout, drives both the band
+        layout (so stacked mode uses custom boundaries) and the chart labels.
     compare_series : list of compare dicts | None.  Each dict has id, label,
         color, pace_points, spm_points, hr_points, has_hr, total_time_s.
         When provided and stack=False, each entry is drawn as an additional
@@ -895,6 +920,17 @@ def build_stroke_chart_config(
         workout=workout,
     )
 
+    sub_band_xs: list = []
+    if (
+        interval_sub
+        and strokes
+        and wtype in INTERVAL_WORKOUT_TYPES
+        and wo.get("intervals")
+    ):
+        sub_band_xs = _build_sub_band_boundaries(
+            wo["intervals"], strokes, workout or {}, interval_sub
+        )
+
     # ── Y-axis bounds ────────────────────────────────────────────────────────
     #
     # For interval workouts: derive bounds from work-interval points only so
@@ -1037,6 +1073,7 @@ def build_stroke_chart_config(
     return {
         "datasets": datasets,
         "bands": bands,
+        "subBandXs": sub_band_xs,
         "showWatts": show_watts,
         "showSpm": show_spm,
         "hasHr": has_hr,
