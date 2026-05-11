@@ -1354,7 +1354,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       // body.insertBefore(
       //   el("div", { class: "tt-headline" }, headline), body.firstChild);
       body.insertBefore(
-        el("div", { class: "tt-headline" }, "very approx. % of full dose"), body.firstChild);
+        el("div", { class: "tt-headline" }, "Rough estimate of % of full dose"), body.firstChild);
 
       body.insertBefore(el("div", { class: "tt-title" }, "Training Stimulus"), body.firstChild);
 
