@@ -18,6 +18,13 @@ Volume chart:
   - Season and machine filters are applied globally (from app.py gfilter)
     before this component receives workouts; no page-level filter UI for these.
 
+Distribution table:
+  - Period (newest first) | Total | Rest | zone columns | Distribution badge.
+  - Backed by ``DataTable`` (components/data_table.py) — JS-rendered, with
+    client-side column sort that persists across back-button via
+    sessionStorage.  ``reset_token`` mirrors ``{view}_{zone_mode}`` so
+    swapping either resets sort/page.
+
 HR mode details:
   - Max HR is read from browser localStorage (key "profile", explicit value) or
     estimated at the 98th percentile of all valid HR readings (is_estimated=True).
@@ -65,6 +72,7 @@ from components.app_context import get_profile
 from components.volume_chart_builder import build_volume_chart_config, get_period_rows
 from components.volume_chart_plugin import VolumeChart
 from components.hyperdiv_extensions import grid_box
+from components.data_table import DataTable
 from components.shared_ui import global_filter_ui
 
 from datetime import timedelta
@@ -186,8 +194,9 @@ _PERIOD_HEADERS = {
 
 def _distribution_table(rows: list, view: str, zone_mode: str = "power_spread") -> None:
     """
-    Render a sortable CSS Grid table with one row per period showing zone
-    breakdowns and a training distribution classification.
+    Render a sortable JS-backed table with one row per period showing zone
+    breakdowns and a training distribution classification.  Backed by
+    :func:`components.data_table.DataTable`.
 
     Power Spread mode columns:
       Period | Total | Rest | Z1 Easy | Z2 Threshold | Z3 Hard | Distribution
@@ -199,189 +208,133 @@ def _distribution_table(rows: list, view: str, zone_mode: str = "power_spread") 
     Workout Severity mode columns:
       Period | Total | Rest | Low | Moderate | High | Maximal | Unrated
 
-    Sort state resets when view or zone_mode changes (via scope key).
+    Sort state lives in the JS plugin and persists across back-button via
+    sessionStorage; ``reset_token`` (``"{view}_{zone_mode}"``) resets sort
+    when the user swaps view or zone mode.
     """
     period_col = _PERIOD_HEADERS.get(view, "Period")
 
-    # Column definitions: (header_label, sort_key, css_width, render_fn)
-    # render_fn=None → Distribution badge rendered specially
+    period_column = {
+        "key": "label",
+        "header": period_col,
+        "width": "9rem",
+        "align": "start",
+        "value_key": "label",
+        "sort_key": "_idx",
+        "default_asc": True,
+    }
+    total_column = {
+        "key": "total",
+        "header": "Total",
+        "width": "7rem",
+        "align": "end",
+        "value_key": "total",
+        "sort_key": "total_raw",
+    }
+    rest_column = {
+        "key": "rest",
+        "header": "Rest",
+        "width": "7rem",
+        "align": "end",
+        "value_key": "rest",
+        "sort_key": "rest_raw",
+    }
+    distribution_column = {
+        "key": "distribution",
+        "header": "Distribution",
+        "width": "9rem",
+        "align": "center",
+        "value_key": "distribution",
+        "sort_key": "distribution",
+        "default_asc": True,
+    }
+
+    def _zone_col(
+        key, header, value_key, secondary_key, sort_key, width="minmax(9rem,1fr)"
+    ):
+        return {
+            "key": key,
+            "header": header,
+            "width": width,
+            "align": "end",
+            "value_key": value_key,
+            "secondary_key": secondary_key,
+            "sort_key": sort_key,
+        }
+
     if zone_mode == "severity":
-        col_defs = [
-            (period_col, "idx", "9rem", lambda r: r["label"]),
-            ("Total", "total", "7rem", lambda r: r["total"]),
-            ("Rest", "rest", "7rem", lambda r: r["rest"]),
-            (
-                "Low",
-                "low",
-                "minmax(8rem,1fr)",
-                lambda r: f"{r['low_m']}  ({r['low_pct']})",
+        columns = [
+            period_column,
+            total_column,
+            rest_column,
+            _zone_col(
+                "low", "Low", "low_m", "low_pct", "low_raw", width="minmax(8rem,1fr)"
             ),
-            (
-                "Moderate",
+            _zone_col(
                 "mod",
-                "minmax(8rem,1fr)",
-                lambda r: f"{r['mod_m']}  ({r['mod_pct']})",
+                "Moderate",
+                "mod_m",
+                "mod_pct",
+                "mod_raw",
+                width="minmax(8rem,1fr)",
             ),
-            (
-                "High",
+            _zone_col(
                 "high",
-                "minmax(8rem,1fr)",
-                lambda r: f"{r['high_m']}  ({r['high_pct']})",
+                "High",
+                "high_m",
+                "high_pct",
+                "high_raw",
+                width="minmax(8rem,1fr)",
             ),
-            (
-                "Maximal",
+            _zone_col(
                 "max",
-                "minmax(8rem,1fr)",
-                lambda r: f"{r['max_m']}  ({r['max_pct']})",
+                "Maximal",
+                "max_m",
+                "max_pct",
+                "max_raw",
+                width="minmax(8rem,1fr)",
             ),
-            (
-                "Unrated",
+            _zone_col(
                 "unrated",
-                "minmax(8rem,1fr)",
-                lambda r: f"{r['unrated_m']}  ({r['unrated_pct']})",
+                "Unrated",
+                "unrated_m",
+                "unrated_pct",
+                "unrated_raw",
+                width="minmax(8rem,1fr)",
             ),
         ]
     elif zone_mode == "hr":
-        col_defs = [
-            (period_col, "idx", "9rem", lambda r: r["label"]),
-            ("Total", "total", "7rem", lambda r: r["total"]),
-            ("Rest", "rest", "7rem", lambda r: r["rest"]),
-            (
-                "Easy (<70%)",
-                "z1",
-                "minmax(9rem,1fr)",
-                lambda r: f"{r['z1_m']}  ({r['z1_pct']})",
-            ),
-            (
-                "Tempo (70–80%)",
-                "z2",
-                "minmax(9rem,1fr)",
-                lambda r: f"{r['z2_m']}  ({r['z2_pct']})",
-            ),
-            (
-                "Threshold (80–90%)",
-                "z3a",
-                "minmax(9rem,1fr)",
-                lambda r: f"{r.get('z3a_m', '—')}  ({r.get('z3a_pct', '0%')})",
-            ),
-            (
-                "Max (90%+)",
-                "z3b",
-                "minmax(9rem,1fr)",
-                lambda r: f"{r.get('z3b_m', '—')}  ({r.get('z3b_pct', '0%')})",
-            ),
-            ("Distribution", "dist", "9rem", None),
+        columns = [
+            period_column,
+            total_column,
+            rest_column,
+            _zone_col("z1", "Easy (<70%)", "z1_m", "z1_pct", "z1_raw"),
+            _zone_col("z2", "Tempo (70–80%)", "z2_m", "z2_pct", "z2_raw"),
+            _zone_col("z3a", "Threshold (80–90%)", "z3a_m", "z3a_pct", "z3a_raw"),
+            _zone_col("z3b", "Max (90%+)", "z3b_m", "z3b_pct", "z3b_raw"),
+            distribution_column,
         ]
     else:
-        col_defs = [
-            (period_col, "idx", "9rem", lambda r: r["label"]),
-            ("Total", "total", "7rem", lambda r: r["total"]),
-            ("Rest", "rest", "7rem", lambda r: r["rest"]),
-            (
-                "Easy",
-                "z1",
-                "minmax(9rem,1fr)",
-                lambda r: f"{r['z1_m']}  ({r['z1_pct']})",
-            ),
-            (
-                "Threshold",
-                "z2",
-                "minmax(9rem,1fr)",
-                lambda r: f"{r['z2_m']}  ({r['z2_pct']})",
-            ),
-            (
-                "Hard",
-                "z3",
-                "minmax(9rem,1fr)",
-                lambda r: f"{r['z3_m']}  ({r['z3_pct']})",
-            ),
-            ("Distribution", "dist", "9rem", None),
+        columns = [
+            period_column,
+            total_column,
+            rest_column,
+            _zone_col("z1", "Easy", "z1_m", "z1_pct", "z1_raw"),
+            _zone_col("z2", "Threshold", "z2_m", "z2_pct", "z2_raw"),
+            _zone_col("z3", "Hard", "z3_m", "z3_pct", "z3_raw"),
+            distribution_column,
         ]
 
-    col_template = " ".join(w for _, _, w, _ in col_defs)
-    n_cols = len(col_defs)
-
-    # Default: idx asc=False → index 0 (newest) first
-    sort = hd.state(col="idx", asc=True)
-
-    # Sort rows (rows are already newest-first at index 0)
-    _SORT_KEYS = {
-        "idx": lambda i, r: i,
-        "total": lambda i, r: r.get("total_raw", 0),
-        "rest": lambda i, r: r.get("rest_raw", 0),
-        "z1": lambda i, r: r.get("z1_raw", 0),
-        "z2": lambda i, r: r.get("z2_raw", 0),
-        "z3": lambda i, r: r.get("z3_raw", 0),
-        "z3a": lambda i, r: r.get("z3a_raw", 0),
-        "z3b": lambda i, r: r.get("z3b_raw", 0),
-        "dist": lambda i, r: r.get("distribution", ""),
-        "low": lambda i, r: r.get("low_raw", 0),
-        "mod": lambda i, r: r.get("mod_raw", 0),
-        "high": lambda i, r: r.get("high_raw", 0),
-        "max": lambda i, r: r.get("max_raw", 0),
-        "unrated": lambda i, r: r.get("unrated_raw", 0),
-    }
-    key_fn = _SORT_KEYS.get(sort.col, _SORT_KEYS["idx"])
-    indexed = list(enumerate(rows))
-    sorted_rows = sorted(indexed, key=lambda p: key_fn(*p), reverse=not sort.asc)
-
     with hd.box(padding=(1, 0, 0, 0)):
-        with grid_box(
-            grid_template_columns=col_template,
-            width="100%",
-            border="1px solid neutral-200",
-            border_radius="medium",
-            overflow="hidden",
-        ):
-            # ── Header row ─────────────────────────────────────────────
-            for ci, (header, col_key, _, _) in enumerate(col_defs):
-                with hd.scope(f"hdr_{col_key}"):
-                    is_sorted = sort.col == col_key
-                    arrow = (" ▲" if sort.asc else " ▼") if is_sorted else ""
-                    cell_props = dict(
-                        padding=(0.5, 0.75),
-                        background_color="neutral-50",
-                        border_bottom="1px solid neutral-200",
-                        align="center",
-                    )
-                    if ci < n_cols - 1:
-                        cell_props["border_right"] = "1px solid neutral-200"
-                    with hd.box(**cell_props):
-                        btn = hd.button(
-                            f"{header}{arrow}",
-                            variant="text",
-                            font_size="small",
-                            font_weight="semibold",
-                            font_color="neutral-700" if is_sorted else "neutral-500",
-                        )
-                        if btn.clicked:
-                            if sort.col == col_key:
-                                sort.asc = not sort.asc
-                            else:
-                                sort.col = col_key
-                                # First click: descending for numeric cols, ascending for period/dist
-                                sort.asc = col_key in ("idx", "dist")
-
-            # ── Data rows ──────────────────────────────────────────────
-            for orig_i, row in sorted_rows:
-                row_bg = "neutral-50" if orig_i % 2 == 0 else "neutral-0"
-                with hd.scope(f"row_{orig_i}"):
-                    for ci, (_, col_key, _, render_fn) in enumerate(col_defs):
-                        with hd.scope(f"c{ci}{col_key}"):
-                            cell_props = dict(
-                                padding=(0.5, 0.75),
-                                background_color=row_bg,
-                                border_top="1px solid neutral-100",
-                                align="end",
-                                justify="center",
-                            )
-                            if ci < n_cols - 1:
-                                cell_props["border_right"] = "1px solid neutral-100"
-                            with hd.box(**cell_props):
-                                if col_key == "dist":
-                                    hd.text(row["distribution"])
-                                else:
-                                    hd.text(render_fn(row), font_size="small")
+        print(len(rows))
+        DataTable(
+            rows,
+            columns,
+            default_sort_col="label",
+            default_sort_asc=True,
+            reset_token=f"{view}_{zone_mode}",
+            initial_rows=10,
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -941,8 +941,8 @@ def intervals_page() -> None:
         "hr",
         "severity",
         "stimulus",
-        "ess",
-        "glycogen_used",
+        # "ess",
+        # "glycogen_used",
         "link",
     ]
 

@@ -582,7 +582,7 @@ def workouts_page() -> None:
                             # "power_spread",
                             "severity",
                             "stimulus",
-                            "ess",
+                            # "ess",
                             # "glycogen_used",
                             "link",
                         ],

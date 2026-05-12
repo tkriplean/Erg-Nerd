@@ -197,7 +197,7 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
     ),
     # "hr": ColumnDef("hr", "HR", "8rem", format="hr"),
     "season": ColumnDef("season", "Season", "6rem", format="season"),
-    "link": ColumnDef("link", "", "2.5rem", renderer="link", sortable=False),
+    "link": ColumnDef("link", "", "4rem", renderer="link", sortable=False),
     "structure": ColumnDef(
         "structure", "Intervals", "minmax(8rem,1fr)", format="structure", align="start"
     ),
@@ -378,6 +378,7 @@ class _WorkoutTablePlugin(hd.Plugin):
     _name = "WorkoutTable"
     _assets_root = os.path.join(_HERE, "chart_assets")
     _assets = [
+        ("js-link", os.path.join(_HERE, "chart_assets", "table_shared.js")),
         ("js-link", os.path.join(_HERE, "chart_assets", "workout_table_plugin.js")),
     ]
 
@@ -389,6 +390,12 @@ class _WorkoutTablePlugin(hd.Plugin):
     default_sort_asc = hd.Prop(hd.Bool, False)
     paginate = hd.Prop(hd.Bool, True)
     rows_per_page = hd.Prop(hd.Int, _DEFAULT_ROWS_PER_PAGE)
+    # 0 disables the "show first N rows" overlay.  When >0, only the first
+    # N parent rows of the current page are visible until the "Show all"
+    # overlay is clicked.  In tree mode the cap is measured against
+    # parents, matching pagination semantics; expansion still works
+    # normally for visible parents.
+    initial_rows = hd.Prop(hd.Int, 0)
     reset_token = hd.Prop(hd.String, "")
     tree_mode = hd.Prop(hd.Bool, False)
     # When true, the JS plugin renders a free-text search bar above the
@@ -487,7 +494,9 @@ def _enrich_opts(key: str, opts: dict) -> dict:
             "t_thresh": {int(d): float(STIMULUS_T_THRESH[d]) for d in bands_list},
             # Ordered (strongest → weakest) [key, floor] pairs used by the
             # JS tooltip to map a continuous ``dose`` onto a category label.
-            "category_floors": [[key, float(floor)] for key, floor, _ in STIMULUS_CATEGORIES],
+            "category_floors": [
+                [key, float(floor)] for key, floor, _ in STIMULUS_CATEGORIES
+            ],
             "category_labels": {key: label for key, _, label in STIMULUS_CATEGORIES},
         }
     return opts
@@ -597,6 +606,7 @@ def WorkoutTable(
     *,
     paginate: bool = True,
     rows_per_page: int = _DEFAULT_ROWS_PER_PAGE,
+    initial_rows: int = 0,
     highlight=None,
     default_sort_col: str = "date",
     default_sort_asc: bool = False,
@@ -618,6 +628,11 @@ def WorkoutTable(
     columns          Ordered list of column entries (string key or dict).
     paginate         Show prev/next pagination controls.
     rows_per_page    Rows per page when paginate=True.
+    initial_rows     0 = disabled.  >0 hides parent rows past the Nth on
+                     the current page behind a "Show all" overlay button.
+                     In tree mode the cap counts parent rows (matches
+                     pagination semantics).  Bottom pagination is hidden
+                     while the overlay is visible; top pagination stays.
     highlight        Optional callable ``fn(row) -> bool``.  Resolved to a
                      ``highlight_ids`` list once before shipping.
     default_sort_col Column key for the initial sort.
@@ -671,6 +686,7 @@ def WorkoutTable(
     _link_prefix = f"/u/{_ctx.user_id}" if _ctx.is_public else ""
 
     plugin = _WorkoutTablePlugin(
+        width="100%",
         rows=[_row_for_js(r) for r in results],
         column_configs=column_configs,
         visible_ids=visible_ids,
@@ -679,6 +695,7 @@ def WorkoutTable(
         default_sort_asc=default_sort_asc,
         paginate=paginate,
         rows_per_page=rows_per_page,
+        initial_rows=initial_rows,
         reset_token=reset_token,
         tree_mode=tree_mode,
         searchable=searchable,

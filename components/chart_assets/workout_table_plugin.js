@@ -12,7 +12,13 @@
  *   default_sort_asc bool
  *   paginate        bool
  *   rows_per_page   int
- *   reset_token     str           When this changes, sort + page reset.
+ *   initial_rows    int           0 = disabled. >0 hides parent rows past
+ *                                 the Nth on the current page behind a
+ *                                 "Show all" overlay button.  Bottom
+ *                                 pagination is hidden while overlay is
+ *                                 visible; top pagination stays.
+ *   reset_token     str           When this changes, sort + page + show-all
+ *                                 reset.
  *   searchable      bool          Render a search bar above the grid.
  *                                 Filter is text + fuzzy number/duration/
  *                                 distance + "NxM" interval pattern; in
@@ -41,46 +47,12 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
 
 
   // ── Style ────────────────────────────────────────────────────────────────
+  // Shared grid/cell/header/sort/pagination/empty/show-all CSS comes from
+  // table_shared.js (loaded before this file via the plugin's _assets).
+  // Workout-specific rules — tree-mode tinting, role badges, watts/HR
+  // spread cells, search bar, severity pills, etc. — follow inline.
   const style = document.createElement("style");
-  style.textContent = `
-
-    .grid {
-      display: grid;
-      width: 100%;
-      box-sizing: border-box;
-      border: 1px solid var(--sl-color-neutral-200);
-      border-radius: var(--sl-border-radius-medium, 0.25rem);
-    }
-    .cell {
-      padding: 0.4rem 0.75rem;
-      font-size: var(--sl-font-size-small);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      box-sizing: border-box;
-    }
-    .cell.align-start  { justify-content: flex-start; text-align: left; }
-    .cell.align-end    { justify-content: flex-end; text-align: right; }
-    .cell.align-center { justify-content: center; text-align: center; }
-    .cell.end { padding-right: 24px; }
-
-    .hdr {
-      background: var(--sl-color-neutral-100);
-      border-bottom: 1px solid var(--sl-color-neutral-200);
-      color: var(--sl-color-neutral-900);
-      padding-top: 0.4rem;
-      padding-bottom: 0.4rem;
-      line-height: 1.15;
-      box-shadow: 0 1px 0 var(--sl-color-neutral-200);
-    }
-    .row-cell {
-      padding-top: 0.5rem;
-      padding-bottom: 0.5rem;
-      border-bottom: 1px solid var(--sl-color-neutral-100);
-      color: var(--sl-color-neutral-700);
-    }
-    .row-cell.alt { background: var(--sl-color-neutral-50); }
-    .row-cell.hl  { background: var(--sl-color-primary-50); color: var(--sl-color-primary-700); font-weight: 600; }
+  style.textContent = window.ErgNerdTable.gridCSS + `
 
     /* Tree mode: alternating session-block tint replaces zebra. */
     .row-cell.session-tint-a { background: var(--sl-color-neutral-50); }
@@ -200,49 +172,9 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     /* Multi-line cell content (e.g. Main Work). */
     .cell .lines { display: flex; flex-direction: column; flex-align: center; gap: 0.1rem; width: 100%; }
     .cell .lines > div { font-size: var(--sl-font-size-small); }
-    /* Sort header — always reserve space for the arrow so toggling sort
-       direction (or moving the active sort to a different column) never
-       changes line count or column width.  Active state is signalled via
-       color contrast only — switching to a bold weight would change the
-       label's metrics and ripple a width change through the grid. */
-    .sort-btn {
-      display: inline-flex;
-      align-items: baseline;
-      gap: 0.2rem;
-      flex-wrap: nowrap;
-      background: none; border: none; cursor: pointer;
-      font: inherit;
-      color: var(--sl-color-neutral-900);
-      padding: 0; margin: 0;
-      font-size: var(--sl-font-size-small);
-      font-weight: 500;
-      text-align: inherit;
-      line-height: inherit;
-    }
-    .sort-btn .sort-label { white-space: normal; }
-    .sort-btn .sort-arrow {
-      font-size: 0.6rem;
-      flex-shrink: 0;
-      padding-top: 0.3rem;
-      align-self: center;
-    }
-    .sort-btn .sort-arrow.hidden { visibility: hidden; }
-    .sort-btn:hover { color: var(--sl-color-neutral-900); }
-    .sort-btn.active { color: var(--sl-color-neutral-900); }
-    .sort-btn.active .sort-arrow { color: var(--sl-color-neutral-600); }
-    .empty {
-      padding: 1rem;
-      color: var(--sl-color-neutral-500);
-      font-size: var(--sl-font-size-small);
-    }
-    .pagination {
-      display: flex; align-items: center; justify-content: center;
-      gap: 0.25rem; padding: 0.5rem 0;
-      font-size: var(--sl-font-size-small);
-      color: var(--sl-color-neutral-500);
-    }
-    .pagination sl-icon-button { font-size: 1.1rem; }
-    .pagination sl-icon-button[disabled] { opacity: 0.3; }
+
+    /* Pagination count suffix — workout-specific extension to the shared
+       .pagination block (defined in table_shared.js). */
     .pagination .pagination-count {
       margin-left: 0.5rem;
       color: var(--sl-color-neutral-400);
@@ -319,7 +251,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     }
 
     /* Cell-internal styles */
-    a.link { font-size: var(--sl-font-size-small); text-decoration: none; color: var(--sl-color-primary-600); }
+    a.link { font-size: var(--sl-font-size-small); text-decoration: none; color: var(--sl-color-primary-600);  padding-left: 14px;}
     a.link:hover { text-decoration: underline; }
 
     .spread { display: flex; flex-direction: column; align-items: center; gap: 0.2rem; cursor: default; }
@@ -391,6 +323,11 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     page: 0,
     perPage: ctx.initialProps.rows_per_page || 50,
     paginate: ctx.initialProps.paginate !== false,
+    // "Show first N parent rows" cap.  0 = disabled.  In tree mode the
+    // cap measures parents on the current page (consistent with
+    // pagination); in flat mode it measures rows on the page.
+    initialRows: ctx.initialProps.initial_rows || 0,
+    showAllClicked: false,
     resetToken: ctx.initialProps.reset_token || "",
     defaultSortCol: ctx.initialProps.default_sort_col || "date",
     defaultSortAsc: !!ctx.initialProps.default_sort_asc,
@@ -420,9 +357,12 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       if (_saved && typeof _saved === "object") {
         if (typeof _saved.sortCol === "string") state.sortCol = _saved.sortCol;
         if (typeof _saved.sortAsc === "boolean") state.sortAsc = _saved.sortAsc;
-        if (typeof _saved.page === "number") state.page = _saved.page;
-        if (Array.isArray(_saved.expanded)) state.expanded = new Set(_saved.expanded);
-        if (typeof _saved.searchQuery === "string") state.searchQuery = _saved.searchQuery;
+        // if (typeof _saved.page === "number") state.page = _saved.page;
+        // if (Array.isArray(_saved.expanded)) state.expanded = new Set(_saved.expanded);
+        // if (typeof _saved.searchQuery === "string") state.searchQuery = _saved.searchQuery;
+        // if (typeof _saved.showAllClicked === "boolean") {
+        //   state.showAllClicked = _saved.showAllClicked;
+        // }
       }
     }
   } catch (e) { /* sessionStorage unavailable — fall back to defaults */ }
@@ -435,6 +375,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
         page: state.page,
         expanded: Array.from(state.expanded),
         searchQuery: state.searchQuery,
+        showAllClicked: state.showAllClicked,
       }));
     } catch (e) { /* quota / disabled — ignore */ }
   }
@@ -1907,6 +1848,10 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     let total;               // page count denominator
     let totalPages;
     let countLabel;          // tail of the pagination bar text
+    // "Show first N" cap.  In tree mode the cap is measured against
+    // parents (matches pagination), so expansion can push rendered rows
+    // past N but the cutoff stays stable across expand/collapse.
+    let overlayVisible = false;
 
     if (state.treeMode) {
       const { list: parents, preSearchTotal } = visibleAndSortedTree();
@@ -1923,8 +1868,14 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       totalPages = Math.max(1, Math.ceil(total / perPage));
       if (state.page >= totalPages) state.page = totalPages - 1;
       if (state.page < 0) state.page = 0;
-      const pageParents = parents.slice(
+      let pageParents = parents.slice(
         state.page * perPage, state.page * perPage + perPage);
+      if (state.initialRows > 0
+          && pageParents.length > state.initialRows
+          && !state.showAllClicked) {
+        overlayVisible = true;
+        pageParents = pageParents.slice(0, state.initialRows);
+      }
       pageRows = [];
       for (const p of pageParents) {
         pageRows.push(p);
@@ -1951,6 +1902,12 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       if (state.page >= totalPages) state.page = totalPages - 1;
       if (state.page < 0) state.page = 0;
       pageRows = sorted.slice(state.page * perPage, state.page * perPage + perPage);
+      if (state.initialRows > 0
+          && pageRows.length > state.initialRows
+          && !state.showAllClicked) {
+        overlayVisible = true;
+        pageRows = pageRows.slice(0, state.initialRows);
+      }
       countLabel = `${total} workouts`;
     }
 
@@ -2093,11 +2050,29 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       else container.appendChild(topPag);
     }
 
-    container.appendChild(grid);
+    // Wrap the grid in a positioned container so the show-all overlay
+    // can sit absolutely-positioned over its bottom rows.
+    const wrap = el("div", { class: "table-wrap" });
+    wrap.appendChild(grid);
+    container.appendChild(wrap);
 
-    // Bottom pagination always lives inside the container, centered.
-    const bottomPag = buildPaginationBar();
-    if (bottomPag) container.appendChild(bottomPag);
+    if (overlayVisible) {
+      wrap.appendChild(window.ErgNerdTable.buildShowAllOverlay({
+        onClick: () => {
+          state.showAllClicked = true;
+          persistState();
+          render();
+        },
+      }));
+    }
+
+    // Bottom pagination is suppressed while the show-all overlay is
+    // visible (NOT "iff !showAllClicked" — if initial_rows >= page size,
+    // the overlay is hidden and bottom pagination should still appear).
+    if (!overlayVisible) {
+      const bottomPag = buildPaginationBar();
+      if (bottomPag) container.appendChild(bottomPag);
+    }
   }
 
   function onSortClick(col) {
@@ -2131,6 +2106,13 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
         break;
       case "paginate":        state.paginate = value !== false; break;
       case "rows_per_page":   state.perPage = value || 25; break;
+      case "initial_rows":
+        state.initialRows = value || 0;
+        // Toggling the cap counts as a "fresh" presentation — reset the
+        // overlay state so newly-capped tables show the button again.
+        state.showAllClicked = false;
+        persistState();
+        break;
       case "tree_mode":       state.treeMode = !!value; break;
       case "searchable":      state.searchable = !!value; break;
       case "link_prefix":     state.linkPrefix = value || ""; break;
@@ -2144,6 +2126,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
           // expanded sessions, so children aren't stranded under a
           // since-filtered-out parent.
           state.expanded.clear();
+          state.showAllClicked = false;
           persistState();
         }
         break;

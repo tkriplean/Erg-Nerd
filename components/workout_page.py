@@ -283,9 +283,7 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
                         )
                         label = stimulus_category_label(dose)
                         if label is not None:
-                            parts.append(
-                                f"{BIN_NAMES[BAND_TO_BIN[d]]} ({label})"
-                            )
+                            parts.append(f"{BIN_NAMES[BAND_TO_BIN[d]]}")
                     _stat("Stimulated", ", ".join(parts) if parts else "—")
 
         with hd.hbox(wrap="wrap", gap=0):
