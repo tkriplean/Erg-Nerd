@@ -280,27 +280,52 @@ STIMULUS_BAND_DEFINITIONS: dict[int, str] = {
     ),
 }
 
-#: Filter-rule text for the stimulus chip tooltip.  Uniform "≥ 1.0× dose"
-#: rule across all bands.
+#: Filter-rule text for the stimulus chip tooltip.  Uniform "partial+ dose"
+#: rule across all bands — the filter passes any workout that delivered at
+#: least a partial stimulus (dose ≥ 0.50×) to a selected system.
 STIMULUS_FILTER_TEXT: dict[int, str] = {
     d: (
-        "Selected: workouts that delivered a full adaptation-grade "
-        "stimulus to this system (dose ≥ 1.0×)."
+        "Selected: workouts that delivered at least partial stimulus "
+        "to this system (dose ≥ 0.50×)."
     )
     for d in (20, 90, 300, 1200, 3600, 7200)
 }
 
 
-#: Dose buckets for the stimulus-strip renderer.  Boundaries on the
-#: continuous ``dose`` value: < 0.5 = none, < 1.0 = partial, < 2.0 = full,
-#: ≥ 2.0 = overdose.  Exposed as a constant so the JS plugin can mirror
-#: the cutoffs without hardcoding them.
-STIMULUS_DOSE_BUCKETS: tuple[tuple[str, float], ...] = (
-    ("none", 0.5),
-    ("partial", 1.0),
-    ("full", 2.0),
-    ("overdose", float("inf")),
+#: Categorical stimulus labels.  Ordered strongest → weakest by floor.
+#: ``key`` is the machine label, ``floor`` is the inclusive lower bound on
+#: ``dose``, and ``label`` is the human display name.  Doses below the
+#: weakest floor (0.50) are uncategorised (treated as "no stimulus").
+STIMULUS_CATEGORIES: tuple[tuple[str, float, str], ...] = (
+    ("massive", 1.50, "Massive"),
+    ("full", 0.95, "Full"),
+    ("solid", 0.80, "Solid"),
+    ("partial", 0.50, "Partial"),
 )
+
+
+def stimulus_category(dose: float) -> Optional[str]:
+    """Return the categorical key for a stimulus ``dose`` value, or ``None``
+    when below the Partial floor (dose < 0.50).  Categories are
+    ``"massive" / "full" / "solid" / "partial"``."""
+    if dose is None:
+        return None
+    for key, floor, _label in STIMULUS_CATEGORIES:
+        if dose >= floor:
+            return key
+    return None
+
+
+def stimulus_category_label(dose: float) -> Optional[str]:
+    """Human label for ``stimulus_category(dose)`` — ``"Massive" / "Full" /
+    "Solid" / "Partial"`` or ``None``."""
+    key = stimulus_category(dose)
+    if key is None:
+        return None
+    for k, _floor, label in STIMULUS_CATEGORIES:
+        if k == key:
+            return label
+    return None
 
 
 def _compute_stimulus_doses(
@@ -994,7 +1019,7 @@ def _attach_per_workout_records(
             stimulus_doses = {int(d): 0.0 for d in ZONE_BANDS_S}
 
         stimulus_systems = sorted(
-            d for d, dose in stimulus_doses.items() if dose >= 1.0
+            d for d, dose in stimulus_doses.items() if dose >= 0.80
         )
 
         slc = I_w_arr if I_w_arr.size else np.zeros(1, dtype=np.float64)

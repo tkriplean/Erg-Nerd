@@ -86,6 +86,7 @@ from services.volume_bins import BIN_COLORS, BIN_NAMES, swatch_svg
 from services.heartrate_utils import HR_ZONE_COLORS, HR_ZONE_NAMES
 from services.erg_stress import (
     SEVERITY_STYLE,
+    STIMULUS_CATEGORIES,
     STIMULUS_T_THRESH,
     ZONE_BANDS_S,
 )
@@ -459,7 +460,8 @@ def _enrich_opts(key: str, opts: dict) -> dict:
                 for s, v in SEVERITY_STYLE.items()
             },
             # Band-seconds → display name, used by the per-workout tooltip
-            # to label which physiological systems received a full dose.
+            # to label which physiological systems were stimulated (Solid+,
+            # i.e. listed in ``_stimulus_systems``).
             "band_names": {int(b): BIN_NAMES[BAND_TO_BIN[b]] for b in ZONE_BANDS_S},
         }
     if key == "stimulus":
@@ -483,6 +485,10 @@ def _enrich_opts(key: str, opts: dict) -> dict:
             "zone_names": zone_names,
             "swatch_uris": swatch_uris,
             "t_thresh": {int(d): float(STIMULUS_T_THRESH[d]) for d in bands_list},
+            # Ordered (strongest → weakest) [key, floor] pairs used by the
+            # JS tooltip to map a continuous ``dose`` onto a category label.
+            "category_floors": [[key, float(floor)] for key, floor, _ in STIMULUS_CATEGORIES],
+            "category_labels": {key: label for key, _, label in STIMULUS_CATEGORIES},
         }
     return opts
 

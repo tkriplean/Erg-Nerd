@@ -176,7 +176,8 @@ class SpreadSeverityFilters(hd.BaseState):
     active_hr_bins = hd.Prop(hd.List(hd.Any), [])
     active_severity = hd.Prop(hd.List(hd.Any), [])
     # Training Stimulus filter — list of band-seconds (20, 90, 300, 1200,
-    # 3600, 7200) corresponding to systems with dose ≥ 1.0 in the workout.
+    # 3600, 7200).  Selected bands pass any workout with Partial+ stimulus
+    # (dose ≥ 0.50) on that band.
     active_stimulus_bands = hd.Prop(hd.List(hd.Any), [])
 
 
@@ -334,9 +335,10 @@ def spread_severity_legends(
 
         # ── Stimulus legend ──────────────────────────────────────────────
         # One chip per duration band; clicking filters to workouts that
-        # delivered ≥ 1.0× stimulus dose to that system.  Disjunctive
-        # within the legend (multi-select shows workouts hitting *any* of
-        # the selected systems), conjunctive across legends.
+        # delivered Partial+ stimulus (dose ≥ 0.50) to that system.
+        # Disjunctive within the legend (multi-select shows workouts
+        # hitting *any* of the selected systems), conjunctive across
+        # legends.
         active_stimulus: set[int] = set(state.active_stimulus_bands)
         with hd.hbox(
             gap=0.75,

@@ -54,6 +54,7 @@ from services.heartrate_utils import (
     resolve_max_hr,
 )
 from services.volume_bins import BAND_TO_BIN, BIN_COLORS, BIN_NAMES
+from services.erg_stress import ZONE_BANDS_S, stimulus_category_label
 from components.add_metrics import add_metrics
 
 from components.workout_chart_builder import (
@@ -273,15 +274,19 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
                 #     gly = workout["_glycogen_used"]
                 #     gly_warn = " ⚠" if gly > 1 else ""
                 #     _stat("Glycogen Used", f"{round(gly * 100)}%{gly_warn}")
-                stim_systems = workout.get("_stimulus_systems")
-                if stim_systems is not None:
-                    if stim_systems:
-                        names = " + ".join(
-                            BIN_NAMES[BAND_TO_BIN[d]] for d in stim_systems
+                stim_doses = workout.get("_stimulus_doses")
+                if stim_doses is not None:
+                    parts: list[str] = []
+                    for d in ZONE_BANDS_S:
+                        dose = float(
+                            stim_doses.get(d, stim_doses.get(int(d), 0.0)) or 0.0
                         )
-                    else:
-                        names = "—"
-                    _stat("Stimulated", names)
+                        label = stimulus_category_label(dose)
+                        if label is not None:
+                            parts.append(
+                                f"{BIN_NAMES[BAND_TO_BIN[d]]} ({label})"
+                            )
+                    _stat("Stimulated", ", ".join(parts) if parts else "—")
 
         with hd.hbox(wrap="wrap", gap=0):
             if workout.get("distance"):
@@ -1866,8 +1871,7 @@ def workout_page(workout_id: int) -> None:
                     if _hhmmss and _hhmmss != "00:00:00":
                         hd.text(
                             _format_hhmmss_friendly(_hhmmss),
-                            font_color="neutral-400",
-                            font_size="small",
+                            font_color="neutral-500",
                         )
                 with hd.box():
                     for i, t in enumerate(title):

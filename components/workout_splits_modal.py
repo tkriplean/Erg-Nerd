@@ -46,6 +46,7 @@ import hyperdiv as hd
 
 from services.formatters import fmt_split, format_time
 from services.rowing_utils import ranked_distances, ranked_times, workout_machine
+from components.hyperdiv_extensions import radio_group
 from services.splits import (
     DEFAULT_SPLIT_COUNT,
     SPLIT_COUNT_OPTIONS,
@@ -54,6 +55,8 @@ from services.splits import (
     best_window_time,
     even_splits,
     format_mmss,
+    from_start_distance,
+    from_start_time,
     parse_time_input,
     stitch_interval_times,
 )
@@ -867,13 +870,23 @@ def _splits_footer(
 # ---------------------------------------------------------------------------
 
 
-def _compute_ranked_rows(workout: dict, strokes: list) -> list:
+def _compute_ranked_rows(
+    workout: dict, strokes: list, mode: str = "best"
+) -> list:
     """Build the list of ranked-event rows for ``workout``.
 
     Walks ``ranked_distances(machine)`` and ``ranked_times(machine)``,
     keeping each event that fits comfortably inside the workout and computing
-    its fastest contiguous window via the sliding-window helpers in
-    ``services.splits``.  Returns a list of dicts, one per surviving event::
+    its metrics via the helpers in ``services.splits``.  The ``mode``
+    selector picks which helper:
+
+        * ``"best"`` (default) — the fastest contiguous segment anywhere in
+          the workout, via :func:`best_window_distance` /
+          :func:`best_window_time`.
+        * ``"from_start"`` — the segment anchored at the beginning of the
+          workout, via :func:`from_start_distance` / :func:`from_start_time`.
+
+    Returns a list of dicts, one per surviving event::
 
         {
           "kind": "dist" | "time",
@@ -899,11 +912,18 @@ def _compute_ranked_rows(workout: dict, strokes: list) -> list:
         if not strokes:
             return []
 
+    if mode == "from_start":
+        dist_fn = from_start_distance
+        time_fn = from_start_time
+    else:
+        dist_fn = best_window_distance
+        time_fn = best_window_time
+
     machine = workout_machine(workout)
     rows: list = []
 
     for d, label in ranked_distances(machine):
-        m = best_window_distance(strokes, workout, d)
+        m = dist_fn(strokes, workout, d)
         if m is None:
             continue
         rows.append(
@@ -911,7 +931,7 @@ def _compute_ranked_rows(workout: dict, strokes: list) -> list:
         )
 
     for t, label in ranked_times(machine):
-        m = best_window_time(strokes, workout, t)
+        m = time_fn(strokes, workout, t)
         if m is None:
             continue
         rows.append(
@@ -938,24 +958,50 @@ def render_ranked_events_modal(
     The view is its own modal (rather than a tab inside the splits editor)
     because it is informational, not editable.
     """
-    state = hd.state(ranked_for=None, ranked_rows=None)
+    state = hd.state(
+        ranked_for=None, ranked_rows=None, mode="best", mode_workout_id=None
+    )
 
     if not dialog.opened:
         return
 
-    workout_id = workout["id"]
-    if state.ranked_for != workout_id:
-        state.ranked_rows = _compute_ranked_rows(workout, strokes or [])
-        state.ranked_for = workout_id
+    # Reset to the default mode when the user switches workouts so each
+    # workout starts in "Best segment" rather than inheriting a stale toggle.
+    if state.mode_workout_id != workout["id"]:
+        state.mode = "best"
+        state.mode_workout_id = workout["id"]
+
+    cache_key = (workout["id"], state.mode)
+    if state.ranked_for != cache_key:
+        state.ranked_rows = _compute_ranked_rows(
+            workout, strokes or [], mode=state.mode
+        )
+        state.ranked_for = cache_key
 
     with dialog:
         with hd.box(gap=1):
-            hd.text(
-                "Best contiguous segment for each ranked distance and time "
-                "that fits inside this workout.",
-                font_size="small",
-                font_color="neutral-600",
-            )
+            with hd.hbox(gap=0.5, align="center"):
+                rg = radio_group(value=state.mode, size="small")
+                with rg:
+                    hd.radio_button("Best segment", value="best")
+                    hd.radio_button("From start", value="from_start")
+                if rg.changed:
+                    state.mode = rg.value
+
+            if state.mode == "from_start":
+                hd.text(
+                    "Time and metrics starting from the beginning of the "
+                    "workout, for each ranked distance and time it reaches.",
+                    font_size="small",
+                    font_color="neutral-600",
+                )
+            else:
+                hd.text(
+                    "Best contiguous segment for each ranked distance and "
+                    "time that fits inside this workout.",
+                    font_size="small",
+                    font_color="neutral-600",
+                )
             if not strokes:
                 hd.text(
                     "Stroke-level data isn't available for this workout.",

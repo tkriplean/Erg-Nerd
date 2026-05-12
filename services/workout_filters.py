@@ -22,8 +22,10 @@ Per-filter session-level semantics:
     power bin    any member workout has ≥10% time in the selected bin
     hr bin       any member workout has meaningful meters in the selected bin
     severity     session-level ``_ess_session_summary.severity_bucket`` matches
-    stimulus     any member workout has dose ≥1.0 in the selected band
-                 (matches the max-per-band aggregation used by session_rollup)
+    stimulus     any member workout has dose ≥0.5 (Partial+) in the selected
+                 band — looser than the Solid+ aggregation used by
+                 session_rollup, by design: the chip is a discovery tool, so
+                 any meaningful exposure to the system should surface.
 """
 
 from __future__ import annotations
@@ -188,4 +190,4 @@ def _workout_passes_hr(w: dict, sel: set) -> bool:
 
 def _workout_passes_stimulus(w: dict, sel: set) -> bool:
     doses = w.get("_stimulus_doses") or {}
-    return any(float(doses.get(b, 0.0)) >= 1.0 for b in sel)
+    return any(float(doses.get(b, 0.0)) >= 0.5 for b in sel)

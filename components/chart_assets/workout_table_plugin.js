@@ -1327,37 +1327,37 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       const body = el("div", { class: "tt-body" });
       const names = opts.zone_names || [];
       const swatches = opts.swatch_uris || [];
-      let stimulated = [];
+      // Ordered (strongest → weakest) [key, floor] pairs from Python, plus
+      // human labels.  Falls back to a no-op if the opts weren't wired.
+      const floors = opts.category_floors || [];
+      const labels = opts.category_labels || {};
+      const categorise = (dose) => {
+        for (let j = 0; j < floors.length; j++) {
+          const pair = floors[j];
+          if (dose >= pair[1]) return pair[0];
+        }
+        return null;
+      };
       for (let i = 0; i < bands.length; i++) {
         const band = bands[i];
         const dose = (doses && doses[band]) || (doses && doses[String(band)]) || 0;
         const name = names[i] || String(band) + "s";
-        const state = dose >= 2.0 ? "overdose"
-                    : dose >= 1.0 ? "full"
-                    : dose >= 0.5 ? "partial"
-                    : dose > 0    ? "minimal"
-                    : "none";
-        if (dose >= 1.0) stimulated.push(name);
+        const category = categorise(dose);
         const row = el("div", { class: "row" });
         if (swatches[i]) row.appendChild(el("img", { src: swatches[i] }));
         row.appendChild(el("span", { class: "zname" }, name));
-        if (dose > 0) {
+        if (category) {
           row.appendChild(el("span", { class: "pct" },
-            //`${dose.toFixed(2)}× (${state})`));
-            `${10 * Math.round(10 * dose)}%`));
-
+            labels[category] || category));
         } else {
           row.appendChild(el("span", { class: "pct muted" }, "—"));
         }
         body.appendChild(row);
       }
-      const headline = stimulated.length
-        ? `Stimulated: ${stimulated.join(" + ")}`
-        : (anyDose ? "Sub-threshold stimulus only" : "Recovery row");
-      // body.insertBefore(
-      //   el("div", { class: "tt-headline" }, headline), body.firstChild);
       body.insertBefore(
-        el("div", { class: "tt-headline" }, "Rough estimate of % of full dose"), body.firstChild);
+        el("div", { class: "tt-headline" }, "Categorical stimulus estimate per system"),
+        body.firstChild,
+      );
 
       body.insertBefore(el("div", { class: "tt-title" }, "Training Stimulus"), body.firstChild);
 
@@ -1474,7 +1474,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     const bandNames = (col && col.opts && col.opts.band_names) || {};
     const stimText = stimSystems.length
       ? stimSystems.map(b => bandNames[b] || bandNames[String(b)] || `${b}s`).join(" + ")
-      : "no system reached full dose";
+      : "no system was solidly stimulated";
     body.appendChild(el("div", { class: "tt-label" }, `Stimulus: ${stimText}`));
 
     return body;
@@ -1505,7 +1505,8 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
 
   // Stimulus band → searchable synonyms.  Indexed by the band-seconds
   // key under ``_stimulus_doses``; each entry expands into the haystack
-  // when the workout's dose for that band ≥ 1.0.
+  // when the workout delivered Solid+ stimulus to that band (dose ≥ 0.80,
+  // matching ``_stimulus_systems``).
   const _STIM_SYNONYMS = {
     20:   ["sprint"],
     90:   ["anaerobic"],
@@ -1533,7 +1534,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     if (row._stimulus_doses && typeof row._stimulus_doses === "object") {
       for (const k in row._stimulus_doses) {
         const dose = +row._stimulus_doses[k] || 0;
-        if (dose >= 1.0) {
+        if (dose >= 0.80) {
           const syns = _STIM_SYNONYMS[parseInt(k, 10)];
           if (syns) for (const s of syns) push(s);
         }

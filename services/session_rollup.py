@@ -326,8 +326,10 @@ def _parent_from_session(
 
     # Stimulus aggregate — max dose per band across all mains.  A session
     # row should flag a system as stimulated if *any* of its workouts hit
-    # full dose (e.g. a session of "warmup + VO2max set + cooldown" should
-    # show VO2max stimulated, not be diluted by the easy bookend pieces).
+    # solid-or-better dose (e.g. a session of "warmup + VO2max set +
+    # cooldown" should show VO2max stimulated, not be diluted by the easy
+    # bookend pieces).  Threshold matches ``_stimulus_systems`` in
+    # ``services/erg_stress.py`` — Solid+ (dose ≥ 0.80).
     session_stim_doses: dict[int, float] = {}
     for m in mains:
         per_workout_doses = m.get("_stimulus_doses") or {}
@@ -336,7 +338,7 @@ def _parent_from_session(
                 session_stim_doses.get(band, 0.0), float(dose)
             )
     session_stim_systems = sorted(
-        d for d, dose in session_stim_doses.items() if dose >= 1.0
+        d for d, dose in session_stim_doses.items() if dose >= 0.80
     ) if session_stim_doses else []
 
     # Aggregates over mains only.

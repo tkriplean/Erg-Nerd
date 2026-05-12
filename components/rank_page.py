@@ -920,6 +920,7 @@ def _render_table(rows: list[dict], state, machine: str) -> None:
         default_sort_col="rank_event",
         default_sort_asc=True,
         on_event={"rank_click": _on_rank_click},
+        searchable=False,
     )
 
     # Page-level rankings modal — opens when a row's Rank cell is clicked.

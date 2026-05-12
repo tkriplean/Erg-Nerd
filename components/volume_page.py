@@ -635,7 +635,8 @@ def _volume_section(
 
 
 def _stimulus_window_counts(workouts: list, days: int, today: date) -> dict[int, int]:
-    """Per-band count of workouts that fully stimulated that system within
+    """Per-band count of workouts that delivered Solid+ stimulus
+    (``_stimulus_systems`` membership, dose ≥ 0.80) to that system within
     the last ``days`` days (inclusive of today)."""
     cutoff = today - timedelta(days=days - 1)
     counts: dict[int, int] = {int(d): 0 for d in ZONE_BANDS_S}
@@ -652,27 +653,50 @@ def _stimulus_window_counts(workouts: list, days: int, today: date) -> dict[int,
     return counts
 
 
-def _days_since_last_stimulus(workouts: list, today: date) -> dict[int, int | None]:
-    """Per-band days since the last full-or-better stimulus.  ``None``
-    when the band has never been stimulated in the workout history."""
-    last_seen: dict[int, date] = {}
+#: Days-since thresholds keyed by the panel column.  ``last`` = any
+#: Partial+ stimulus (dose ≥ 0.50), ``solid`` = Solid+ (≥ 0.80), ``full`` =
+#: Full+ (≥ 0.95).  Centralised here so the renderer below loops over a
+#: single source of truth.
+_DAYS_SINCE_THRESHOLDS: tuple[tuple[str, float], ...] = (
+    ("full", 0.95),
+    ("solid", 0.80),
+    ("last", 0.50),
+)
+
+
+def _days_since_last_stimulus(
+    workouts: list, today: date
+) -> dict[int, dict[str, int | None]]:
+    """Per-band days since the last stimulus at three thresholds.  Returns
+    a dict keyed by band-seconds, each value a dict with keys ``"full"``,
+    ``"solid"``, ``"last"`` (see ``_DAYS_SINCE_THRESHOLDS``).  Each entry
+    is the number of days since the most recent workout whose dose on
+    that band met or exceeded the threshold, or ``None`` when the band
+    has never reached that threshold in the workout history."""
+    last_seen: dict[int, dict[str, date]] = {int(d): {} for d in ZONE_BANDS_S}
     for w in workouts:
         ds = (w.get("date") or "")[:10]
         try:
             wdate = date.fromisoformat(ds)
         except (TypeError, ValueError):
             continue
-        for d in w.get("_stimulus_systems") or []:
+        doses = w.get("_stimulus_doses") or {}
+        for d in ZONE_BANDS_S:
             d_int = int(d)
-            if d_int not in last_seen or wdate > last_seen[d_int]:
-                last_seen[d_int] = wdate
-    out: dict[int, int | None] = {}
+            dose = float(doses.get(d, doses.get(d_int, 0.0)) or 0.0)
+            for col, floor in _DAYS_SINCE_THRESHOLDS:
+                if dose >= floor:
+                    prev = last_seen[d_int].get(col)
+                    if prev is None or wdate > prev:
+                        last_seen[d_int][col] = wdate
+    out: dict[int, dict[str, int | None]] = {}
     for d in ZONE_BANDS_S:
         d_int = int(d)
-        if d_int in last_seen:
-            out[d_int] = (today - last_seen[d_int]).days
-        else:
-            out[d_int] = None
+        row: dict[str, int | None] = {}
+        for col, _floor in _DAYS_SINCE_THRESHOLDS:
+            wdate = last_seen[d_int].get(col)
+            row[col] = (today - wdate).days if wdate else None
+        out[d_int] = row
     return out
 
 
@@ -690,9 +714,10 @@ def _training_load_section(workouts: list, is_dark: bool) -> None:
     """Bottom-of-Volume-Page training-load panel.
 
     Three sub-panels:
-      A. Per-system stimulus counts over 7 / 28-day windows.
-      B. Days-since-last-stimulus per system, color-coded against
-         adaptation-decay timescales (≤7d green, 8–14d yellow, >14d red).
+      A. Per-system Solid+ stimulus counts over 7 / 28-day windows.
+      B. Days-since-last-stimulus per system at three category thresholds
+         (Full / Solid / Last=Partial+), color-coded against adaptation-
+         decay timescales (≤7d green, 8–14d yellow, >14d red).
       C. CTL / ATL / TSB time-series chart (Banister PMC).
     """
     today = date.today()
@@ -757,8 +782,8 @@ def _training_load_section(workouts: list, is_dark: bool) -> None:
                                 ),
                             )
 
-            # Panel B: days-since-last-stimulus
-            with hd.box(gap=0.5, min_width=20):
+            # Panel B: days-since-last-stimulus (3 thresholds)
+            with hd.box(gap=0.5, min_width=24):
                 hd.text(
                     "Days since last stimulus",
                     font_size="small",
@@ -766,26 +791,23 @@ def _training_load_section(workouts: list, is_dark: bool) -> None:
                     font_color="neutral-700",
                 )
                 days_since = _days_since_last_stimulus(workouts, today)
-                with grid_box(grid_template_columns="auto 4rem", gap=0.4):
+                col_labels = {"full": "Full", "solid": "Solid", "last": "Last"}
+                with grid_box(
+                    grid_template_columns="auto 3.5rem 3.5rem 3.5rem", gap=0.4
+                ):
                     hd.text("System", font_size="x-small", font_weight="semibold")
-                    hd.text("Days", font_size="x-small", font_weight="semibold")
+                    for col, _floor in _DAYS_SINCE_THRESHOLDS:
+                        with hd.scope(f"{col} {_floor}"):
+                            hd.text(
+                                col_labels[col],
+                                font_size="x-small",
+                                font_weight="semibold",
+                            )
                     for d in ZONE_BANDS_S:
                         bin_idx = BAND_TO_BIN[d]
                         name = BIN_NAMES[bin_idx]
                         color_str = BIN_COLORS[bin_idx][0 if is_dark else 1]
-                        days = days_since[d]
-                        if days is None:
-                            label = "never"
-                            color = "neutral-400"
-                        elif days <= 7:
-                            label = f"{days}d"
-                            color = "success-600"
-                        elif days <= 14:
-                            label = f"{days}d"
-                            color = "warning-600"
-                        else:
-                            label = f"{days}d"
-                            color = "danger-600"
+                        row = days_since[d]
                         with hd.scope(f"days_since_{d}"):
                             with hd.hbox(gap=0.3, align="center"):
                                 hd.box(
@@ -795,7 +817,22 @@ def _training_load_section(workouts: list, is_dark: bool) -> None:
                                     border_radius="small",
                                 )
                                 hd.text(name, font_size="small")
-                            hd.text(label, font_size="small", font_color=color)
+                            for col, _floor in _DAYS_SINCE_THRESHOLDS:
+                                days = row[col]
+                                if days is None:
+                                    label = "—"
+                                    color = "neutral-400"
+                                elif days <= 7:
+                                    label = f"{days}d"
+                                    color = "success-600"
+                                elif days <= 14:
+                                    label = f"{days}d"
+                                    color = "warning-600"
+                                else:
+                                    label = f"{days}d"
+                                    color = "danger-600"
+                                with hd.scope(f"days_since_{d}_{col}"):
+                                    hd.text(label, font_size="small", font_color=color)
 
         # ── Panel C: CTL / ATL / TSB chart ──────────────────────────
         with hd.box(gap=0.5):

@@ -314,7 +314,6 @@ window.hyperdiv.registerPlugin("TrainingLoadChart", (ctx) => {
   }
 
   function buildNavChart() {
-    console.log("FIRST")
     if (navChart) {
       navChart.destroy();
       navChart = null;
@@ -322,9 +321,6 @@ window.hyperdiv.registerPlugin("TrainingLoadChart", (ctx) => {
     if (!_config) return;
     const cfg = _config;
     const ctlPts = cfg.ctl_points || [];
-
-
-    console.log("HEREHHERHER")
 
     navChart = new Chart(navCanvas.getContext("2d"), {
       type: "line",
