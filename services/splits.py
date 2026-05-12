@@ -716,6 +716,180 @@ def best_window_distance(
     return out
 
 
+def _first_work_interval(intervals: list) -> Optional[dict]:
+    """Return the first interval if it is a work interval (i.e. not
+    ``type == "rest"``) with non-zero time and distance.  ``None`` when the
+    workout opens with a rest entry or the interval lacks usable metadata.
+    """
+    if not intervals:
+        return None
+    iv = intervals[0]
+    if (iv.get("type") or "").lower() == "rest":
+        return None
+    if (iv.get("time") or 0) <= 0 or (iv.get("distance") or 0) <= 0:
+        return None
+    return iv
+
+
+def _build_first_interval_interp(strokes: list, first_iv: dict):
+    """Build ``(interp_time, interp_distance, window_pool)`` over the strokes
+    that fall inside the first work interval, with a synthetic sentinel at
+    the interval's reported ``(time, distance)`` so interpolation at the
+    boundary matches the per-interval pace exactly.
+
+    ``window_pool`` is the filtered stroke list (without the sentinel) for
+    use by aggregation passes that need per-stroke ``spm``/``hr``/``p``.
+    """
+    iv_time = first_iv.get("time") or 0  # tenths-of-seconds
+    iv_dist_m = first_iv.get("distance") or 0  # metres
+    pool = [s for s in strokes if (s.get("t", 0) or 0) < iv_time]
+    # Anchor the last interpolation point at the reported interval totals so
+    # ``interp_distance(iv_time) == iv_dist_m`` and the mirror holds.  The
+    # sentinel carries ``d`` in decimetres to match the stroke schema.
+    sentinel = {"d": int(round(iv_dist_m * 10)), "t": iv_time}
+    interp_time, interp_distance = build_interp(
+        pool + [sentinel], {"time": iv_time, "distance": iv_dist_m}
+    )
+    return interp_time, interp_distance, pool
+
+
+def from_start_distance(
+    strokes: list, workout: dict, target_m: int
+) -> Optional[dict]:
+    """Return the metrics of the first ``target_m`` metres of the workout,
+    measured from t=0, or None when the target doesn't fit.
+
+    Counterpart to :func:`best_window_distance` for the "from start" mode of
+    the ranked-events viewer.
+
+    For interval workouts the segment is bounded by the first work
+    interval: a target larger than that interval's distance returns
+    ``None``, since "from start" describes one contiguous effort and the
+    workout's next interval (or its rest) breaks that contiguity.  Within
+    the bound, stroke-level interpolation is used so the pace reflects
+    actual rowing (e.g. a rate ladder), with a synthetic sentinel at the
+    interval's reported ``(time, distance)`` so interp is exact at the
+    boundary.
+
+    For continuous workouts, falls back to stroke interpolation over the
+    whole stream.
+    """
+    if not strokes or target_m <= 0:
+        return None
+
+    intervals = (workout.get("workout") or {}).get("intervals") or []
+    if workout.get("is_interval") and intervals:
+        first_iv = _first_work_interval(intervals)
+        if first_iv is None:
+            return None
+        iv_dist_m = first_iv["distance"]
+        # "From start" must fit inside the first contiguous work effort.
+        if target_m > iv_dist_m:
+            return None
+        interp_time, _, pool = _build_first_interval_interp(strokes, first_iv)
+        if interp_time is None:
+            return None
+        end_t = interp_time(float(target_m))
+        if end_t is None or end_t <= 0:
+            return None
+        window_strokes = [
+            s for s in pool if (s.get("d", 0) / 10.0) <= float(target_m)
+        ]
+    else:
+        mono = _monotonic_by_d(strokes)
+        if not mono:
+            return None
+        last_real_d_m = mono[-1].get("d", 0) / 10.0
+        if target_m > last_real_d_m - 2.0:
+            return None
+        interp_time, _ = build_interp(mono, workout)
+        if interp_time is None:
+            return None
+        end_t = interp_time(float(target_m))
+        if end_t is None or end_t <= 0:
+            return None
+        window_strokes = [
+            s for s in mono if (s.get("d", 0) / 10.0) <= float(target_m)
+        ]
+
+    out = _window_metrics(
+        window_strokes, dist_m=float(target_m), dur_tenths=float(end_t)
+    )
+    out["start_offset_tenths"] = 0.0
+    out["end_offset_tenths"] = float(end_t)
+    return out
+
+
+def from_start_time(
+    strokes: list, workout: dict, target_tenths: int
+) -> Optional[dict]:
+    """Return the metrics of the first ``target_tenths`` tenths-of-seconds of
+    the workout, measured from t=0, or None when the target doesn't fit.
+
+    Counterpart to :func:`best_window_time` for the "from start" mode of
+    the ranked-events viewer.
+
+    For interval workouts the segment is bounded by the first work
+    interval: a target larger than that interval's time returns ``None``,
+    since "from start" describes one contiguous effort and the workout's
+    next interval (or its rest) breaks that contiguity.  Within the bound,
+    stroke-level interpolation is used so the pace reflects actual rowing
+    (e.g. a rate ladder), with a synthetic sentinel at the interval's
+    reported ``(time, distance)`` so interp is exact at the boundary.
+
+    For continuous workouts, falls back to stroke interpolation over the
+    whole stream.
+    """
+    if not strokes or target_tenths <= 0:
+        return None
+
+    intervals = (workout.get("workout") or {}).get("intervals") or []
+    if workout.get("is_interval") and intervals:
+        first_iv = _first_work_interval(intervals)
+        if first_iv is None:
+            return None
+        iv_time = first_iv["time"]
+        # "From start" must fit inside the first contiguous work effort.
+        if target_tenths > iv_time:
+            return None
+        _, interp_distance, pool = _build_first_interval_interp(
+            strokes, first_iv
+        )
+        if interp_distance is None:
+            return None
+        end_d = interp_distance(float(target_tenths))
+        if end_d is None or end_d <= 0:
+            return None
+        window_strokes = [
+            s for s in pool if (s.get("t", 0) or 0) <= target_tenths
+        ]
+    else:
+        mono = _monotonic_by_t(strokes)
+        if not mono:
+            return None
+        last_real_t = mono[-1].get("t", 0)
+        if target_tenths > last_real_t - 1:
+            return None
+        _, interp_distance = build_interp(mono, workout)
+        if interp_distance is None:
+            return None
+        end_d = interp_distance(float(target_tenths))
+        if end_d is None or end_d <= 0:
+            return None
+        window_strokes = [
+            s for s in mono if (s.get("t", 0) or 0) <= target_tenths
+        ]
+
+    out = _window_metrics(
+        window_strokes,
+        dist_m=float(end_d),
+        dur_tenths=float(target_tenths),
+    )
+    out["start_offset_tenths"] = 0.0
+    out["end_offset_tenths"] = float(target_tenths)
+    return out
+
+
 def best_window_time(
     strokes: list, workout: dict, target_tenths: int
 ) -> Optional[dict]:
