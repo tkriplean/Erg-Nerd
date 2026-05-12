@@ -75,3 +75,4 @@ class grid_box(hd.box):
     justify_items = hd.Prop(hd.CSSField("justify-items", hd.String))
     grid_column = hd.Prop(hd.CSSField("grid-column", hd.String))
     overflow = hd.Prop(hd.CSSField("overflow", hd.String))
+    gap = hd.Prop(hd.CSSField("gap", hd.Any))

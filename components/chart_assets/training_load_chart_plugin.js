@@ -110,10 +110,13 @@ window.hyperdiv.registerPlugin("TrainingLoadChart", (ctx) => {
   };
 
   // Custom plugin — paints the brush rect on the navigator chart.
+  // Registered chart-locally (see buildNavChart's `plugins: [...]`), so we
+  // don't need a `chart !== navChart` guard — and adding one breaks the
+  // first paint, because Chart.js's constructor triggers its initial draw
+  // *before* the `navChart =` assignment finishes.
   const brushOverlayPlugin = {
     id: "brushOverlay",
     afterDatasetsDraw(chart) {
-      if (chart !== navChart) return;
       const { ctx, chartArea, scales } = chart;
       if (!chartArea || !scales.x) return;
       const xLeft = scales.x.getPixelForValue(brushStart);
@@ -228,7 +231,7 @@ window.hyperdiv.registerPlugin("TrainingLoadChart", (ctx) => {
         plugins: {
           legend: {
             display: true,
-            position: "bottom",
+            position: "top",
             labels: {
               color: cfg.tick_color,
               font: { size: 10 },
@@ -272,7 +275,7 @@ window.hyperdiv.registerPlugin("TrainingLoadChart", (ctx) => {
               displayFormats: {
                 day: "MMM d",
                 week: "MMM d",
-                month: "MMM yy",
+                month: "MMM ''yy",
                 year: "yyyy",
               },
             },
@@ -364,7 +367,7 @@ window.hyperdiv.registerPlugin("TrainingLoadChart", (ctx) => {
             },
             time: {
               displayFormats: {
-                month: "MMM yy",
+                month: "MMM ''yy",
                 year: "yyyy",
               },
             },
