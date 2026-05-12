@@ -395,7 +395,10 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     defaultSortCol: ctx.initialProps.default_sort_col || "date",
     defaultSortAsc: !!ctx.initialProps.default_sort_asc,
     treeMode: !!ctx.initialProps.tree_mode,
-    expanded: new Set(),
+    // Honour caller-provided default expansion on a clean mount.  Saved
+    // sessionStorage state (below) overrides this when present, so the
+    // back-button path preserves the user's explicit collapses.
+    expanded: new Set(ctx.initialProps.default_expanded_session_ids || []),
     linkPrefix: ctx.initialProps.link_prefix || "",
     // Search state.  searchable is locked at mount time; searchQuery is
     // updated by the input element directly (no Python round-trip) and

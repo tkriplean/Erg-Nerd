@@ -155,6 +155,35 @@ content: window.hyperdiv.registerPlugin("EffortStressChart", (ctx) => {
         drawTime: "beforeDatasetsDraw",
       };
     }
+    // Per-workout markers: a faint vertical line at each workout's
+    // start with a "W1/W2/..." label at the top.  The current workout's
+    // line is rendered slightly bolder.  Only emitted when the session
+    // has multiple workouts.
+    (cfg.workout_markers || []).forEach((mk, i) => {
+      const isCurrent = !!mk.is_current;
+      annotations[`wkt_marker_${i}`] = {
+        type: "line",
+        xScaleID: "x",
+        xMin: mk.t_start_s,
+        xMax: mk.t_start_s,
+        borderColor: isCurrent
+          ? "rgba(120,120,120,0.85)"
+          : "rgba(140,140,140,0.45)",
+        borderWidth: isCurrent ? 1.5 : 1.0,
+        borderDash: isCurrent ? [] : [4, 3],
+        drawTime: "beforeDatasetsDraw",
+        label: {
+          display: true,
+          content: mk.label,
+          position: "start",
+          backgroundColor: "rgba(0,0,0,0)",
+          color: isCurrent ? tickColor : "rgba(140,140,140,0.85)",
+          font: { size: 10, weight: isCurrent ? "bold" : "normal" },
+          padding: { top: 0, bottom: 0, left: 2, right: 2 },
+          yAdjust: 2,
+        },
+      };
+    });
 
     const xMax = cfg.session_duration_s || intensityPoints[intensityPoints.length - 1].x || 0;
     const intensityMax = cfg.intensity_y_max || 1.0;

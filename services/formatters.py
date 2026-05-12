@@ -107,6 +107,26 @@ def fmt_split(tenths) -> str:
     return f"{m}:{s:04.1f}"
 
 
+def fmt_pace_delta_tenths(curr_t, prior_t):
+    """Pace delta for the splits-vs-last-time annotation.
+
+    Both arguments are pace in tenths-of-a-second per 500m (the same
+    unit ``fmt_split`` consumes).  Returns ``(text, kind)`` where
+    ``text`` is e.g. ``"(-2.1)"`` / ``"(+1.3)"`` / ``"(0.0)"`` and
+    ``kind`` is ``"faster"`` / ``"slower"`` / ``"same"`` so the caller
+    can pick a colour.  Returns ``(None, None)`` when either pace is
+    missing.
+    """
+    if not curr_t or not prior_t:
+        return None, None
+    diff_s = (curr_t - prior_t) / 10.0
+    if abs(diff_s) < 0.05:
+        return "(0.0)", "same"
+    if diff_s < 0:
+        return f"(−{abs(diff_s):.1f})", "faster"
+    return f"(+{diff_s:.1f})", "slower"
+
+
 def fmt_tenths(tenths: int, compact: bool = False) -> str:
     """Convert tenths of seconds to 'M:SS' string.  E.g. 600 → '1:00'."""
     total_s = int(tenths) // 10

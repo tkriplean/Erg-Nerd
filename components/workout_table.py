@@ -401,6 +401,10 @@ class _WorkoutTablePlugin(hd.Plugin):
     # Empty in owner mode; "/u/{uid}" when viewing a public profile so the
     # link stays within the public dashboard's URL space.
     link_prefix = hd.Prop(hd.String, "")
+    # Session ids the JS should expand on first mount (tree mode only).
+    # Honoured only when sessionStorage has no prior expanded state — so
+    # back-button revisits preserve user actions.
+    default_expanded_session_ids = hd.Prop(hd.Any, [])
     event_out = hd.Prop(hd.Any, None)
 
 
@@ -596,6 +600,7 @@ def WorkoutTable(
     tree_mode: bool = False,
     sessions_dict: dict | None = None,
     searchable: bool = True,
+    default_expanded_session_ids: list | None = None,
 ) -> None:
     """Render a sortable, paginated table.  See module docstring for column
     entry shape and event names.
@@ -672,6 +677,7 @@ def WorkoutTable(
         tree_mode=tree_mode,
         searchable=searchable,
         link_prefix=_link_prefix,
+        default_expanded_session_ids=list(default_expanded_session_ids or []),
     )
 
     # ── Event dispatch ───────────────────────────────────────────────────

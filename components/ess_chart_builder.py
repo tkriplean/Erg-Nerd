@@ -41,10 +41,9 @@ from typing import Optional
 from services.erg_stress import (
     SEVERITY_STYLE,
     SEVERITY_THRESHOLDS,
-    ZONE_BAND_LABELS,
     ZONE_BANDS_S,
 )
-from services.volume_bins import BIN_COLORS
+from services.volume_bins import BAND_TO_BIN, BIN_COLORS, BIN_NAMES
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +131,22 @@ def build_effort_stress_chart_config(
             }
             break
 
+    # Per-workout markers for multi-workout sessions: a vertical line at
+    # each workout's start, labelled "W1", "W2", etc., so the rower can
+    # locate where each workout begins in the session timeline.  The
+    # current workout is flagged so the JS can render it more boldly.
+    workout_markers: list[dict] = []
+    if len(per_workout) > 1:
+        for i, pw in enumerate(per_workout):
+            workout_markers.append(
+                {
+                    "t_start_s": float(pw.get("t_start_s") or 0.0),
+                    "t_end_s": float(pw.get("t_end_s") or 0.0),
+                    "label": f"W{i + 1}",
+                    "is_current": pw.get("workout_id") == wid,
+                }
+            )
+
     # I(t) axis bound.  In practice peak I sits in [0.4, 1.0]; pad a bit.
     intensity_max = (
         max((p.get("intensity") or 0.0) for p in timeline) if timeline else 1.0
@@ -162,10 +177,13 @@ def build_effort_stress_chart_config(
     )
 
     # Per-band specs in render order (shortest → longest band).
+    # Labels use the rower-facing stimulus bin name (Sprint, Anaerobic,
+    # VO2max, Threshold, Tempo, Endurance) rather than the duration so
+    # the legend reads as a physiological story.
     zone_specs = [
         {
             "band_s": d,
-            "label": ZONE_BAND_LABELS.get(d, f"{d}s"),
+            "label": BIN_NAMES[BAND_TO_BIN[d]],
             "color": _band_color(d, is_dark=is_dark),
         }
         for d in ZONE_BANDS_S
@@ -211,6 +229,7 @@ def build_effort_stress_chart_config(
         "zone_specs": zone_specs,
         "severity_bands": _severity_bands(intensity_y_max),
         "workout_window": workout_window,
+        "workout_markers": workout_markers,
         "workout_band_color": workout_band_color,
         "intensity_y_max": intensity_y_max,
         "zone_y_max": zone_y_max,

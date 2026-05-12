@@ -175,83 +175,6 @@ def _dump_session_to_tmp(session_workouts: list, current_id) -> str:
     return dirpath
 
 
-def _session_rollup(workout: dict) -> None:
-    """Compact session-level summary panel for the same-day section.
-
-    Rendered above the same-day workouts table when the current workout is
-    part of a multi-workout session.  Surfaces the session's combined ESS,
-    effective IF, peak Severity bucket, anaerobic-strain trough, and total
-    elapsed minutes — quantities that aren't visible from looking at any
-    single workout's columns.
-    """
-    summary = workout.get("_ess_session_summary") or {}
-    members = summary.get("member_ids") or []
-    if not summary or len(members) < 2:
-        return
-
-    sev_bucket = summary.get("severity_bucket")
-    sev_score = summary.get("severity_score") or 0.0
-    sess_ess = summary.get("ess") or 0.0
-    sess_if = summary.get("if_eff_session") or 0.0
-    strain = summary.get("anaerobic_strain") or 0.0
-    glycogen = summary.get("glycogen_used")
-    duration_s = int(summary.get("duration_s") or 0)
-
-    # Session-level stimulus aggregate: max dose per band across the
-    # session's per-workout records (matches the session_rollup convention).
-    session_stim_systems: list[int] = []
-    per_workout_recs = summary.get("per_workout") or []
-    if per_workout_recs:
-        agg: dict[int, float] = {}
-        for pw in per_workout_recs:
-            for band, dose in (pw.get("stimulus_doses") or {}).items():
-                agg[int(band)] = max(agg.get(int(band), 0.0), float(dose))
-        session_stim_systems = sorted(d for d, v in agg.items() if v >= 1.0)
-    minutes = duration_s // 60
-    seconds = duration_s % 60
-
-    with hd.box(
-        padding=(0.75, 1.25, 0.75, 1.25),
-        gap=0.5,
-        border="1px solid neutral-200",
-        border_radius="medium",
-        margin_bottom=1,
-    ):
-        hd.text(
-            f"Session ({len(members)} workouts)",
-            font_size="small",
-            font_color="neutral-500",
-            font_weight="semibold",
-        )
-        with hd.hbox(wrap="wrap", gap=0):
-            _stat("Session ESS", f"{sess_ess:.1f}")
-            _stat("Session IF eff", f"{sess_if:.2f}")
-            if sev_bucket:
-                _stat("Peak Severity", f"{sev_bucket} ({sev_score:.2f})")
-            # Reservoirs — the two finite-store recovery-debt metrics shown
-            # adjacent so the limiter story is legible at a glance:
-            # W' Used dominates short max efforts; Glycogen Used dominates
-            # long endurance efforts (HM, marathon).
-            _stat("W' Used (peak)", f"{round(strain * 100)}%")
-            if glycogen is not None:
-                gly_pct = round(glycogen * 100)
-                gly_warn = " ⚠" if glycogen > 1 else ""
-                _stat("Glycogen Used", f"{gly_pct}%{gly_warn}")
-            if per_workout_recs:
-                stim_text = (
-                    " + ".join(BIN_NAMES[BAND_TO_BIN[d]] for d in session_stim_systems)
-                    if session_stim_systems
-                    else "—"
-                )
-                _stat("Stimulated", stim_text)
-            _stat(
-                "Session Time",
-                f"{minutes}:{seconds:02d}"
-                if minutes < 60
-                else f"{minutes // 60}:{minutes % 60:02d}:{seconds:02d}",
-            )
-
-
 def _summary_section(workout: dict, strokes: Optional[list]) -> None:
     """Compact multi-column stat grid."""
     is_interval = workout["is_interval"]
@@ -288,33 +211,6 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
 
     with hd.box(grow=True, gap=0.25):
         # ── Top row: Intensity (with Zone Spread bar), HR Spread ─────────
-        if has_intensity or has_hr_spread:
-            with hd.hbox(wrap="wrap", gap=0):
-                if has_intensity:
-                    _spread_stat(
-                        "Intensity",
-                        lambda: render_spread_cell(
-                            score=round((workout.get("_if_eff") or 0.0) * 100),
-                            _bin_meters=workout.get("_zone_bin_fractions"),
-                            zone_names=BIN_NAMES,
-                            zone_colors=BIN_COLORS,
-                            is_dark=is_dark,
-                            skip_indices=(0,),
-                            show_meters=False,
-                        ),
-                    )
-                if has_hr_spread:
-                    _spread_stat(
-                        "HR Spread",
-                        lambda: render_spread_cell(
-                            score=workout.get("_hr_spread_score"),
-                            _bin_meters=workout.get("_hr_bin_meters"),
-                            zone_names=HR_ZONE_NAMES,
-                            zone_colors=HR_ZONE_COLORS,
-                            is_dark=is_dark,
-                            skip_indices=(0, 6),
-                        ),
-                    )
 
         # ── ESS row: Severity + Reservoirs (W' Used, Glycogen Used) ────
         # The two reservoirs sit adjacent so the limiter story is legible
@@ -322,19 +218,61 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
         # Glycogen Used dominates long endurance efforts (HM, marathon).
         # Training Stimulus follows: which physiological systems received
         # an adaptation-grade dose from this workout.
-        if has_ess:
-            with hd.hbox(wrap="wrap", gap=0):
+        with hd.hbox(wrap="wrap", gap=0):
+            # if has_intensity:
+            #     _spread_stat(
+            #         "Intensity",
+            #         lambda: render_spread_cell(
+            #             score=round((workout.get("_if_eff") or 0.0) * 100),
+            #             _bin_meters=workout.get("_zone_bin_fractions"),
+            #             zone_names=BIN_NAMES,
+            #             zone_colors=BIN_COLORS,
+            #             is_dark=is_dark,
+            #             skip_indices=(0,),
+            #             show_meters=False,
+            #         ),
+            #     )
+            if has_hr_spread:
+                _spread_stat(
+                    "HR Spread",
+                    lambda: render_spread_cell(
+                        score=workout.get("_hr_spread_score"),
+                        _bin_meters=workout.get("_hr_bin_meters"),
+                        zone_names=HR_ZONE_NAMES,
+                        zone_colors=HR_ZONE_COLORS,
+                        is_dark=is_dark,
+                        skip_indices=(0, 6),
+                    ),
+                )
+            if avg_watts:
+                _spread_stat(
+                    "Avg. Watts",
+                    lambda: render_spread_cell(
+                        score=avg_watts,
+                        _bin_meters=workout.get("_zone_bin_fractions"),
+                        zone_names=BIN_NAMES,
+                        zone_colors=BIN_COLORS,
+                        is_dark=is_dark,
+                        skip_indices=(0,),
+                        show_meters=False,
+                    ),
+                ),
+
+            if max_w is not None:
+                _stat("Max Watts", f"{round(max_w)} W")
+
+            if has_ess:
                 if workout.get("_severity"):
                     _stat("Severity", workout["_severity"])
-                if workout.get("_anaerobic_strain") is not None:
-                    _stat(
-                        "W' Used",
-                        f"{round(workout['_anaerobic_strain'] * 100)}%",
-                    )
-                if workout.get("_glycogen_used") is not None:
-                    gly = workout["_glycogen_used"]
-                    gly_warn = " ⚠" if gly > 1 else ""
-                    _stat("Glycogen Used", f"{round(gly * 100)}%{gly_warn}")
+                # if workout.get("_anaerobic_strain") is not None:
+                #     _stat(
+                #         "W' Used",
+                #         f"{round(workout['_anaerobic_strain'] * 100)}%",
+                #     )
+                # if workout.get("_glycogen_used") is not None:
+                #     gly = workout["_glycogen_used"]
+                #     gly_warn = " ⚠" if gly > 1 else ""
+                #     _stat("Glycogen Used", f"{round(gly * 100)}%{gly_warn}")
                 stim_systems = workout.get("_stimulus_systems")
                 if stim_systems is not None:
                     if stim_systems:
@@ -352,10 +290,6 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
                 _stat("Time", format_time(workout["time"]))
             if pace_sec:
                 _stat("Pace", fmt_split(pace))
-            if avg_watts:
-                _stat("Avg. Watts", f"{avg_watts} W")
-            if max_w is not None:
-                _stat("Max Watts", f"{round(max_w)} W")
             if workout.get("stroke_rate"):
                 _stat("SPM", str(workout["stroke_rate"]))
             if workout.get("stroke_count"):
@@ -365,8 +299,8 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
             if is_interval:
                 if rest_dist:
                     _stat("Rest Distance", fmt_distance(rest_dist))
-                if rest_time:
-                    _stat("Rest Time", format_time(rest_time))
+                # if rest_time:
+                #     _stat("Rest Time", format_time(rest_time))
             if hr_data.get("average"):
                 _stat("Avg. HR", f"{hr_data['average']} bpm")
             if hr_data.get("max"):
@@ -393,6 +327,55 @@ _CUSTOM_SPLITS_LS_KEY = "custom_splits"
 # ---------------------------------------------------------------------------
 
 
+_PACE_DELTA_KIND_COLORS = {
+    "faster": "success-600",
+    "slower": "danger-600",
+    "same": "neutral-400",
+}
+
+
+def _pace_delta_inline(curr_t, prior_t):
+    """Return ``(delta_text, color)`` for pace cells, or ``None`` when no
+    prior pace is available."""
+    from services.formatters import fmt_pace_delta_tenths
+
+    text, kind = fmt_pace_delta_tenths(curr_t, prior_t)
+    if not text:
+        return None
+    return text, _PACE_DELTA_KIND_COLORS.get(kind, "neutral-500")
+
+
+def _render_cells(cells, ts):
+    """Render a row's cells.
+
+    Each cell is a 4-tuple ``(val, width, color, inline_extra)``.  When
+    ``inline_extra`` is non-None it's a ``(text, color)`` pair rendered
+    next to ``val`` inside an ``hd.hbox`` of the cell's width — used for
+    the pace-vs-prior delta annotation.  Otherwise the cell renders as a
+    plain ``hd.text``.
+    """
+    for idx, cell in enumerate(cells):
+        val, w, color, extra = cell
+        with hd.scope(f"{idx}"):
+            if extra is None:
+                kwargs = {"font_size": ts, "width": w}
+                if color:
+                    kwargs["font_color"] = color
+                hd.text(val, **kwargs)
+            else:
+                extra_text, extra_color = extra
+                with hd.hbox(width=w, gap=0.25):
+                    txt_kwargs = {"font_size": ts}
+                    if color:
+                        txt_kwargs["font_color"] = color
+                    hd.text(val, **txt_kwargs)
+                    hd.text(
+                        extra_text,
+                        font_size="x-small",
+                        font_color=extra_color,
+                    )
+
+
 def _splits_table(
     workout: dict,
     strokes: Optional[list],
@@ -402,6 +385,7 @@ def _splits_table(
     interval_sub: Optional[dict] = None,
     expanded_intervals: Optional[tuple] = None,
     on_interval_expand=None,
+    prior_pace_by_idx: Optional[list] = None,
 ) -> None:
     """
     Render splits or intervals table.
@@ -435,6 +419,7 @@ def _splits_table(
             interval_sub=interval_sub,
             expanded=expanded_intervals,
             on_expand=on_interval_expand,
+            prior_pace_by_work_idx=prior_pace_by_idx,
         )
         return
 
@@ -473,6 +458,11 @@ def _splits_table(
         col_w = col_w[:-1]
         headers = headers[:-1]
 
+    def _prior_at(i):
+        if not prior_pace_by_idx or i >= len(prior_pace_by_idx):
+            return None
+        return prior_pace_by_idx[i]
+
     _table_frame(
         splits_data,
         col_w,
@@ -482,12 +472,18 @@ def _splits_table(
         focused_idx=focused_idx,
         on_focus=on_focus,
         row_renderer=lambda i, sp, cw: _split_row(
-            i, sp, cw, ts, has_hr, ess_segments if has_if else None
+            i,
+            sp,
+            cw,
+            ts,
+            has_hr,
+            ess_segments if has_if else None,
+            prior_pace_t=_prior_at(i),
         ),
     )
 
 
-def _split_row(i, sp, col_w, ts, has_hr, ess_segments=None):
+def _split_row(i, sp, col_w, ts, has_hr, ess_segments=None, *, prior_pace_t=None):
     pace_t = sp.get("pace_tenths")
     avg_w = round(compute_watts(pace_t / 10.0)) if pace_t else None
     max_w = sp.get("max_watts")
@@ -511,29 +507,26 @@ def _split_row(i, sp, col_w, ts, has_hr, ess_segments=None):
     else:
         hr_str = f"{hr_avg:.0f}"
 
+    pace_delta = _pace_delta_inline(pace_t, prior_pace_t)
     cells = [
-        (str(i + 1), col_w[0], "neutral-500"),
-        (fmt_distance(int(round(sp.get("distance") or 0))), col_w[1], None),
+        (str(i + 1), col_w[0], "neutral-500", None),
+        (fmt_distance(int(round(sp.get("distance") or 0))), col_w[1], None, None),
         (
             format_time(round(sp.get("time_tenths", 0)))
             if sp.get("time_tenths")
             else "—",
             col_w[2],
             None,
+            None,
         ),
-        (fmt_split(pace_t), col_w[3], None),
-        (watts_str, col_w[4], None),
-        (f"{spm:.0f}" if spm else "—", col_w[5], None),
+        (fmt_split(pace_t), col_w[3], None, pace_delta),
+        (watts_str, col_w[4], None, None),
+        (f"{spm:.0f}" if spm else "—", col_w[5], None, None),
     ]
     if has_hr:
-        cells.append((hr_str, col_w[6], None))
+        cells.append((hr_str, col_w[6], None, None))
 
-    for idx, (val, w, color) in enumerate(cells):
-        with hd.scope(f"{idx}"):
-            kwargs = {"font_size": ts, "width": w}
-            if color:
-                kwargs["font_color"] = color
-            hd.text(val, **kwargs)
+    _render_cells(cells, ts)
 
 
 def _intervals_table(
@@ -548,6 +541,7 @@ def _intervals_table(
     interval_sub: Optional[dict] = None,
     expanded: Optional[tuple] = None,
     on_expand=None,
+    prior_pace_by_work_idx: Optional[list] = None,
 ) -> None:
     """
     Render interval-workout intervals table.
@@ -585,6 +579,14 @@ def _intervals_table(
         # Pad to len(rows) defensively (rest-segment indices match []).
         children = list(sub_lists) + [[]] * max(0, len(rows) - len(sub_lists))
 
+    def _prior_for_row(r):
+        if not prior_pace_by_work_idx or r.get("_is_rest"):
+            return None
+        wi = r.get("_work_idx")
+        if wi is None or wi >= len(prior_pace_by_work_idx):
+            return None
+        return prior_pace_by_work_idx[wi]
+
     _table_frame(
         rows,
         col_w,
@@ -594,7 +596,13 @@ def _intervals_table(
         focused_idx=focused_idx,
         on_focus=on_focus,
         row_renderer=lambda i, r, cw: _interval_row(
-            i, r, cw, ts, has_hr, ess_segments if False and has_if else None
+            i,
+            r,
+            cw,
+            ts,
+            has_hr,
+            ess_segments if False and has_if else None,
+            prior_pace_t=_prior_for_row(r),
         ),
         children=children,
         child_renderer=(
@@ -639,7 +647,7 @@ def _interval_sub_row(parent_i, sub, col_w, ts, has_hr):
             hd.text(val, **kwargs)
 
 
-def _interval_row(i, r, col_w, ts, has_hr, ess_segments=None):
+def _interval_row(i, r, col_w, ts, has_hr, ess_segments=None, *, prior_pace_t=None):
     is_rest = r.get("_is_rest", False)
     pace_t = r.get("pace_tenths")
     d = r.get("distance") or 0
@@ -654,31 +662,28 @@ def _interval_row(i, r, col_w, ts, has_hr, ess_segments=None):
 
     hr_col_idx = 6 if has_hr else None
 
+    pace_delta = _pace_delta_inline(pace_t, prior_pace_t)
     cells = [
-        (num_str, col_w[0], "neutral-400" if is_rest else "neutral-500"),
-        (fmt_distance(d) if d else "—", col_w[1], muted),
-        (format_time(t) if t else "—", col_w[2], muted),
-        (fmt_split(pace_t), col_w[3], muted),
+        (num_str, col_w[0], "neutral-400" if is_rest else "neutral-500", None),
+        (fmt_distance(d) if d else "—", col_w[1], muted, None),
+        (format_time(t) if t else "—", col_w[2], muted, None),
+        (fmt_split(pace_t), col_w[3], muted, pace_delta),
         (
             str(r["avg_watts"]) if r.get("avg_watts") is not None else "",
             col_w[4],
             muted,
+            None,
         ),
-        (str(spm) if spm else "", col_w[5], muted),
+        (str(spm) if spm else "", col_w[5], muted, None),
     ]
     if has_hr:
-        cells.append((f"{hr:.0f}" if hr else "", col_w[6], muted))
+        cells.append((f"{hr:.0f}" if hr else "", col_w[6], muted, None))
     if ess_segments is not None:
         seg = ess_segments[i] if i < len(ess_segments) else None
         if_eff = seg.get("IF_eff_avg") if seg else None
-        cells.append((f"{if_eff:.2f}" if if_eff else "—", col_w[-1], muted))
+        cells.append((f"{if_eff:.2f}" if if_eff else "—", col_w[-1], muted, None))
 
-    for idx, (val, w, color) in enumerate(cells):
-        with hd.scope(f"{idx}"):
-            kwargs = {"font_size": ts, "width": w}
-            if color:
-                kwargs["font_color"] = color
-            hd.text(val, **kwargs)
+    _render_cells(cells, ts)
 
 
 def _table_frame(
@@ -859,6 +864,84 @@ def _interval_volume_and_work_fraction(w: dict) -> tuple:
     return vol, work_fraction
 
 
+def _pick_prior_exact(workout: dict, all_workouts: list) -> Optional[dict]:
+    """Return the most-recent prior workout with the *exact* same structure.
+
+    Used to power the splits/intervals table pace-delta annotation when
+    the "Similar workouts" tab is open.  Exact match semantics:
+
+    * Interval workouts: same ``intervals_label`` (which preserves rep
+      count — ``5×500m`` matches ``5×500m`` but not ``3×500m``).
+    * Non-interval workouts: same ``workout_type`` and same
+      ``distance`` (two 5000m workouts match).
+
+    Ties are broken by date descending.  Returns ``None`` if there's no
+    prior exact match.
+    """
+    wid = workout["id"]
+    date = workout.get("date") or ""
+    if workout.get("is_interval"):
+        ref_label = workout.get("intervals_label")
+        if not ref_label:
+            return None
+        candidates = [
+            w
+            for w in all_workouts
+            if w["id"] != wid
+            and w.get("is_interval")
+            and w.get("intervals_label") == ref_label
+            and (w.get("date") or "") < date
+        ]
+    else:
+        ref_type = workout.get("workout_type")
+        ref_dist = workout.get("distance")
+        if not ref_dist:
+            return None
+        candidates = [
+            w
+            for w in all_workouts
+            if w["id"] != wid
+            and not w.get("is_interval")
+            and w.get("workout_type") == ref_type
+            and w.get("distance") == ref_dist
+            and (w.get("date") or "") < date
+        ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda w: w.get("date") or "")
+
+
+def _prior_split_paces(prior: dict) -> list:
+    """Extract a per-split pace_tenths list from a prior split-based workout.
+
+    Aligned with the order ``_splits_table`` renders.  Returns an empty
+    list when the workout has no ``splits``.
+    """
+    wo = (prior or {}).get("workout") or {}
+    paces: list = []
+    for sp in wo.get("splits") or []:
+        t = sp.get("time") or 0
+        d = sp.get("distance") or 0
+        paces.append((t * 500 / d) if (t and d) else None)
+    return paces
+
+
+def _prior_interval_work_paces(prior: dict) -> list:
+    """Extract a per-work-interval pace_tenths list from a prior interval workout.
+
+    Indexed by ``_work_idx`` (0-based, rest intervals skipped).
+    """
+    wo = (prior or {}).get("workout") or {}
+    paces: list = []
+    for iv in wo.get("intervals") or []:
+        if (iv.get("type") or "").lower() == "rest":
+            continue
+        t = iv.get("time") or 0
+        d = iv.get("distance") or 0
+        paces.append((t * 500 / d) if (t and d) else None)
+    return paces
+
+
 def _find_similar(workout: dict, all_workouts: list) -> list:
     """Return shallow-copied workouts similar to ``workout``, with ``_similarity``
     (0–100, higher = more similar) attached, sorted descending."""
@@ -1036,12 +1119,12 @@ def _render_similar_workouts(workout, all_workouts, max_hr, profile, state):
         except Exception:
             pass
         with hd.box(align="center"):
-            hd.h2(
-                "Similar workouts",
-                font_weight="semibold",
-                font_size="x-large",
-                font_color="neutral-800",
-            )
+            # hd.h2(
+            #     "Similar workouts",
+            #     font_weight="semibold",
+            #     font_size="x-large",
+            #     font_color="neutral-800",
+            # )
             is_interval_workout = workout["is_interval"]
             compare_col_entry = {
                 "key": "compare",
@@ -1640,6 +1723,7 @@ def workout_page(workout_id: int) -> None:
         show_hr=False,  # show HR in stacked / compare mode
         compared_workouts=(),  # tuple[int,...] of other workout ids to overlay
         last_click_seq=0,  # last chart.click_seq we've processed
+        active_tab="Full Session",  # "Full session" | "Similar workouts"
     )
 
     # ── Pre-fetch workout list (task-cached; free on repeat renders) ────────
@@ -1736,6 +1820,32 @@ def workout_page(workout_id: int) -> None:
         else:
             state.focused_interval_excluding_rest = row.get("_work_idx", 0) + 1
 
+    # ── Pace-vs-prior comparison data ────────────────────────────────────────
+    # Resolved once per render so both the splits table (above the tabs)
+    # and the Similar Workouts tab body can share it.  We only compute
+    # the prior when the user is viewing the Similar Workouts tab — for
+    # the Full Session tab the deltas would be a distraction.
+    prior_workout: Optional[dict] = None
+    prior_pace_by_idx: Optional[list] = None
+    if state.active_tab == "Similar Workouts":
+        prior_workout = _pick_prior_exact(workout, all_workouts)
+        if prior_workout is not None:
+            if is_interval:
+                prior_pace_by_idx = _prior_interval_work_paces(prior_workout)
+                ref_count = sum(
+                    1
+                    for iv in (workout.get("workout") or {}).get("intervals") or []
+                    if (iv.get("type") or "").lower() != "rest"
+                )
+            else:
+                prior_pace_by_idx = _prior_split_paces(prior_workout)
+                ref_count = len((workout.get("workout") or {}).get("splits") or [])
+            # Counts must match exactly for index-by-index alignment to
+            # be meaningful; otherwise drop the annotations.
+            if len(prior_pace_by_idx) != ref_count:
+                prior_workout = None
+                prior_pace_by_idx = None
+
     # ── Layout ───────────────────────────────────────────────────────────────
 
     total_dist = workout.get("distance") or 0
@@ -1750,7 +1860,15 @@ def workout_page(workout_id: int) -> None:
             # ── Header ───────────────────────────────────────────────────────
 
             with hd.box(padding_top=1, gap=0, align="start"):
-                hd.text(fmt_date(workout["date"]), font_color="neutral-500")
+                with hd.hbox(gap=0.5):
+                    hd.text(fmt_date(workout["date"]), font_color="neutral-500")
+                    _hhmmss = (workout.get("date") or "")[11:19]
+                    if _hhmmss and _hhmmss != "00:00:00":
+                        hd.text(
+                            _format_hhmmss_friendly(_hhmmss),
+                            font_color="neutral-400",
+                            font_size="small",
+                        )
                 with hd.box():
                     for i, t in enumerate(title):
                         with hd.scope(f"{i}-{t}"):
@@ -1947,6 +2065,25 @@ def workout_page(workout_id: int) -> None:
                         current.discard(idx)
                     state.expanded_intervals = tuple(sorted(current))
 
+                if prior_workout is not None:
+                    with hd.hbox(gap=0.4):
+                        hd.text(
+                            "vs",
+                            font_size="x-small",
+                            font_color="neutral-500",
+                        )
+                        prior_link = hd.link(
+                            fmt_date(prior_workout["date"]),
+                            href=f"/workout/{prior_workout['id']}",
+                            font_size="x-small",
+                            font_color="neutral-500",
+                        )
+                        hd.text(
+                            "(faster = green, slower = red)",
+                            font_size="x-small",
+                            font_color="neutral-400",
+                        )
+
                 _splits_table(
                     workout,
                     strokes,
@@ -1958,88 +2095,102 @@ def workout_page(workout_id: int) -> None:
                     interval_sub=state.interval_sub_splits,
                     expanded_intervals=state.expanded_intervals,
                     on_interval_expand=_toggle_interval_expand,
+                    prior_pace_by_idx=prior_pace_by_idx,
                 )
 
-        # ── Effort & Stress (IF_eff + W'bal time-series) ─────────────────
+        # ── Tabs: Full session (default) / Similar workouts ──────────────
+        # The splits table above reads state.active_tab so it can show
+        # pace deltas in "Similar workouts" mode.  We sync state from the
+        # tab_group's reactive prop *after* rendering the tabs — a tab
+        # click therefore takes one extra render-frame to propagate to
+        # the splits annotations, which is imperceptible in practice.
         ess_cfg = build_effort_stress_chart_config(workout, is_dark=_theme.is_dark)
 
-        if ess_cfg:
-            with hd.box(gap=0.5, width="100%"):
-                hd.h2(
-                    "Effort & Stress",
-                    font_weight="semibold",
+        with hd.box(width="100%"):
+            with hd.hbox(gap=2, align="center", justify="center"):
+                tabs = hd.tab_group(
+                    "Full Session",
+                    "Similar Workouts",
                     font_size="x-large",
-                    font_color="neutral-800",
+                    font_weight="bold",
                 )
-                EffortStressChart(config=ess_cfg, height=220)
+                if tabs.active and tabs.active != state.active_tab:
+                    state.active_tab = tabs.active
 
-        # ── All workouts done on this day ────────────────────────────────
-
-        if len(same_day) > 1:
-            with hd.box(align="center", padding_top=2):
-                hd.h2(
-                    "All workouts on this day",
-                    font_weight="semibold",
-                    font_size="x-large",
-                    font_color="neutral-800",
-                )
-
-                # Dev affordance: dump every workout in the session to
-                # /tmp/session-<id>/ so the dev (or Claude reviewing real
-                # data) can read the full session payload off disk.
-                _dump_state = hd.state(last_path=None)
-                with hd.hbox(gap=0.5, align="center"):
-                    dump_btn = hd.button(
-                        "Download session",
-                        prefix_icon="download",
-                        size="small",
-                        variant="default",
+            with hd.box(padding_top=1, gap=2, width="100%"):
+                _active = tabs.active or "Full Session"
+                if _active == "Full Session":
+                    day_cols = [
+                        "date",
+                        "time_of_day",
+                        "main_work",
+                        "work_duration",
+                        "pace",
+                        "watts",
+                        "distance_combined",
+                        "spm",
+                        "drag",
+                        "hr",
+                        "severity",
+                        "stimulus",
+                        "ess",
+                        {"key": "link", "current_id": str(workout["id"])},
+                    ]
+                    _current_sid = workout.get("session_id")
+                    WorkoutTable(
+                        same_day,
+                        day_cols,
+                        default_sort_col="date",
+                        default_sort_asc=True,
+                        paginate=False,
+                        highlight=lambda r: str(r.get("id")) == str(workout["id"]),
+                        tree_mode=True,
+                        searchable=False,
+                        default_expanded_session_ids=(
+                            [_current_sid] if _current_sid else []
+                        ),
                     )
-                    if dump_btn.clicked:
-                        try:
-                            _dump_state.last_path = _dump_session_to_tmp(
-                                same_day, workout.get("id")
+
+                    if ess_cfg:
+                        with hd.box(gap=0.5, width="100%"):
+                            hd.h2(
+                                "Session Stimulus & Intensity",
+                                font_weight="semibold",
+                                font_size="x-large",
+                                font_color="neutral-800",
                             )
-                        except Exception as exc:
-                            _dump_state.last_path = f"error: {exc}"
-                    if _dump_state.last_path:
-                        hd.text(
-                            _dump_state.last_path,
-                            font_family="mono",
-                            font_size="small",
-                            font_color="neutral-600",
+                            EffortStressChart(config=ess_cfg, height=220)
+
+                    # Dev affordance: dump every workout in the session to
+                    # /tmp/session-<id>/ so the dev (or Claude reviewing real
+                    # data) can read the full session payload off disk.
+                    _dump_state = hd.state(last_path=None)
+                    with hd.hbox(gap=0.5, align="center"):
+                        dump_btn = hd.button(
+                            "Download session",
+                            prefix_icon="download",
+                            size="small",
+                            variant="default",
                         )
+                        if dump_btn.clicked:
+                            try:
+                                _dump_state.last_path = _dump_session_to_tmp(
+                                    same_day, workout.get("id")
+                                )
+                            except Exception as exc:
+                                _dump_state.last_path = f"error: {exc}"
+                        if _dump_state.last_path:
+                            hd.text(
+                                _dump_state.last_path,
+                                font_family="mono",
+                                font_size="small",
+                                font_color="neutral-600",
+                            )
 
-                _session_rollup(workout)
-                day_cols = [
-                    "date",
-                    "time_of_day",
-                    "main_work",
-                    "work_duration",
-                    "pace",
-                    "watts",
-                    "distance_combined",
-                    "spm",
-                    "drag",
-                    "hr",
-                    "severity",
-                    "stimulus",
-                    "ess",
-                    {"key": "link", "current_id": str(workout["id"])},
-                ]
-                WorkoutTable(
-                    same_day,
-                    day_cols,
-                    default_sort_col="date",
-                    default_sort_asc=True,
-                    paginate=False,
-                    highlight=lambda r: str(r.get("id")) == str(workout["id"]),
-                    tree_mode=True,
-                    searchable=False,
-                )
-
-        # ── Similar workouts ─────────────────────────────────────────────
-        _render_similar_workouts(workout, all_workouts, max_hr, profile, state)
+                elif _active == "Similar Workouts":
+                    _render_similar_workouts(
+                        workout, all_workouts, max_hr, profile, state
+                    )
 
         # ── Custom-splits modal ──────────────────────────────────────────
         # The dialog is created at this top level so its component state
