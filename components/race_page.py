@@ -254,12 +254,15 @@ def _race_stroke_graph(
         return
 
     # Partition boats by whether they have real (API-sourced) stroke data.
-    # Matches the threshold in build_races_data.has_real_strokes.
+    # Uses the Concept2 ``stroke_data`` flag as the source-of-truth; this
+    # matches the condition in build_races_data.has_real_strokes and
+    # correctly classifies short pieces (e.g. 100m) where the API returns
+    # only a handful of real stroke samples.
     with_strokes: list = []
     without_strokes: list = []
     for w in sorted_racing_workouts:
         raw = raw_by_id.get(str(w["id"]), [])
-        if len(raw) > 20:
+        if w.get("stroke_data") and raw:
             with_strokes.append(w)
         else:
             without_strokes.append(w)
@@ -409,6 +412,7 @@ def _results_table(workouts: list, etype: str, pb_id: int | None) -> None:
         cols,
         paginate=False,
         highlight=lambda w: w["id"] == pb_id,
+        searchable=False,
     )
 
 

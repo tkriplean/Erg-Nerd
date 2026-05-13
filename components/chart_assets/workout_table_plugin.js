@@ -170,8 +170,18 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     }
 
     /* Multi-line cell content (e.g. Main Work). */
-    .cell .lines { display: flex; flex-direction: column; flex-align: center; gap: 0.1rem; width: 100%; }
-    .cell .lines > div { font-size: var(--sl-font-size-small); }
+    .cell .lines { display: flex; flex-direction: column; flex-align: center; gap: 0.1rem; width: 100%; min-width: 0; }
+    .cell .lines > div { font-size: var(--sl-font-size-small); overflow-wrap: anywhere; }
+
+    /* Wide variable-length text columns: let content wrap inside the column
+       instead of forcing the grid track wider than its minmax() floor. */
+    .cell.col-main_work,
+    .cell.col-structure,
+    .cell.col-workout_structure,
+    .cell.col-structure_filter {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
 
     /* Pagination count suffix — workout-specific extension to the shared
        .pagination block (defined in table_shared.js). */
@@ -290,7 +300,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     .rank-btn:hover { background: var(--sl-color-neutral-100); border-radius: 4px; }
     .rank-btn .row { display: inline-flex; gap: 0.3rem; align-items: center; justify-content: center; }
     .rank-num { font-family: var(--sl-font-mono, monospace); text-align: right; font-size: var(--sl-font-size-small); }
-    .rank-of  { font-size: var(--sl-font-size-x-small); text-align: center; }
+    .rank-of  { font-size: var(--sl-font-size-small); text-align: center; padding-left: 3px;}
 
     .pct-whole { font-size: var(--sl-font-size-large); font-weight: 600; }
     .pct-tenth { font-size: var(--sl-font-size-x-small); color: var(--sl-color-neutral-500); padding-top: 0.1rem; }
@@ -781,6 +791,15 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     });
   }
 
+  // Visual expand state for a session row.  Mirrors the union in the render
+  // loop so chevron rotation, parent "view" link suppression, and parent
+  // main-work summary suppression all agree with the row's actual visibility.
+  // ``_autoExpandSessions`` is rebuilt each filter pass; renderers only run
+  // afterwards, so this read is always fresh.
+  function _isExpandedNow(sid) {
+    return state.expanded.has(sid) || _autoExpandSessions.has(sid);
+  }
+
   // ── Cell renderers ────────────────────────────────────────────────────────
   const RENDERERS = {
     text(r, col) {
@@ -795,7 +814,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       // (the children's own View links carry the user to the right
       // place).
       if (r._row_kind === "session") {
-        if (state.expanded.has(r.session_id)) {
+        if (_isExpandedNow(r.session_id)) {
           return document.createDocumentFragment();
         }
         const target = r._view_target_id;
@@ -818,7 +837,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
         class: "tree-date" + (manual ? " manually-added" : ""),
       });
       if (r._row_kind === "session" && (r._member_count || 1) > 1) {
-        const open = state.expanded.has(r.session_id);
+        const open = _isExpandedNow(r.session_id);
         const chev = el("span",
           { class: "tree-chevron" + (open ? " open" : ""),
             onClick: (ev) => {
@@ -946,7 +965,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
         // When the session is expanded, the children (with gap rows in
         // between) tell the full story — the parent's main-work summary
         // becomes redundant noise, so hide it.
-        if (state.expanded.has(r.session_id)) return document.createDocumentFragment();
+        if (_isExpandedNow(r.session_id)) return document.createDocumentFragment();
         const lines = r._main_work_lines || [];
         if (!lines.length) return text("");
         const wrap = el("div", { class: "lines" });
@@ -1626,12 +1645,13 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
 
   // True iff `term` matches `row` directly (without descending into
   // children — caller handles tree-mode parent/child fallthrough).
+  //
+  // Numeric / interval terms ("5k", "2000m", "1hr", "4x4") are treated as
+  // strict numeric queries — the substring text match against the haystack
+  // is skipped so unrelated rows whose comments happen to contain "5k"
+  // don't leak in.  The fuzzy ±10 % variant is opt-in via leading "~".
   function _termMatchesNode(term, row) {
     const lower = term.toLowerCase();
-    // Substring match: strip a leading "~" so the numeric-only modifier
-    // doesn't have to appear in the haystack to land a hit.
-    const textTerm = lower.length > 1 && lower[0] === "~" ? lower.slice(1) : lower;
-    if (textTerm && _hayFor(row).indexOf(textTerm) !== -1) return true;
     const parsed = _parseTerm(lower);
     if (parsed.kind === "number") {
       const targets = _numTargets(parsed.num, parsed.unit);
@@ -1648,6 +1668,11 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       }
       return false;
     }
+    // Plain text term: substring match against the per-row haystack.
+    // A leading "~" is stripped here too so the modifier doesn't have to
+    // appear literally in the haystack.
+    const textTerm = lower.length > 1 && lower[0] === "~" ? lower.slice(1) : lower;
+    if (textTerm && _hayFor(row).indexOf(textTerm) !== -1) return true;
     return false;
   }
 
@@ -1879,8 +1904,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       pageRows = [];
       for (const p of pageParents) {
         pageRows.push(p);
-        const expanded = state.expanded.has(p.session_id)
-          || _autoExpandSessions.has(p.session_id);
+        const expanded = _isExpandedNow(p.session_id);
         if (expanded && Array.isArray(p._children)) {
           for (const c of p._children) pageRows.push(c);
         }
@@ -1918,7 +1942,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     // Header
     for (const col of state.cols) {
       const align = "align-" + (col.align || "center");
-      const cell = el("div", { class: `cell hdr ${align}` });
+      const cell = el("div", { class: `cell hdr col-${col.key} ${align}` });
 
       // In tree mode, the date column needs a chevron-spacer prefix in its
       // header so the "Date" label aligns with the chevroned content below.
@@ -1996,7 +2020,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
           !state.treeMode || row._row_kind === "session"
         );
         const manualCls = flagDateCell ? " manually-added" : "";
-        const cls = `cell row-cell ${align}${bgCls}${childCls}${gapCls}${internalCls}${manualCls}`
+        const cls = `cell row-cell col-${col.key} ${align}${bgCls}${childCls}${gapCls}${internalCls}${manualCls}`
           + (isEnd ? " end" : "");
         const cell = el("div", { class: cls });
         const renderer = isGap

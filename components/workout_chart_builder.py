@@ -241,6 +241,13 @@ def _interval_colors(n: int) -> list:
     return [f"hsl({round(220 - i * 190 / (n - 1))}, 75%, 55%)" for i in range(n)]
 
 
+# Strokes within this onset window from the start of a piece (or work
+# interval) are excluded from y-axis bound calculations.  The catch
+# strokes at the start are physiologically unrepresentative and would
+# otherwise stretch the pace / SPM / HR axes well beyond the useful range.
+ONSET_S = 4.0
+
+
 def _slow_end_cap(
     points: list,
     bands: list,
@@ -274,7 +281,7 @@ def _slow_end_cap(
 
     if work_bands:
         for b in work_bands:
-            lo, hi = b["xMin"], b["xMax"]
+            lo, hi = b["xMin"] + ONSET_S, b["xMax"]
             in_band = [
                 p["y"] for p in points if p["y"] is not None and lo <= p["x"] <= hi
             ]
@@ -288,7 +295,11 @@ def _slow_end_cap(
             avgs.append(compute_watts(pace_s) if show_watts else pace_s)
 
     for cs in compare_series or []:
-        ys = [p["y"] for p in (cs.get("pace_points") or []) if p["y"] is not None]
+        ys = [
+            p["y"]
+            for p in (cs.get("pace_points") or [])
+            if p["y"] is not None and p["x"] >= ONSET_S
+        ]
         if ys:
             avgs.append(sum(ys) / len(ys))
 
@@ -976,7 +987,7 @@ def build_stroke_chart_config(
     # HR axis uses the same data-driven approach as SPM (lo_floor=40).
 
     if wtype in INTERVAL_WORKOUT_TYPES and bands:
-        work_ranges = [(b["xMin"], b["xMax"]) for b in bands if b.get("work")]
+        work_ranges = [(b["xMin"] + ONSET_S, b["xMax"]) for b in bands if b.get("work")]
         y_pace = [
             p["y"]
             for p in pace_pts
@@ -993,22 +1004,30 @@ def build_stroke_chart_config(
             if p["y"] is not None and any(lo <= p["x"] <= hi for lo, hi in work_ranges)
         ]
     else:
-        y_pace = [p["y"] for p in pace_pts if p["y"] is not None]
-        y_spm = [p["y"] for p in spm_pts if p["y"] is not None]
-        y_hr = [p["y"] for p in hr_pts if p["y"] is not None]
+        y_pace = [
+            p["y"] for p in pace_pts if p["y"] is not None and p["x"] >= ONSET_S
+        ]
+        y_spm = [p["y"] for p in spm_pts if p["y"] is not None and p["x"] >= ONSET_S]
+        y_hr = [p["y"] for p in hr_pts if p["y"] is not None and p["x"] >= ONSET_S]
 
     # Extend y ranges so compared-workout lines aren't clipped.
     if has_compares:
         for cs in compare_series:
             y_pace.extend(
-                p["y"] for p in (cs.get("pace_points") or []) if p["y"] is not None
+                p["y"]
+                for p in (cs.get("pace_points") or [])
+                if p["y"] is not None and p["x"] >= ONSET_S
             )
             y_spm.extend(
-                p["y"] for p in (cs.get("spm_points") or []) if p["y"] is not None
+                p["y"]
+                for p in (cs.get("spm_points") or [])
+                if p["y"] is not None and p["x"] >= ONSET_S
             )
             if cs.get("has_hr"):
                 y_hr.extend(
-                    p["y"] for p in (cs.get("hr_points") or []) if p["y"] is not None
+                    p["y"]
+                    for p in (cs.get("hr_points") or [])
+                    if p["y"] is not None and p["x"] >= ONSET_S
                 )
 
     pace_y_min_full, pace_y_max_full = _pad(

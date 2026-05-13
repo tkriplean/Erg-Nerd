@@ -4,7 +4,10 @@ Rankings-browser modal for the Rank Page.
 Renders a paginated dialog listing the ranking pool for one event, with the
 user's row highlighted. Opens to the page containing the logged-in (or
 public-profile) rower's rank by default; users can step through pages via
-the navigation controls.
+the navigation controls. The user's row also auto-scrolls into the center
+of the rows container via the embedded `RankUserAnchor` plugin, so the
+highlighted row is visible without manual scrolling when the modal opens
+or switches to a different ranking.
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ from typing import Optional
 import hyperdiv as hd
 
 from services.formatters import fmt_split, format_time, fmt_distance
+from components.rank_user_anchor_plugin import RankUserAnchor
 
 
 def _season_label(season) -> str:
@@ -117,6 +121,10 @@ def render_rankings_modal(
     page_lo = cur_page * page_size
     page_hi = min(total, page_lo + page_size)
 
+    # Signature for the user-row scroll anchor: changes when the modal
+    # switches to a different ranking, mirroring the page-state reset above.
+    anchor_sig = f"{event_kind}:{event_value}:{user_idx}"
+
     with dialog:
         with hd.box(gap=0.5, width="100%"):
             with hd.hbox(gap=3, align="center", justify="center"):
@@ -176,6 +184,9 @@ def render_rankings_modal(
                             hd.text(fmt_split(pt) if pt else "—", width="5rem")
                             hd.text(result, width="6rem")
                             hd.text(entry.get("verified", ""), width="5rem")
+                            if is_user:
+                                with hd.scope("anchor"):
+                                    RankUserAnchor(signature=anchor_sig)
 
 
 def _render_pagination(

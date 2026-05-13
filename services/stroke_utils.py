@@ -497,13 +497,15 @@ def build_races_data(
         # stroke-level data is not available.
         avg_spm = int(w.get("stroke_rate") or 0)
 
-        # has_real_strokes: True only when the cached stroke list came from the
-        # Concept2 API (not synthesised from split data).  Synthesised lists have
-        # very few points (~2 × number of splits), so the SMOOTH_WIN smoothing
-        # window would span the whole piece and produce an incorrectly low SPM.
-        # We require > 20 points as a proxy for "real" stroke data.
+        # has_real_strokes: True when the Concept2 API claims stroke-level
+        # data for this workout AND we have non-empty cached strokes.  The
+        # JS animation uses this flag to drive stroke-cadence playback
+        # instead of the avg_spm fallback.  Using the API flag (rather than
+        # a length threshold) keeps short pieces like 100m sprints — whose
+        # real stroke counts are well below typical race volumes — on the
+        # right side of the classification.
         cached_strokes = strokes_by_id.get(key, []) if key else []
-        has_real_strokes = len(cached_strokes) > 20
+        has_real_strokes = bool(w.get("stroke_data")) and len(cached_strokes) > 0
 
         boats.append(
             {

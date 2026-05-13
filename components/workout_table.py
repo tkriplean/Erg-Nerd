@@ -246,7 +246,9 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
     "rank_event": ColumnDef(
         "rank_event", "Event", "7rem", format="rank_event", default_asc=True
     ),
-    "rank_date": ColumnDef("rank_date", "Date", "9rem", format="rank_date"),
+    "rank_date": ColumnDef(
+        "rank_date", "Date", "minmax(9rem, 1fr)", format="rank_date"
+    ),
     "rank_age": ColumnDef("rank_age", "Age", "4rem", format="rank_age"),
     "rank_age_group": ColumnDef(
         "rank_age_group", "Age Group", "6rem", format="rank_age_group"
