@@ -956,8 +956,9 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
       // Render content only in the Main Work column; every other cell
       // for a gap row is empty (cells still exist so the grid lines up).
       if (col.key !== "main_work") return null;
-      return el("span", { class: "gap-text" },
-        `${fmtDurationReadable(r._gap_seconds, false)} gap`);
+      const secs = Math.max(0, Math.round(r._gap_seconds || 0));
+      const text = secs === 0 ? "0s" : fmtDurationReadable(secs, false);
+      return el("span", { class: "gap-text" }, `${text} gap`);
     },
 
     main_work_lines(r) {

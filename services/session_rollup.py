@@ -43,9 +43,9 @@ Gap rows
 --------
 ``_children`` interleaves synthetic ``{"_row_kind": "gap"}`` rows between
 consecutive workouts so the expanded view shows how much wall-clock time
-elapsed between pieces.  Gaps under ``_GAP_MIN_S`` (30 s) collapse — the
-threshold filters out trivial pauses (settings menu, water sip) that
-would only add visual noise.
+elapsed between pieces.  A gap row is emitted for every consecutive pair,
+including back-to-back pieces (rendered as ``"0s gap"``).  Negative gaps
+from timestamp rounding are clamped to 0.
 """
 
 from __future__ import annotations
@@ -276,33 +276,28 @@ def _build_children_with_gaps(roles, sid: str) -> list[dict]:
 
     A gap row is a synthetic dict with ``_row_kind="gap"`` carrying the
     elapsed wall-clock seconds between the previous workout's end and
-    the next workout's start.  Gaps under ``_GAP_MIN_S`` collapse — there's
-    no point telling the user about a 12-second pause that's just the
-    rower's settings menu.
+    the next workout's start.  A row is emitted for every consecutive
+    pair; back-to-back pieces produce a ``_gap_seconds: 0.0`` row that
+    renders as ``"0s gap"``.  Negative values (timestamp rounding) clamp
+    to 0.
     """
     out: list[dict] = []
     prev_end = None
     for i, (role, w) in enumerate(roles):
         start, end = _workout_start_end(w)
         if prev_end is not None and start is not None:
-            gap_s = (start - prev_end).total_seconds()
-            if gap_s >= _GAP_MIN_S:
-                out.append({
-                    "_row_kind": "gap",
-                    "_session_id": sid,
-                    "_gap_seconds": gap_s,
-                    "id": f"__gap__{sid}__{i}",
-                })
+            gap_s = max(0.0, (start - prev_end).total_seconds())
+            out.append({
+                "_row_kind": "gap",
+                "_session_id": sid,
+                "_gap_seconds": gap_s,
+                "id": f"__gap__{sid}__{i}",
+            })
         out.append({
             **w, "_row_kind": "workout", "_session_id": sid, "_role": role,
         })
         prev_end = end
     return out
-
-
-#: Gap rows under this threshold collapse — too short to be interesting
-#: and just adds visual noise between back-to-back workouts.
-_GAP_MIN_S = 30.0
 
 
 def _parent_from_session(

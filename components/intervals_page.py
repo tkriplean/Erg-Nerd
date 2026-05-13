@@ -30,7 +30,10 @@ row-4 sprints as red, etc.  "Other" cells (uncommon combinations) fall
 back to a neutral grey.  Text is forced white in both themes.  Selection
 rides on a thick white border rather than a colour change, so the cell's
 expected-intensity colour stays visible.  Multi-cell selection = OR
-union — the table filters to workouts in any selected cell.
+union — the table filters to workouts in any selected cell.  A
+``Cells:`` chip row above the table mirrors the current selection: each
+selected cell gets a primary ×-chip, plus a ``Clear all`` button when
+two or more are active.
 
 Info panel (below the grid)
 ---------------------------
@@ -997,6 +1000,39 @@ def intervals_page() -> None:
                         size="small",
                     ).clicked:
                         state.structure_filter = None
+
+            # Active-cell filter chips — one per selected grid cell.
+            if state.active_cells:
+                with hd.hbox(
+                    gap=0.75, wrap="wrap", align="center", padding=(0.5, 0, 0, 0)
+                ):
+                    hd.text("Cells:", font_size="small", font_color="neutral-500")
+                    for k in state.active_cells:
+                        with hd.scope(k):
+                            ci_str, ri_str = k.split(",")
+                            ci, ri = int(ci_str), int(ri_str)
+                            info = _cell_info(ri, ci)
+                            if info:
+                                chip_label = f"{info['name']}  ×"
+                            else:
+                                col_lbl = _DUR_COLS[ci][0]
+                                row_lbl = _RATIO_ROWS[ri][0]
+                                chip_label = f"Other · {col_lbl} · {row_lbl}  ×"
+                            if hd.button(
+                                chip_label,
+                                variant="primary",
+                                size="small",
+                            ).clicked:
+                                sel = set(state.active_cells)
+                                sel.discard(k)
+                                state.active_cells = tuple(sorted(sel))
+                    if len(state.active_cells) >= 2:
+                        if hd.button(
+                            "Clear all",
+                            variant="default",
+                            size="small",
+                        ).clicked:
+                            state.active_cells = ()
 
             with hd.box(align="center", justify="space-between", padding=(0.5, 0)):
                 hd.h2("Workouts")
