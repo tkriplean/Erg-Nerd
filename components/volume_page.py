@@ -86,7 +86,7 @@ from services.erg_stress import SEVERITY_STYLE
 from components.app_context import get_profile
 from components.volume_chart_builder import build_volume_chart_config, get_period_rows
 from components.volume_chart_plugin import VolumeChart
-from components.hyperdiv_extensions import grid_box
+from components.hyperdiv_extensions import grid_box, radio_group
 from components.data_table import DataTable
 from components.shared_ui import global_filter_ui
 
@@ -550,8 +550,30 @@ def _volume_section(
 
         # ── Chart ────────────────────────────────────────────────────────────────
         if chart_config:
-            with hd.box(height="42vh", width="100%"):
-                VolumeChart(config=chart_config)
+            with hd.hbox(align="center", width="100%"):
+                with hd.box(align="center", gap=0.5):
+                    with radio_group(
+                        value=state.value_mode,
+                        size="small",
+                    ) as val_rg:
+                        with hd.box(gap=0):
+                            hd.radio_button(
+                                "Meters",
+                                value="meters",
+                                width="100%",
+                                button_style=hd.style(border_radius="0px"),
+                            )
+                            hd.radio_button(
+                                "%",
+                                value="percent",
+                                width="100%",
+                                button_style=hd.style(border_radius="0px"),
+                            )
+                    if val_rg.changed:
+                        state.value_mode = val_rg.value
+
+                with hd.box(height="42vh", width="100%"):
+                    VolumeChart(config=chart_config)
         else:
             with hd.box(padding=3, align="center"):
                 hd.text(
@@ -562,16 +584,6 @@ def _volume_section(
 
         # ── Controls row ─────────────────────────────────────────────────────────
         with hd.hbox(gap=3, align="center", padding=(0, 0, 1, 0), wrap="wrap"):
-            # Y-axis units (meters vs % of period)
-            with hd.radio_buttons(
-                value=state.value_mode,
-                font_size="small",
-            ) as val_rg:
-                hd.radio_button("Meters", value="meters")
-                hd.radio_button("%", value="percent")
-            if val_rg.changed:
-                state.value_mode = val_rg.value
-
             # View radio group (Weekly / Monthly / Seasonal)
             with hd.radio_buttons(
                 value=state.view,

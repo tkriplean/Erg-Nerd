@@ -33,6 +33,7 @@ from components.app_context import get_profile, AppContext
 from components.reference_watts_loader import reference_watts_loader
 from components.shared_ui import global_filter_ui, header_dropdown
 from components.spread_quality_legends import workout_filter_bar, SpreadSeverityFilters
+from components.hyperdiv_extensions import radio_group
 from services.heartrate_utils import resolve_max_hr
 from services.reference_watts import get_reference_watts
 from services.workout_filters import apply_workout_filters
@@ -513,26 +514,37 @@ def workouts_page() -> None:
 
 
             # ── Plugin ────────────────────────────────────────────────────────────────
-            chart = WorkoutsChart(
-                points=pts,
-                target_window_start=target_start,
-                target_window_end=target_end,
-                is_dark=hd.theme().is_dark,
-                show_watts=state.show_watts,
-                height="75vh",
-            )
+            with hd.hbox(align="center", width="100%"):
+                with hd.box(align="center", gap=0.5):
+                    with radio_group(
+                        value="watts" if state.show_watts else "pace",
+                        size="small",
+                    ) as metric_rg:
+                        with hd.box(gap=0):
+                            hd.radio_button(
+                                "Pace",
+                                value="pace",
+                                width="100%",
+                                button_style=hd.style(border_radius="0px"),
+                            )
+                            hd.radio_button(
+                                "Watts",
+                                value="watts",
+                                width="100%",
+                                button_style=hd.style(border_radius="0px"),
+                            )
+                    if metric_rg.changed:
+                        state.show_watts = metric_rg.value == "watts"
 
-            # ── Controls ───────────────────────────────────────────────────────────────
-
-            with hd.hbox(gap=2, align="center", wrap="wrap", padding_bottom=1):
-
-                with hd.radio_group(
-                    value="Watts" if state.show_watts else "Pace"
-                ) as metric_rg:
-                    hd.radio_button("Pace", size="small")
-                    hd.radio_button("Watts", size="small")
-                if metric_rg.changed:
-                    state.show_watts = metric_rg.value == "Watts"
+                with hd.box(width="100%"):
+                    chart = WorkoutsChart(
+                        points=pts,
+                        target_window_start=target_start,
+                        target_window_end=target_end,
+                        is_dark=hd.theme().is_dark,
+                        show_watts=state.show_watts,
+                        height="75vh",
+                    )
 
             # ── Sync window bounds from brush drags / resizes ─────────────────────────
             if chart.change_id != state.last_change_id:
