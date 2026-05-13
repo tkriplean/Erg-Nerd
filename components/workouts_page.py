@@ -32,7 +32,7 @@ from components.workout_table import WorkoutTable
 from components.app_context import get_profile, AppContext
 from components.reference_watts_loader import reference_watts_loader
 from components.shared_ui import global_filter_ui, header_dropdown
-from components.spread_quality_legends import spread_severity_legends, SpreadSeverityFilters
+from components.spread_quality_legends import workout_filter_bar, SpreadSeverityFilters
 from services.heartrate_utils import resolve_max_hr
 from services.reference_watts import get_reference_watts
 from services.workout_filters import apply_workout_filters
@@ -548,8 +548,6 @@ def workouts_page() -> None:
                     _prefix = f"/u/{_ctx.user_id}" if _ctx.is_public else ""
                     hd.location().go(path=f"{_prefix}/workout/{chart.clicked_workout_id}")
 
-            # ── Spread + Severity legend (Power Spread / HR Spread / Severity) ────────
-            spread_severity_legends(max_hr)
 
             # ── Workouts-in-view table ────────────────────────────────────────────────
             in_window = [
@@ -564,6 +562,10 @@ def workouts_page() -> None:
 
                 with hd.box(padding=(2, 0, 0, 0), align="center", width="100%"):
                     hd.h2(f"Sessions in View")
+
+                    # ── Filter bar (Severity / Power Engaged & Trained / HR Zone) ──
+                    workout_filter_bar(max_hr)
+
                     WorkoutTable(
                         in_window,
                         [

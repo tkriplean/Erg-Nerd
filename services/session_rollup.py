@@ -39,6 +39,19 @@ Each member of a multi-workout session is tagged ``"warmup"`` /
 * all-zero scores (no power data) → every workout marked main, so the
   parent row aggregates over everything rather than nothing
 
+Spread aggregation
+------------------
+Power Spread (``_zone_time_fractions`` / ``_zone_bin_fractions``) on the
+session row is the work-seconds-weighted combination of every main's
+per-band fractions — see :func:`_combine_zone_time_fractions`.
+
+HR Spread (``_hr_bin_meters`` / ``_hr_spread_score``) is the elementwise
+sum of every main's HR-zone bin vector, with ``_hr_spread_score``
+recomputed from the combined vector — see :func:`_combine_hr_bin_meters`.
+
+The avg-HR ``heart_rate`` display still passes through the most-severe
+main.
+
 Gap rows
 --------
 ``_children`` interleaves synthetic ``{"_row_kind": "gap"}`` rows between
@@ -59,6 +72,8 @@ from services.formatters import (
     format_time,
     pace_tenths,
 )
+from services.heartrate_utils import hr_spread_score
+from services.volume_bins import zone_fractions_to_bin_list
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +227,60 @@ def _effective_spm(w: dict) -> Optional[float]:
     return float(sr) if sr else None
 
 
+def _combine_zone_time_fractions(mains: list[dict]) -> Optional[dict]:
+    """Work-seconds-weighted aggregate of mains' ``_zone_time_fractions``.
+
+    Each main's per-band fraction is scaled by its work-seconds, summed per
+    band across mains, then re-normalised by total work-seconds.  Equivalent
+    to running :func:`services.erg_stress.compute_workout_zone_summary` over
+    the concatenated work-seconds of every main — fractions are
+    count/total_work_seconds, so multiplying by work-seconds recovers raw
+    counts that re-normalise exactly.
+
+    Returns ``None`` when no main has a usable spread (missing fractions,
+    zero work-seconds, or all-zero fractions).
+    """
+    totals: dict[int, float] = {}
+    total_work_s = 0.0
+    for m in mains:
+        fractions = m.get("_zone_time_fractions")
+        if not fractions:
+            continue
+        work_s = _work_seconds(m)
+        if work_s <= 0 or sum(fractions.values()) <= 0:
+            continue
+        for band, frac in fractions.items():
+            band_i = int(band)
+            totals[band_i] = totals.get(band_i, 0.0) + float(frac) * work_s
+        total_work_s += work_s
+    if total_work_s <= 0:
+        return None
+    return {band: w / total_work_s for band, w in totals.items()}
+
+
+def _combine_hr_bin_meters(mains: list[dict]) -> Optional[tuple]:
+    """Elementwise sum of mains' ``_hr_bin_meters`` vectors.
+
+    Each main's HR-zone bin vector is in absolute meters (not fractions),
+    so combining is a straight per-bin sum.  Equivalent to running
+    :func:`services.heartrate_utils.workout_hr_meters` over the
+    concatenation of every main's distance.
+
+    Returns ``None`` when no main has HR-bin data.
+    """
+    n = 7
+    totals = [0.0] * n
+    any_data = False
+    for m in mains:
+        hrm = m.get("_hr_bin_meters")
+        if hrm is None:
+            continue
+        for i in range(n):
+            totals[i] += float(hrm[i] or 0)
+        any_data = True
+    return tuple(totals) if any_data else None
+
+
 # ---------------------------------------------------------------------------
 # Main Work line generation
 # ---------------------------------------------------------------------------
@@ -314,10 +383,21 @@ def _parent_from_session(
     children = _build_children_with_gaps(roles, sid)
     mains = [w for role, w in roles if role in ("main", "single")]
 
-    # Most-severe main — used for spread placeholders and View link target.
+    # Most-severe main — used for the View link target and the avg
+    # ``heart_rate`` display.
     most_severe = max(
         mains, key=lambda m: (m.get("_severity_score") or -1.0)
     ) if mains else (workouts[0] if workouts else {})
+
+    # Combined Power Spread — work-seconds-weighted across all mains.  See
+    # ``_combine_zone_time_fractions`` for the math; equivalent to
+    # classifying every main's work-seconds as one piece.
+    combined_zone_fractions = _combine_zone_time_fractions(mains)
+
+    # Combined HR Spread — per-bin meter sum across all mains.  Bin meters
+    # are absolute, so the score recomputes cleanly from the combined
+    # vector via ``hr_spread_score``.
+    combined_hr_bin_meters = _combine_hr_bin_meters(mains)
 
     # Stimulus aggregate — max dose per band across all mains.  A session
     # row should flag a system as stimulated if *any* of its workouts hit
@@ -423,14 +503,18 @@ def _parent_from_session(
         "_drag": drag_avg,
         "_spm": spm_avg,
 
-        # ── Zone Spread placeholders (most-severe main) ──────────────
-        # Carry the most-severe-main's zone time fractions and bin-aligned
-        # list onto the parent row so the JS Watts cell can render the
-        # session-row's stacked Zone Spread bar.
-        "_zone_time_fractions": most_severe.get("_zone_time_fractions"),
-        "_zone_bin_fractions": most_severe.get("_zone_bin_fractions"),
-        "_hr_spread_score": most_severe.get("_hr_spread_score"),
-        "_hr_bin_meters": most_severe.get("_hr_bin_meters"),
+        # ── Zone Spread (combined across all mains) ──────────────────
+        # Both Power Spread and HR Spread are aggregated across every
+        # main so the session-row's stacked bars reflect the full session,
+        # not just the most-severe piece.  ``heart_rate`` (avg HR display)
+        # still passes through the most-severe main.
+        "_zone_time_fractions": combined_zone_fractions,
+        "_zone_bin_fractions": (
+            zone_fractions_to_bin_list(combined_zone_fractions)
+            if combined_zone_fractions else None
+        ),
+        "_hr_bin_meters": combined_hr_bin_meters,
+        "_hr_spread_score": hr_spread_score(combined_hr_bin_meters),
         "heart_rate": most_severe.get("heart_rate"),
 
         # ── Session severity / ESS / strain — from _ess_session_summary

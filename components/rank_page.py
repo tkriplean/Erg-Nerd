@@ -809,6 +809,7 @@ def _columns_for(focus: str, machine: str) -> list:
             "rank_wr_pct_pace",
             "rank_wr_pct_watts",
             "rank_wr_pace",
+            "link",
         ]
 
     if focus == "c2_age_group":
@@ -823,6 +824,7 @@ def _columns_for(focus: str, machine: str) -> list:
             "rank",
             "rank_percentile",
             "rank_distribution",
+            "link",
         ]
 
     return [
@@ -835,6 +837,7 @@ def _columns_for(focus: str, machine: str) -> list:
         "rank",
         "rank_percentile",
         "rank_distribution",
+        "link",
     ]
 
 

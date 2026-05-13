@@ -462,7 +462,7 @@ SEVERITY_THRESHOLDS: tuple[tuple[str, float], ...] = (
     ("Maximal", float("inf")),
 )
 
-SEVERITY_ORDER: dict[str, int] = {"Low": 0, "Moderate": 1, "High": 2, "Maximal": 3}
+SEVERITY_ORDER: dict[str, int] = {"Low": 3, "Moderate": 2, "High": 1, "Maximal": 0}
 
 #: Per-bucket visual style for table cells / chips.
 SEVERITY_STYLE: dict[str, dict] = {

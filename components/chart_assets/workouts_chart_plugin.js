@@ -89,6 +89,13 @@ window.hyperdiv.registerPlugin("WorkoutsChart", (ctx) => {
   ctx.domElement.appendChild(style);
 
   // ── DOM ────────────────────────────────────────────────────────────────────
+
+  const mainWrap = document.createElement("div");
+  mainWrap.className = "main-wrap";
+  const mainCanvas = document.createElement("canvas");
+  mainWrap.appendChild(mainCanvas);
+  ctx.domElement.appendChild(mainWrap);
+
   const overviewWrap = document.createElement("div");
   overviewWrap.className = "overview-wrap";
   const overviewCanvas = document.createElement("canvas");
@@ -104,13 +111,6 @@ window.hyperdiv.registerPlugin("WorkoutsChart", (ctx) => {
   handleRight.style.display = "none";
   overviewWrap.appendChild(handleRight);
   ctx.domElement.appendChild(overviewWrap);
-
-  const mainWrap = document.createElement("div");
-  mainWrap.className = "main-wrap";
-  const mainCanvas = document.createElement("canvas");
-  mainWrap.appendChild(mainCanvas);
-  ctx.domElement.appendChild(mainWrap);
-
 
   // ── State ──────────────────────────────────────────────────────────────────
   let points       = ctx.initialProps.points || [];

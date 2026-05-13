@@ -49,18 +49,30 @@ Grid placement rules:
 - Work:rest ratio: sum(work times) / sum(rest_time fields + rest-type iv times)
   (internally stored as rest/work; rows represent work:rest as displayed)
 
-Legends & filters
------------------
-The Power Spread + HR Spread + Severity legend stack is shared with the
-Workouts page; see :mod:`components.spread_quality_legends` for the chip
-rendering and tooltip content.  The three legends combine **disjunctively
-(OR) within** themselves and **conjunctively across** with each other and
-with the grid-cell selection.
+Filter bar
+----------
+A compact filter bar — shared with the Workouts page via
+:mod:`components.spread_quality_legends` — sits between the 2D grid and
+the table.  Four multi-select dropdowns:
 
-The HR legend's chip row is hidden when the user has no max HR resolvable;
-a short note points to the Profile page.  The Severity legend always
-renders (workouts with no severity score are excluded when any chip is
-selected).
+    [Severity ▼]   Power Zones (?) [Engaged ▼] [Trained ▼]   [HR Zone ▼]
+
+*Engaged* filters by Power Spread (workouts with ≥10% work-time in the
+band's EMA); *Trained* filters by Stimulus (workouts where the band's
+EMA crossed the ≥0.50× Partial+ dose threshold).  Both are independent
+filters; Trained is usually a subset of Engaged but they compose freely.
+The (?) icon next to the Power Zones label explains the distinction.
+
+Selecting any chip switches its dropdown button to ``primary`` variant
+with an active count, and adds an × chip in the active-filter row below
+the dropdowns.  Clicking the × chip clears that single selection; a
+``Clear all`` button appears when ≥2 chips are active.
+
+Filters combine **disjunctively (OR) within** a dropdown and
+**conjunctively across** dropdowns and the grid-cell selection.  The HR
+Zone dropdown is replaced by a "Set max HR in Profile" hint when no max
+HR is resolvable.  Workouts with no severity score / no stimulus doses
+are excluded when any chip in those dimensions is selected.
 
 Table
 -----
@@ -120,7 +132,7 @@ from components.workout_table import WorkoutTable, always_white
 from components.app_context import get_profile, your, AppContext
 from components.shared_ui import global_filter_ui
 from components.spread_quality_legends import (
-    spread_severity_legends,
+    workout_filter_bar,
     SpreadSeverityFilters,
 )
 
@@ -980,7 +992,7 @@ def intervals_page() -> None:
             # 2D grid browser — counts reflect pace/HR/structure filters
             _grid_browser(pre_filtered, state)
 
-            spread_severity_legends(max_hr)
+            workout_filter_bar(max_hr)
 
             # Apply cell filter on top of already pace/HR/structure filtered
             active_cells = frozenset(state.active_cells)

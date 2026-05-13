@@ -48,7 +48,13 @@ def prediction_table(
         f"Predicts +{pauls_k:.1f} s/500m for each doubling of distance "
         f"({_poss_lower} personalised value), applied from each anchor PB and averaged."
     )
-    _PRED_COLS = [("pb", f"{_poss} PB", f"{_poss} personal best for each event.")]
+    _PRED_COLS = [
+        (
+            "pb",
+            f"{_poss} PB",
+            f"{_poss} personal best for each event over the selected time period.",
+        )
+    ]
     for _p in PREDICTORS:
         if _p.key == "none":
             continue

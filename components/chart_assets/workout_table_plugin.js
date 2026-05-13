@@ -300,7 +300,7 @@ window.hyperdiv.registerPlugin("WorkoutTable", (ctx) => {
     .rank-btn:hover { background: var(--sl-color-neutral-100); border-radius: 4px; }
     .rank-btn .row { display: inline-flex; gap: 0.3rem; align-items: center; justify-content: center; }
     .rank-num { font-family: var(--sl-font-mono, monospace); text-align: right; font-size: var(--sl-font-size-small); }
-    .rank-of  { font-size: var(--sl-font-size-small); text-align: center; padding-left: 3px;}
+    .rank-of  { font-family: var(--sl-font-mono, monospace); font-size: var(--sl-font-size-small); text-align: center; padding-left: 3px;}
 
     .pct-whole { font-size: var(--sl-font-size-large); font-weight: 600; }
     .pct-tenth { font-size: var(--sl-font-size-x-small); color: var(--sl-color-neutral-500); padding-top: 0.1rem; }
