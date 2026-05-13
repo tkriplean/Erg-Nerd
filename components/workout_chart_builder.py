@@ -84,7 +84,7 @@ def _time_weighted_hr(
 
 
 def build_interval_rows_and_bands(
-    intervals: list, strokes: Optional[list] = None
+    intervals: list, strokes: Optional[list] = None, *, workout_id=None
 ) -> tuple:
     """
     Single source of truth for the interval → (rows, bands) transformation.
@@ -101,6 +101,10 @@ def build_interval_rows_and_bands(
     ``heart_rate.average`` field is unreliable.  Falls back to the API value
     when fewer than 3 stroke samples land in the window.
 
+    ``workout_id`` is only used to label the diagnostic print emitted when
+    the recomputed HR falls outside the API's reported [min, max] for an
+    interval — a sentinel for a known but not-yet-reproduced miscompute.
+
     Returns
     -------
     rows : list of dicts for _table_frame() / _interval_row() in workout_page
@@ -115,9 +119,16 @@ def build_interval_rows_and_bands(
     elapsed_s = 0.0
 
     # Pre-extract (t_seconds, hr) pairs for time-weighted HR aggregation.
+    # Stitch defensively: the Concept2 API resets t to 0 at each interval
+    # boundary, so a raw stroke list contains overlapping t ranges across
+    # intervals.  Without stitching, the per-interval window filter below
+    # would match strokes from multiple intervals (including rest periods),
+    # producing averages well below the API's reported min.  Stitching is
+    # idempotent on already-stitched data.
     stroke_t_hr: list[tuple[float, float]] = []
     if strokes:
-        for s in strokes:
+        stitched = _stitch_interval_times(strokes, intervals=intervals)
+        for s in stitched:
             t_s = (s.get("t") or 0) / 10.0
             hr = s.get("hr")
             if hr:
@@ -129,7 +140,8 @@ def build_interval_rows_and_bands(
         dur_s = t / 10.0
         d = iv.get("distance") or 0
         pace_t = (t * 500 / d) if d else None
-        hr = (iv.get("heart_rate") or {}).get("average")
+        hr_meta = iv.get("heart_rate") or {}
+        hr = hr_meta.get("average")
 
         if stroke_t_hr:
             xMin = elapsed_s
@@ -137,6 +149,28 @@ def build_interval_rows_and_bands(
             recomputed = _time_weighted_hr(stroke_t_hr, xMin, xMax)
             if recomputed is not None:
                 hr = recomputed
+                # Diagnostic: flag when the recomputed value falls outside the
+                # API's reported [min, max] for this interval.  Sentinel for
+                # the not-yet-reproduced bug where the intervals-table HR
+                # column shows values below the interval's stroke minimum.
+                hr_min = hr_meta.get("min")
+                hr_max = hr_meta.get("max")
+                if (
+                    hr_min is not None
+                    and hr_max is not None
+                    and not (hr_min <= recomputed <= hr_max)
+                ):
+                    n_in_win = sum(
+                        1 for tt, _ in stroke_t_hr if xMin <= tt <= xMax
+                    )
+                    wid = f" wid={workout_id}" if workout_id is not None else ""
+                    print(
+                        f"[HR-bug]{wid} interval #{work_idx + 1}: "
+                        f"API min/avg/max={hr_min}/{hr_meta.get('average')}/{hr_max}, "
+                        f"recomputed={recomputed:.1f}, "
+                        f"strokes_in_window={n_in_win}, "
+                        f"window=[{xMin:.1f}s, {xMax:.1f}s]"
+                    )
 
         # ── Work row ────────────────────────────────────────────────────────
         rows.append(
@@ -307,7 +341,9 @@ def _build_bands(
     splits = wo.get("splits")
 
     if intervals and wtype in INTERVAL_WORKOUT_TYPES:
-        _, bands = build_interval_rows_and_bands(intervals, strokes)
+        _, bands = build_interval_rows_and_bands(
+            intervals, strokes, workout_id=(workout or {}).get("id")
+        )
         return bands
 
     if custom_splits and strokes and workout is not None:

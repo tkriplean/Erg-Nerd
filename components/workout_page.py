@@ -54,7 +54,16 @@ from services.heartrate_utils import (
     resolve_max_hr,
 )
 from services.volume_bins import BAND_TO_BIN, BIN_COLORS, BIN_NAMES
-from services.erg_stress import ZONE_BANDS_S, stimulus_category_label
+from services.erg_stress import (
+    SEVERITY_DEFINITION_TEXT,
+    SEVERITY_FILTER_TEXT,
+    SEVERITY_ORDER,
+    SEVERITY_STYLE,
+    SEVERITY_THRESHOLDS,
+    ZONE_BANDS_S,
+    stimulus_category_label,
+)
+from components.spread_quality_legends import legend_chip
 from components.add_metrics import add_metrics
 
 from components.workout_chart_builder import (
@@ -559,7 +568,9 @@ def _intervals_table(
     ``recalculate_interval_sub_splits``).  Sub-rows are non-focusable and
     do not shift the parent row index.
     """
-    rows, _ = build_interval_rows_and_bands(intervals, strokes)
+    rows, _ = build_interval_rows_and_bands(
+        intervals, strokes, workout_id=(workout or {}).get("id")
+    )
 
     # Detect HR data across work rows only
     has_hr = any(r.get("hr_avg") for r in rows if not r.get("_is_rest"))
@@ -1190,6 +1201,118 @@ def _render_similar_workouts(workout, all_workouts, max_hr, profile, state):
             )
 
 
+def _render_prior_training(workout, all_workouts, state):
+    """Render the Prior Training tab.
+
+    Shows a tree-mode workout table of workouts up to and including the
+    current workout, filterable by severity bucket via a chip group.
+    Defaults to ``Maximal`` severity selected so the table reads as "prior
+    PB-territory sessions leading up to today's effort."  Releasing all
+    chips disables the severity filter (show everything).
+    """
+    is_dark = hd.theme().is_dark
+    current_day = workout.get("day")
+    current_sid = workout.get("session_id")
+    active_severity: set[str] = set(state.prior_training_severity)
+
+    with hd.box(align="center", gap=1, width="100%"):
+        # ── Severity chip filter ─────────────────────────────────────────
+        with hd.hbox(
+            gap=0.75,
+            align="center",
+            padding=(0, 0, 0.5, 0),
+            wrap="wrap",
+            justify="center",
+        ):
+            hd.text(
+                "Severity",
+                font_size="small",
+                font_weight="bold",
+                font_color="neutral-600",
+                min_width=7,
+            )
+            for label, _upper in SEVERITY_THRESHOLDS:
+                with hd.scope(f"prior_severity_{label}"):
+                    color_rgba = SEVERITY_STYLE[label]["bg"]
+                    color_str = (
+                        f"rgba({color_rgba[0]},{color_rgba[1]},{color_rgba[2]},"
+                        f"{color_rgba[3]})"
+                    )
+                    clicked = legend_chip(
+                        name=label,
+                        color_str=color_str,
+                        is_active=label in active_severity,
+                        definition=SEVERITY_DEFINITION_TEXT[label],
+                        filter_rule=SEVERITY_FILTER_TEXT[label],
+                    )
+                    if clicked:
+                        sel = set(state.prior_training_severity)
+                        if label in sel:
+                            sel.discard(label)
+                        else:
+                            sel.add(label)
+                        state.prior_training_severity = tuple(
+                            sorted(sel, key=lambda q: SEVERITY_ORDER[q])
+                        )
+
+        # ── Filter workouts ──────────────────────────────────────────────
+        # severity_bucket is set by add_metrics, so we have to compute it
+        # before filtering by severity.  Pre-filter by day first to limit
+        # the metric-enrichment workload to relevant rows.
+        candidates: list = []
+        for w in all_workouts:
+            day = w.get("day")
+            if not day or (current_day and day > current_day):
+                continue
+            candidates.append(w)
+
+        try:
+            add_metrics(candidates, with_timeline=True)
+        except Exception:
+            pass
+
+        if active_severity:
+            prior_rows = [
+                w for w in candidates
+                if w.get("_severity") in active_severity
+            ]
+        else:
+            prior_rows = candidates
+
+        if not prior_rows:
+            hd.text(
+                "No prior workouts match the selected filter.",
+                font_color="neutral-500",
+                font_size="small",
+            )
+            return
+
+        # ── Table ────────────────────────────────────────────────────────
+        cols = [
+            "date",
+            "main_work",
+            "work_duration",
+            "pace",
+            "watts",
+            "spm",
+            "hr",
+            "severity",
+            "stimulus",
+            {"key": "link", "current_id": str(workout["id"])},
+        ]
+        WorkoutTable(
+            prior_rows,
+            cols,
+            default_sort_col="date",
+            default_sort_asc=False,
+            highlight=lambda r: str(r.get("id")) == str(workout["id"]),
+            tree_mode=True,
+            sessions_dict=AppContext().sessions_dict,
+            searchable=False,
+            default_expanded_session_ids=([current_sid] if current_sid else []),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Time-of-day override editor (for manually-added workouts)
 # ---------------------------------------------------------------------------
@@ -1726,7 +1849,10 @@ def workout_page(workout_id: int) -> None:
         show_hr=False,  # show HR in stacked / compare mode
         compared_workouts=(),  # tuple[int,...] of other workout ids to overlay
         last_click_seq=0,  # last chart.click_seq we've processed
-        active_tab="Full Session",  # "Full session" | "Similar workouts"
+        active_tab="Full Session",  # "Full Session" | "Similar Workouts" | "Prior Training"
+        prior_training_severity=(
+            "Maximal",
+        ),  # tuple[str] of selected severity buckets on Prior Training tab
     )
 
     # ── Pre-fetch workout list (task-cached; free on repeat renders) ────────
@@ -2053,9 +2179,12 @@ def workout_page(workout_id: int) -> None:
                         if edit_btn.clicked:
                             state.show_splits_modal = True
                         if has_strokes:
-                            ranked_btn = hd.button(
-                                "Ranked events", variant="text", size="small"
-                            )
+                            with hd.tooltip("Best splits at ranked distances"):
+                                ranked_btn = hd.icon_button(
+                                    "trophy",
+                                    font_size="small",
+                                    font_color="neutral-400",
+                                )
                             if ranked_btn.clicked:
                                 state.show_ranked_modal = True
 
@@ -2113,10 +2242,16 @@ def workout_page(workout_id: int) -> None:
                 tabs = hd.tab_group(
                     "Full Session",
                     "Similar Workouts",
+                    "Prior Training",
                     font_size="x-large",
                     font_weight="bold",
                 )
                 if tabs.active and tabs.active != state.active_tab:
+                    if (
+                        state.active_tab == "Similar Workouts"
+                        and tabs.active != "Similar Workouts"
+                    ):
+                        state.compared_workouts = ()
                     state.active_tab = tabs.active
 
             with hd.box(padding_top=1, gap=2, width="100%"):
@@ -2193,6 +2328,9 @@ def workout_page(workout_id: int) -> None:
                     _render_similar_workouts(
                         workout, all_workouts, max_hr, profile, state
                     )
+
+                elif _active == "Prior Training":
+                    _render_prior_training(workout, all_workouts, state)
 
         # ── Custom-splits modal ──────────────────────────────────────────
         # The dialog is created at this top level so its component state
