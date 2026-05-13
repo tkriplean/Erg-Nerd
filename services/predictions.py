@@ -44,8 +44,7 @@ from typing import Optional
 from scipy.optimize import brentq
 
 from services.rowing_utils import (
-    ranked_distances,
-    ranked_times,
+    event_order,
     PACE_MIN,
     PACE_MAX,
     loglog_fit,
@@ -344,7 +343,7 @@ def rowinglevel_pace_at(
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-# Short display labels — resolved per machine via ranked_distances().
+# Short display labels — resolved per machine via event_order().
 
 
 def _fmt_pred(
@@ -567,29 +566,11 @@ def build_prediction_table_data(
             "pb_raw": pb_raw,
         }
 
-    # ── Distance events ───────────────────────────────────────────────────────
-    dist_labels = {d: lbl for d, lbl in ranked_distances(machine)}
-    for dist_m, _ in ranked_distances(machine):
-        rows.append(_build_row("dist", dist_m, dist_labels.get(dist_m, f"{dist_m:,}m")))
-
-    # ── Timed events ──────────────────────────────────────────────────────────
-    for time_tenths, label in ranked_times(machine):
-        rows.append(_build_row("time", time_tenths, label))
-
-    # ── Sort all rows by expected duration (mixes distance and timed events) ─────
-    # Distance event duration: derived from log-log prediction if available, else
-    # uses a typical default pace of 110 sec/500m as a fallback.
-    # Timed event duration: event_value / 10 (tenths → seconds, direct).
-    _FALLBACK_PACE = 110.0  # sec/500m — reasonable middle-of-road estimate
-
-    def _expected_duration_s(row: dict) -> float:
-        if row["event_type"] == "time":
-            return row["event_value"] / 10.0
-        # Distance event
-        pace = row.get("loglog_raw") or _FALLBACK_PACE
-        return row["event_value"] * pace / 500.0
-
-    rows.sort(key=_expected_duration_s)
+    # ── One row per canonical ranked event, in power-duration order ───────────
+    # Shares the ordering used by the Rank page x-axis / data table, the Power
+    # Curve events dropdown, and the Race page event dropdown.
+    for etype, evalue, label in event_order(machine):
+        rows.append(_build_row(etype, evalue, label))
 
     # ── Accuracy: RMSE + R² per model vs actual PB, over enabled events ──
     # When selected_dist_set / selected_time_set are None, every event counts.

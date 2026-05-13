@@ -34,6 +34,7 @@ from services.rowing_utils import (
     apply_best_only,
     apply_quality_filters,
     apply_season_best_only,
+    apply_stimulus_severity_filter,
     compute_featured_workouts,
     is_rankable_noninterval,
     season_color,
@@ -68,7 +69,11 @@ class WorkoutView:
     """One object, four stages.
 
     Stage 1 — quality_efforts: workouts matching the machine filter, passing
-        rankability + quality gates, with excluded-seasons removed.
+        rankability + quality gates + the stimulus/severity gate (drop pieces
+        that are neither Maximal severity nor carry any Partial+ training
+        stimulus), with excluded-seasons removed.  The stimulus/severity gate
+        requires that ``add_metrics`` has run on ``raw_workouts`` so
+        ``_severity`` and ``_stimulus_doses`` are populated.
     Stage 2 — efforts_filtered_by_event: stage 1 ∩ selected distances/times.
     Stage 3 — efforts_filtered_by_event_and_display: stage 2 after applying
         the best_filter ("All"|"PBs"|"SBs") — the list shown in chart + table.
@@ -107,6 +112,7 @@ def build_workout_view(raw_workouts: list, filters: FilterSpec) -> WorkoutView:
         and w["season"] not in excl
     ]
     quality = apply_quality_filters(quality)
+    quality = apply_stimulus_severity_filter(quality)
     all_seasons = tuple(seasons_from(quality))
 
     # Stage 2 — filter by selected distance/time events.

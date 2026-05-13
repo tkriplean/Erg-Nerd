@@ -138,7 +138,9 @@ class ColumnDef:
 
 COLUMN_REGISTRY: dict[str, ColumnDef] = {
     # ── Workout columns ─────────────────────────────────────────────────
-    "date": ColumnDef("date", "Date", "115px", format="date", align="start"),
+    "date": ColumnDef(
+        "date", "Date", "minmax(115px,1fr)", format="date", align="start"
+    ),
     "type": ColumnDef("type", "Type", "7rem", format="type"),
     "distance": ColumnDef(
         "distance", "Distance", "7rem", format="distance", align="end"

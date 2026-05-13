@@ -43,15 +43,12 @@ from __future__ import annotations
 import hyperdiv as hd
 
 from services.rowing_utils import (
-    ranked_distances,
-    ranked_times,
-    ranked_dist_set,
-    ranked_time_set,
     age_from_dob,
     age_on_date,
     apply_best_only,
     apply_season_best_only,
     compute_watts,
+    event_order,
     profile_complete,
     seasons_from,
     is_rankable_noninterval,
@@ -101,60 +98,6 @@ _FOCUS_LABELS = {
     "c2_age_group": "C2 Age Group Peers",
     "world_record": "World Record",
 }
-
-# Ordered list used by the chart x-axis (left → right) — interleaved by typical
-# event duration so adjacent points sit close in power-duration space.
-_EVENT_ORDER_BY_MACHINE: dict[str, list[tuple[str, int, str]]] = {
-    "rower": [
-        ("dist", 100, "100m"),
-        ("time", 600, "1 min"),
-        ("dist", 500, "500m"),
-        ("dist", 1000, "1k"),
-        ("time", 2400, "4 min"),
-        ("dist", 2000, "2k"),
-        ("dist", 5000, "5k"),
-        ("dist", 6000, "6k"),
-        ("time", 18000, "30 min"),
-        ("dist", 10000, "10k"),
-        ("time", 36000, "60 min"),
-        ("dist", 21097, "½ Marathon"),
-        ("dist", 42195, "Marathon"),
-        ("dist", 100000, "100k"),
-    ],
-    "skierg": [
-        ("dist", 100, "100m"),
-        ("time", 600, "1 min"),
-        ("dist", 500, "500m"),
-        ("dist", 1000, "1k"),
-        ("time", 2400, "4 min"),
-        ("dist", 2000, "2k"),
-        ("dist", 5000, "5k"),
-        ("dist", 6000, "6k"),
-        ("time", 18000, "30 min"),
-        ("dist", 10000, "10k"),
-        ("time", 36000, "60 min"),
-        ("dist", 21097, "½ Marathon"),
-        ("dist", 42195, "Marathon"),
-        ("dist", 100000, "100k"),
-    ],
-    "bikeerg": [
-        ("dist", 200, "200m"),
-        ("time", 600, "1 min"),
-        ("dist", 500, "500m"),
-        ("dist", 1000, "1k"),
-        ("dist", 4000, "4k"),
-        ("dist", 10000, "10k"),
-        ("time", 18000, "30 min"),
-        ("dist", 20000, "20k"),
-        ("time", 36000, "60 min"),
-        ("dist", 40000, "40k"),
-        ("dist", 100000, "100k"),
-    ],
-}
-
-
-def _event_order(machine: str) -> list[tuple[str, int, str]]:
-    return _EVENT_ORDER_BY_MACHINE.get(machine, _EVENT_ORDER_BY_MACHINE["rower"])
 
 
 def _event_key(etype: str, evalue: int) -> str:
@@ -225,7 +168,7 @@ def _load_name_counts(machine: str) -> dict:
     if cache_key in _NAME_AGG_CACHE:
         return _NAME_AGG_CACHE[cache_key]
     counts: dict = {}
-    for et, ev, _ in _event_order(machine):
+    for et, ev, _ in event_order(machine):
         try:
             for e in iter_event_entries(et, ev, machine=machine):
                 n = e.get("name")
@@ -496,7 +439,7 @@ def _build_rows(
 
 
 def _event_label(etype: str, evalue: int, machine: str) -> str:
-    for et, ev, lbl in _event_order(machine):
+    for et, ev, lbl in event_order(machine):
         if et == etype and ev == evalue:
             return lbl
     return f"{etype}:{evalue}"
@@ -504,19 +447,19 @@ def _event_label(etype: str, evalue: int, machine: str) -> str:
 
 def _build_series(rows: list[dict], state, machine: str) -> tuple[list, list]:
     """Return (event_order_prop, series_prop) for the RankChart."""
-    event_order = [
+    event_order_prop = [
         {"key": _event_key(et, ev), "label": lbl}
-        for et, ev, lbl in _event_order(machine)
+        for et, ev, lbl in event_order(machine)
     ]
 
     if state.ranking_focus == "world_record":
-        return event_order, _build_wr_series(rows, state)
+        return event_order_prop, _build_wr_series(rows, state)
 
     # Percentile series: one per season for SBs, one combined for PBs.
     if state.include_filter == "PBs":
         ages = [r["age"] for r in rows]
         pts = [_pct_point(r) for r in rows if r.get("rank_total")]
-        return event_order, [
+        return event_order_prop, [
             {
                 "label": f"Personal Bests · Ages {_fmt_ages(ages)}",
                 "color": _palette_hsla(0, 0, 0.9),
@@ -548,7 +491,7 @@ def _build_series(rows: list[dict], state, machine: str) -> tuple[list, list]:
                 "points": pts,
             }
         )
-    return event_order, series
+    return event_order_prop, series
 
 
 def _duration_seconds(r: dict) -> float:
@@ -785,9 +728,7 @@ def rank_page() -> None:
 
 
 def _event_order_idx(machine: str) -> dict:
-    return {
-        _event_key(et, ev): i for i, (et, ev, _) in enumerate(_event_order(machine))
-    }
+    return {_event_key(et, ev): i for i, (et, ev, _) in enumerate(event_order(machine))}
 
 
 def _annotate_display_metadata(rows: list[dict], *, is_dark: bool) -> None:
@@ -1065,7 +1006,7 @@ def _render_filters_dropdown(state, machine: str = "rower") -> None:
                     )
                     with hd.box(gap=0.25, padding_left=0.5):
                         current = set(state.modifier_must_have_events or ())
-                        for et, ev, lbl in _event_order(machine):
+                        for et, ev, lbl in event_order(machine):
                             key = _event_key(et, ev)
                             with hd.scope(f"mh_{key}"):
                                 cb = hd.checkbox(lbl, checked=key in current)

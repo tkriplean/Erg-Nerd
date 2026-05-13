@@ -123,6 +123,108 @@ def workout_machine(w: dict) -> str:
     """
     return _resolve_machine(w.get("machine") or w.get("type"))
 
+
+# ---------------------------------------------------------------------------
+# Canonical event ordering — power-duration interleaved
+# ---------------------------------------------------------------------------
+# Single source of truth for ordering events across the app:
+#   * Rank page x-axis + data table
+#   * Power Curve "All Events" dropdown
+#   * Race page event dropdown
+#   * Predicted Performances table
+# Events are interleaved by typical duration so adjacent entries sit close in
+# power-duration space.
+
+_EVENT_ORDER_BY_MACHINE: dict[str, list[tuple[str, int, str]]] = {
+    "rower": [
+        ("dist", 100, "100m"),
+        ("time", 600, "1 min"),
+        ("dist", 500, "500m"),
+        ("dist", 1000, "1k"),
+        ("time", 2400, "4 min"),
+        ("dist", 2000, "2k"),
+        ("dist", 5000, "5k"),
+        ("dist", 6000, "6k"),
+        ("time", 18000, "30 min"),
+        ("dist", 10000, "10k"),
+        ("time", 36000, "60 min"),
+        ("dist", 21097, "½ Marathon"),
+        ("dist", 42195, "Marathon"),
+        ("dist", 100000, "100k"),
+    ],
+    "skierg": [
+        ("dist", 100, "100m"),
+        ("time", 600, "1 min"),
+        ("dist", 500, "500m"),
+        ("dist", 1000, "1k"),
+        ("time", 2400, "4 min"),
+        ("dist", 2000, "2k"),
+        ("dist", 5000, "5k"),
+        ("dist", 6000, "6k"),
+        ("time", 18000, "30 min"),
+        ("dist", 10000, "10k"),
+        ("time", 36000, "60 min"),
+        ("dist", 21097, "½ Marathon"),
+        ("dist", 42195, "Marathon"),
+        ("dist", 100000, "100k"),
+    ],
+    "bikeerg": [
+        ("dist", 200, "200m"),
+        ("time", 600, "1 min"),
+        ("dist", 500, "500m"),
+        ("dist", 1000, "1k"),
+        ("dist", 4000, "4k"),
+        ("dist", 10000, "10k"),
+        ("time", 18000, "30 min"),
+        ("dist", 20000, "20k"),
+        ("time", 36000, "60 min"),
+        ("dist", 40000, "40k"),
+        ("dist", 100000, "100k"),
+    ],
+}
+
+
+def event_order(machine: Optional[str] = None) -> list[tuple[str, int, str]]:
+    """Canonical power-duration-interleaved order: ``[(event_type, event_value, label), ...]``.
+
+    The single source of truth for event ordering across the app — Rank page
+    x-axis + data table, Power Curve events dropdown, Race page event dropdown,
+    and the Predicted Performances table.
+    """
+    return _EVENT_ORDER_BY_MACHINE[_resolve_machine(machine)]
+
+
+# ---------------------------------------------------------------------------
+# Stimulus / severity filter
+# ---------------------------------------------------------------------------
+
+# Mirrors the "partial" floor in services.erg_stress.STIMULUS_CATEGORIES — the
+# dose at which a band starts to count as a measurable training stimulus.
+_STIMULUS_PARTIAL_FLOOR = 0.50
+
+
+def apply_stimulus_severity_filter(workouts: list) -> list:
+    """Drop workouts that are neither Maximal severity nor carry any training stimulus.
+
+    Keep when:
+      * ``_severity == "Maximal"``, **or**
+      * any band in ``_stimulus_doses`` has a dose ≥ 0.50 (Partial floor).
+
+    Requires that ``add_metrics`` has run so ``_severity`` and ``_stimulus_doses``
+    are populated; workouts without these fields are excluded (no measurable
+    stress ⇒ not a great effort).
+    """
+    out: list = []
+    for w in workouts:
+        if w.get("_severity") == "Maximal":
+            out.append(w)
+            continue
+        doses = w.get("_stimulus_doses") or {}
+        if any(d >= _STIMULUS_PARTIAL_FLOOR for d in doses.values()):
+            out.append(w)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Quality-filter constants
 # ---------------------------------------------------------------------------

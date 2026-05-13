@@ -53,6 +53,7 @@ from services.rowing_utils import (
     workout_machine,
     apply_best_only,
     age_from_dob,
+    event_order,
     is_30r20,
 )
 from services.formatters import format_time, fmt_split
@@ -69,6 +70,7 @@ from services.global_state import GlobalFilters
 from components.app_context import get_profile
 from services.rowing_utils import (
     apply_quality_filters,
+    apply_stimulus_severity_filter,
     is_rankable_noninterval,
     profile_complete,
 )
@@ -477,6 +479,16 @@ def race_page() -> None:
     rankable_efforts = [w for w in all_workouts if is_rankable_noninterval(w)]
     rankable_efforts = apply_quality_filters(rankable_efforts)
 
+    # ── Stimulus/severity gate (same strategy as Performance page) ───────────
+    # Drop pieces that are neither Maximal severity nor carry any Partial+
+    # training stimulus.  Requires add_metrics first so ``_severity`` and
+    # ``_stimulus_doses`` are populated; cache makes re-renders cheap.
+    try:
+        add_metrics(rankable_efforts, with_timeline=False)
+    except Exception:
+        pass
+    rankable_efforts = apply_stimulus_severity_filter(rankable_efforts)
+
     # ── Compute available events ──────────────────────────────────────────────
     gstate = GlobalFilters()
     machine = gstate.machine
@@ -495,19 +507,18 @@ def race_page() -> None:
         if is_30r20(w) and d not in dist_set:
             r20_count += 1
 
+    # Build in canonical power-duration order — shared with the Rank page,
+    # Power Curve dropdown, and the predictions table.
     available_events: list = []
-    for dist, _ in ranked_distances(machine):
-        if event_counts.get(("dist", dist), 0) > 0:
-            available_events.append(("dist", dist))
-    r20_added = False
-    for tenths, _ in ranked_times(machine):
-        if event_counts.get(("time", tenths), 0) > 0:
-            available_events.append(("time", tenths))
-            if tenths == 18000 and r20_count > 0:
+    for etype, evalue, _ in event_order(machine):
+        if etype == "dist" and event_counts.get(("dist", evalue), 0) > 0:
+            available_events.append(("dist", evalue))
+        elif etype == "time" and event_counts.get(("time", evalue), 0) > 0:
+            available_events.append(("time", evalue))
+            if evalue == 18000 and r20_count > 0:
                 available_events.append((EVENT_TYPE_R20, EVENT_VALUE_R20))
-                r20_added = True
     # Surface r20 even when there are no other 30-min pieces in the field.
-    if r20_count > 0 and not r20_added:
+    if r20_count > 0 and (EVENT_TYPE_R20, EVENT_VALUE_R20) not in available_events:
         available_events.append((EVENT_TYPE_R20, EVENT_VALUE_R20))
 
     # Default to first available if current selection has no data

@@ -38,8 +38,15 @@ UI LAYOUT (inside power_curve_page)
       Paul's Law richer description (when PL selected and personalised K available)
 
   RowingLevel profile notice (when profile incomplete, dismissible)
-  Prediction table (CP, Log-Log, Paul's Law, RowingLevel, Average columns)
-  Workout count / result_table()
+  Bottom tabs (border-top, Volume/Workout-page style):
+    "Predicted Performances" (default) — CP, Log-Log, Paul's Law,
+        RowingLevel, Average columns.
+    "<dynamic>" — the workouts table.  Label mirrors the best_filter:
+        "All" → "High Quality Efforts"
+        "SBs" → "{Your/Their} Season Bests"
+        "PBs" → "{Your/Their} Personal Bests"
+    Active tab persists across best_filter changes via active_tab
+    (stored as the stable internal key "predictions" | "bests").
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STATE VARIABLES  (declared at the top of power_curve_page())
@@ -68,6 +75,7 @@ STATE VARIABLES  (declared at the top of power_curve_page())
   last_sim_done      int           tracks chart.sim_done changes to detect animation end
   workout_view       WorkoutView|None  4-stage filtering pipeline result (see power_curve_workouts.py)
   _view_key          tuple         (hash(FilterSpec), workout_count) — invalidates workout_view
+  active_tab         str           "predictions" | "bests" — bottom-tab selection
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SIMULATION / TIMELINE
@@ -122,6 +130,7 @@ import hyperdiv as hd
 from services.rowinglevel import fetch_all_pb_predictions
 from services.rowing_utils import (
     apply_best_only,
+    event_order,
     ranked_distances,
     ranked_times,
     compute_watts,
@@ -825,36 +834,42 @@ def _page_header(
                             ).clicked:
                                 state.dist_enabled = tuple(False for _ in _hdr_dists)
                                 state.time_enabled = tuple(False for _ in _hdr_times)
-                        with hd.hbox(gap=0.5, wrap="wrap"):
-                            for i, (dist, label) in enumerate(_hdr_dists):
-                                with hd.scope(f"dist_{dist} {state.dist_enabled}"):
-                                    cb = hd.checkbox(
-                                        label, checked=state.dist_enabled[i]
-                                    )
-                                    if cb.changed:
-                                        flags = list(state.dist_enabled)
-                                        flags[i] = cb.checked
-                                        state.dist_enabled = tuple(flags)
-                                    if cb.checked != state.dist_enabled[i]:
-                                        cb.checked = state.dist_enabled[i]
-                        hd.text(
-                            "— timed —",
-                            font_color="neutral-300",
-                            font_size="x-small",
-                            padding_top=0.25,
-                        )
-                        with hd.hbox(gap=0.5, wrap="wrap"):
-                            for i, (tenths, label) in enumerate(_hdr_times):
-                                with hd.scope(f"time_{tenths} {state.time_enabled}"):
-                                    cb = hd.checkbox(
-                                        label, checked=state.time_enabled[i]
-                                    )
-                                    if cb.changed:
-                                        flags = list(state.time_enabled)
-                                        flags[i] = cb.checked
-                                        state.time_enabled = tuple(flags)
-                                    if cb.checked != state.time_enabled[i]:
-                                        cb.checked = state.time_enabled[i]
+                        _dist_idx = {d: i for i, (d, _) in enumerate(_hdr_dists)}
+                        _time_idx = {t: i for i, (t, _) in enumerate(_hdr_times)}
+                        with hd.box(gap=0.25):
+                            for etype, evalue, label in event_order(_hdr_machine):
+                                if etype == "dist":
+                                    idx = _dist_idx.get(evalue)
+                                    if idx is None:
+                                        continue
+                                    with hd.scope(
+                                        f"dist_{evalue} {state.dist_enabled}"
+                                    ):
+                                        cb = hd.checkbox(
+                                            label, checked=state.dist_enabled[idx]
+                                        )
+                                        if cb.changed:
+                                            flags = list(state.dist_enabled)
+                                            flags[idx] = cb.checked
+                                            state.dist_enabled = tuple(flags)
+                                        if cb.checked != state.dist_enabled[idx]:
+                                            cb.checked = state.dist_enabled[idx]
+                                else:
+                                    idx = _time_idx.get(evalue)
+                                    if idx is None:
+                                        continue
+                                    with hd.scope(
+                                        f"time_{evalue} {state.time_enabled}"
+                                    ):
+                                        cb = hd.checkbox(
+                                            label, checked=state.time_enabled[idx]
+                                        )
+                                        if cb.changed:
+                                            flags = list(state.time_enabled)
+                                            flags[idx] = cb.checked
+                                            state.time_enabled = tuple(flags)
+                                        if cb.checked != state.time_enabled[idx]:
+                                            cb.checked = state.time_enabled[idx]
 
                 hd.text(
                     f"through {_date_label}",
@@ -927,6 +942,10 @@ class PowerCurveState(hd.BaseState):
     _bounds_data = hd.Prop(hd.Any, None)  # cached (x_bounds, y_bounds)
     _wk_prop_key = hd.Prop(hd.Any, ())  # cache key for workouts/season_meta props
     _wk_prop_data = hd.Prop(hd.Any, None)  # cached (workouts_prop, season_meta_prop)
+    # Bottom-of-page tabs: "predictions" (default) | "bests".  Stored as a
+    # stable internal key — the visible "bests" label is computed dynamically
+    # from best_filter, so persisting the rendered label would desync.
+    active_tab = hd.Prop(hd.String, "predictions")
 
 
 def power_curve_page() -> None:
@@ -961,6 +980,15 @@ def power_curve_page() -> None:
         # snap to a predictor that works there.
         if state.chart_predictor == "rowinglevel" and machine != "rower":
             state.chart_predictor = "average"
+
+    # Severity / stimulus gate in build_workout_view (Stage 1) reads
+    # ``_severity`` and ``_stimulus_doses`` off each workout, so populate
+    # them before the pipeline runs.  The full-corpus call is cheap on
+    # re-render because workout_metrics_cache memoizes per-session.
+    try:
+        add_metrics(sync_result[1], with_timeline=False)
+    except Exception:
+        pass
 
     # Build the workout view — one traversal through all 4 pipeline stages.
     # A single hash(filters) + workout count invalidates the whole pipeline,
@@ -1095,7 +1123,7 @@ def power_curve_page() -> None:
     rl_available = profile_complete(profile) and rl_supported
 
     # ── Render ────────────────────────────────────────────────────────────────
-    with hd.box(gap=5, align="center", padding=2, min_height="80vh"):
+    with hd.box(gap=0, align="center", padding=2, min_height="80vh"):
         with hd.box(width="100%", align="center"):
             _page_header(
                 timeline_date=timeline_date,
@@ -1122,61 +1150,86 @@ def power_curve_page() -> None:
             if not rl_available and rl_supported:
                 _rl_profile_notice()
 
-        with hd.box(align="center"):
-            hd.h2("Predicted Performances")
-            hd.text(
-                "Pace (top) and result — total time for distance events,"
-                " predicted meters for timed events."
-                " Paul's Law and RowingLevel are averaged across all anchor PBs.",
-                font_color="neutral-500",
-                font_size="small",
-                padding_bottom=1,
-            )
+        # Bottom-of-page tabs.  The "bests" tab's display label mirrors the
+        # logic that previously rendered the h2 above the workouts table.
+        from components.app_context import your as _your_local
 
-            prediction_table(
-                pred_rows,
-                accuracy,
-                rl_available=rl_available,
-                pauls_k=pauls_k,
-                machine=machine,
-            )
+        _poss_h2 = _your_local()
+        if state.best_filter == "All":
+            bests_label = "High Quality Efforts"
+        elif state.best_filter == "SBs":
+            bests_label = f"{_poss_h2} Season Bests"
+        else:
+            bests_label = f"{_poss_h2} Personal Bests"
+        predictions_label = "Predicted Performances"
 
-        with hd.box(align="center"):
-            with hd.h2():
-                from components.app_context import your as _your_local
+        with hd.box(
+            width="100%",
+            padding=(1, 1, 2, 1),
+            margin_top=1,
+        ):
+            with hd.hbox(gap=2, align="center", justify="center"):
+                tabs = hd.tab_group(
+                    predictions_label,
+                    bests_label,
+                    font_size="x-large",
+                    font_weight="bold",
+                )
+                if tabs.active:
+                    new_key = (
+                        "predictions" if tabs.active == predictions_label else "bests"
+                    )
+                    if new_key != state.active_tab:
+                        state.active_tab = new_key
 
-                _poss_h2 = _your_local()
-                if state.best_filter == "All":
-                    hd.text("High Quality Efforts")
-                elif state.best_filter == "SBs":
-                    hd.text(f"{_poss_h2} Season Bests")
-                elif state.best_filter == "PBs":
-                    hd.text(f"{_poss_h2} Personal Bests")
-
-            types = {r.get("type") for r in efforts_filtered_by_event_and_display}
-            cols = ["date"]
-            if len(types) > 1:
-                cols.append("type")
-            cols += [
-                "distance",
-                "time",
-                "pace",
-                "watts",
-                "drag",
-                "spm",
-                "hr",
-                # "ess",
-                # "if_eff",
-                "severity",
-                # "anaerobic_strain",
-                # "glycogen_used",
-                "stimulus",
-                "link",
-            ]
-            try:
-                add_metrics(efforts_filtered_by_event_and_display, with_timeline=True)
-            except Exception:
-                # Defensive: if ref-watts haven't loaded, ESS columns
-                # render "—" rather than blocking.
-                pass
-            WorkoutTable(efforts_filtered_by_event_and_display, cols, paginate=False)
+            with hd.box(padding_top=2, gap=2, width="100%", align="center"):
+                active_key = state.active_tab or "predictions"
+                if active_key == "predictions":
+                    # hd.text(
+                    #     "Pace (top) and result — total time for distance events,"
+                    #     " predicted meters for timed events."
+                    #     " Paul's Law and RowingLevel are averaged across all anchor PBs.",
+                    #     font_color="neutral-500",
+                    #     font_size="small",
+                    #     padding_bottom=1,
+                    # )
+                    prediction_table(
+                        pred_rows,
+                        accuracy,
+                        rl_available=rl_available,
+                        pauls_k=pauls_k,
+                        machine=machine,
+                    )
+                else:
+                    types = {
+                        r.get("type") for r in efforts_filtered_by_event_and_display
+                    }
+                    cols = ["date"]
+                    if len(types) > 1:
+                        cols.append("type")
+                    cols += [
+                        "distance",
+                        "time",
+                        "pace",
+                        "watts",
+                        "drag",
+                        "spm",
+                        "hr",
+                        "severity",
+                        "stimulus",
+                        "link",
+                    ]
+                    try:
+                        add_metrics(
+                            efforts_filtered_by_event_and_display, with_timeline=True
+                        )
+                    except Exception:
+                        # Defensive: if ref-watts haven't loaded, ESS columns
+                        # render "—" rather than blocking.
+                        pass
+                    WorkoutTable(
+                        efforts_filtered_by_event_and_display,
+                        cols,
+                        paginate=False,
+                        searchable=False,
+                    )
