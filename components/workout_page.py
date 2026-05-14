@@ -852,6 +852,30 @@ def _interval_dimension(w: dict) -> str:
     return "unknown"
 
 
+# Work fraction >= this counts as "continuous-like": an interval workout with
+# essentially no programmed rest, structurally comparable to a non-interval
+# piece. 0.99 allows encoding noise (e.g. a 1s gap between back-to-back work
+# intervals) but excludes any real rest (5×4'/10" rest is ~0.96 and NOT
+# continuous).
+CONTINUOUS_LIKE_THRESHOLD = 0.99
+
+# Maximum cross-type similarity score. Cross-type pairs scale linearly up to
+# this value (rather than 100) so they sit below typical same-type scores —
+# the structural axes that don't apply across types (work fraction, rep count,
+# distance-per-interval) are missing signal, and the ceiling acknowledges
+# that. Scaling (rather than clamping) preserves relative ordering near the
+# top, so a perfect-pace cross-type match still ranks above a near-miss.
+CROSS_TYPE_SCORE_CEILING = 75.0
+
+
+def _is_continuous_like(w: dict) -> bool:
+    """True for non-interval workouts, or interval workouts with no real rest."""
+    if not w.get("is_interval"):
+        return True
+    _, wf = _interval_volume_and_work_fraction(w)
+    return wf >= CONTINUOUS_LIKE_THRESHOLD
+
+
 def _interval_volume_and_work_fraction(w: dict) -> tuple:
     """Return (total_work_volume, work_fraction).
 
@@ -876,6 +900,45 @@ def _interval_volume_and_work_fraction(w: dict) -> tuple:
     denom = total_work_t + total_rest_t
     work_fraction = (total_work_t / denom) if denom > 0 else 1.0
     return vol, work_fraction
+
+
+def _cross_type_similarity(ref: dict, cand: dict) -> Optional[float]:
+    """Score similarity between an interval and a non-interval workout.
+
+    Caller guarantees exactly one of {ref, cand} is_interval, and the interval
+    side has work_fraction >= CONTINUOUS_LIKE_THRESHOLD. Volume axis is chosen
+    by the interval side's dimension: time-dim → compare top-level time;
+    distance-dim → compare top-level distance. ±20% volume filter.
+    """
+    interval = ref if ref.get("is_interval") else cand
+
+    dim = _interval_dimension(interval)
+    if dim == "time":
+        ref_vol = ref.get("time") or 0
+        cand_vol = cand.get("time") or 0
+    elif dim == "distance":
+        ref_vol = ref.get("distance") or 0
+        cand_vol = cand.get("distance") or 0
+    else:
+        return None
+
+    if not ref_vol or not cand_vol:
+        return None
+    if abs(cand_vol - ref_vol) / ref_vol > 0.20:
+        return None
+
+    volume_term = max(0.0, 1.0 - abs(cand_vol - ref_vol) / (0.20 * ref_vol))
+
+    # Top-level w["pace"] is in seconds (from compute_pace), unlike work_pace
+    # and pace_tenths() which return tenths. No /10 conversion needed here.
+    ref_pace = ref.get("pace")
+    cand_pace = cand.get("pace")
+    if ref_pace is None or cand_pace is None:
+        return None
+    pace_delta_s = abs(cand_pace - ref_pace)
+    pace_term = max(0.0, 1.0 - pace_delta_s / 30.0)
+
+    return CROSS_TYPE_SCORE_CEILING * (volume_term + pace_term) / 2.0
 
 
 def _pick_prior_exact(workout: dict, all_workouts: list) -> Optional[dict]:
@@ -1047,6 +1110,26 @@ def _find_similar(workout: dict, all_workouts: list) -> list:
             row["_similarity"] = (100.0 * sum(terms) / len(terms)) if terms else None
             pool.append(row)
 
+    # Cross-type bridge: continuous-like intervals ↔ non-interval workouts.
+    # Only emit when the *reference* is continuous-like — a rest-bearing
+    # interval is structurally unlike a non-interval piece and shouldn't show
+    # one as "similar". The asymmetry runs through the reference.
+    if _is_continuous_like(workout):
+        already = {row["id"] for row in pool}
+        for w in all_workouts:
+            if w["id"] == wid or w["id"] in already:
+                continue
+            if bool(w.get("is_interval")) == bool(is_interval):
+                continue
+            if not _is_continuous_like(w):
+                continue
+            sim = _cross_type_similarity(workout, w)
+            if sim is None:
+                continue
+            row = dict(w)
+            row["_similarity"] = sim
+            pool.append(row)
+
     pool.sort(
         key=lambda w: w.get("_similarity")
         if w.get("_similarity") is not None
@@ -1129,7 +1212,7 @@ def _render_similar_workouts(workout, all_workouts, max_hr, profile, state):
     similar = _find_similar(workout, all_workouts)
     if similar:
         try:
-            add_metrics(similar, with_timeline=True)
+            add_metrics(similar, with_timeline=False)
         except Exception:
             pass
         with hd.box(align="center"):
@@ -1267,14 +1350,13 @@ def _render_prior_training(workout, all_workouts, state):
             candidates.append(w)
 
         try:
-            add_metrics(candidates, with_timeline=True)
+            add_metrics(candidates, with_timeline=False)
         except Exception:
             pass
 
         if active_severity:
             prior_rows = [
-                w for w in candidates
-                if w.get("_severity") in active_severity
+                w for w in candidates if w.get("_severity") in active_severity
             ]
         else:
             prior_rows = candidates
