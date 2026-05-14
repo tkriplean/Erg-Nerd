@@ -9,6 +9,7 @@ import json
 import math
 import os
 import tempfile
+import datetime
 
 import hyperdiv as hd
 
@@ -307,7 +308,7 @@ def window_bounds_ms(
     window_ms = days * _MS_PER_DAY
 
     if not all_ms:
-        now_ms = int(datetime.now().timestamp() * 1_000)
+        now_ms = int(datetime.datetime.now().timestamp() * 1_000)
         return now_ms - window_ms, now_ms
 
     min_ms = min(all_ms)
@@ -435,10 +436,6 @@ def workouts_page() -> None:
         filtered, sb_ids, show_watts=state.show_watts, color_mode=state.color_mode
     )
 
-    if not pts:
-        hd.text("No workouts match the selected filters.", font_color="neutral-500")
-        return
-
     all_ms = [p["x"] for p in pts]
 
     # ── Compute target window ─────────────────────────────────────────────────
@@ -513,71 +510,75 @@ def workouts_page() -> None:
             #         state.filter_10k = cb_10k.checked
 
 
-            # ── Plugin ────────────────────────────────────────────────────────────────
-            with hd.hbox(align="center", width="100%"):
-                with hd.box(align="center", gap=0.5):
-                    with radio_group(
-                        value="watts" if state.show_watts else "pace",
-                        size="small",
-                    ) as metric_rg:
-                        with hd.box(gap=0):
-                            hd.radio_button(
-                                "Pace",
-                                value="pace",
-                                width="100%",
-                                button_style=hd.style(border_radius="0px"),
-                            )
-                            hd.radio_button(
-                                "Watts",
-                                value="watts",
-                                width="100%",
-                                button_style=hd.style(border_radius="0px"),
-                            )
-                    if metric_rg.changed:
-                        state.show_watts = metric_rg.value == "watts"
+            # ── Plugin (only when there are points to chart) ──────────────────────────
+            if pts:
+                with hd.hbox(align="center", width="100%"):
+                    with hd.box(align="center", gap=0.5):
+                        with radio_group(
+                            value="watts" if state.show_watts else "pace",
+                            size="small",
+                        ) as metric_rg:
+                            with hd.box(gap=0):
+                                hd.radio_button(
+                                    "Pace",
+                                    value="pace",
+                                    width="100%",
+                                    button_style=hd.style(border_radius="0px"),
+                                )
+                                hd.radio_button(
+                                    "Watts",
+                                    value="watts",
+                                    width="100%",
+                                    button_style=hd.style(border_radius="0px"),
+                                )
+                        if metric_rg.changed:
+                            state.show_watts = metric_rg.value == "watts"
 
-                with hd.box(width="100%"):
-                    chart = WorkoutsChart(
-                        points=pts,
-                        target_window_start=target_start,
-                        target_window_end=target_end,
-                        is_dark=hd.theme().is_dark,
-                        show_watts=state.show_watts,
-                        height="75vh",
-                    )
+                    with hd.box(width="100%"):
+                        chart = WorkoutsChart(
+                            points=pts,
+                            target_window_start=target_start,
+                            target_window_end=target_end,
+                            is_dark=hd.theme().is_dark,
+                            show_watts=state.show_watts,
+                            height="75vh",
+                        )
 
-            # ── Sync window bounds from brush drags / resizes ─────────────────────────
-            if chart.change_id != state.last_change_id:
-                state.last_change_id = chart.change_id
-                state.window_end_ms = chart.brush_end
-                state.window_start_ms = chart.brush_start
+                # ── Sync window bounds from brush drags / resizes ─────────────────────
+                if chart.change_id != state.last_change_id:
+                    state.last_change_id = chart.change_id
+                    state.window_end_ms = chart.brush_end
+                    state.window_start_ms = chart.brush_start
 
-            # ── Click-to-open: navigate to /workout/<id> when a chart dot is clicked ──
-            if chart.click_seq > state.last_click_seq:
-                state.last_click_seq = chart.click_seq
-                if chart.clicked_workout_id:
-                    _ctx = AppContext()
-                    _prefix = f"/u/{_ctx.user_id}" if _ctx.is_public else ""
-                    hd.location().go(path=f"{_prefix}/workout/{chart.clicked_workout_id}")
+                # ── Click-to-open: navigate to /workout/<id> on dot click ─────────────
+                if chart.click_seq > state.last_click_seq:
+                    state.last_click_seq = chart.click_seq
+                    if chart.clicked_workout_id:
+                        _ctx = AppContext()
+                        _prefix = f"/u/{_ctx.user_id}" if _ctx.is_public else ""
+                        hd.location().go(path=f"{_prefix}/workout/{chart.clicked_workout_id}")
 
 
-            # ── Workouts-in-view table ────────────────────────────────────────────────
-            in_window = [
-                r
-                for r in filtered_for_table
-                if target_start <= r["date_ms"] <= target_end
-            ]
+            # ── Sessions in View — always renders the filter bar so the user can ──
+            # clear filters even when nothing matches.
+            in_window = (
+                [
+                    r
+                    for r in filtered_for_table
+                    if target_start <= r["date_ms"] <= target_end
+                ]
+                if pts
+                else []
+            )
             in_window.sort(key=lambda r: r["date"], reverse=True)
-            if in_window:
-                in_window_by_id = {str(r["id"]): r for r in in_window}
 
+            with hd.box(padding=(2, 0, 0, 0), align="center", width="100%", gap=1):
+                hd.h2(f"Sessions in View")
 
-                with hd.box(padding=(2, 0, 0, 0), align="center", width="100%"):
-                    hd.h2(f"Sessions in View")
+                # ── Filter bar (Severity / Power Engaged & Trained / HR Zone) ──
+                workout_filter_bar(max_hr)
 
-                    # ── Filter bar (Severity / Power Engaged & Trained / HR Zone) ──
-                    workout_filter_bar(max_hr)
-
+                if in_window:
                     WorkoutTable(
                         in_window,
                         [
@@ -603,4 +604,10 @@ def workouts_page() -> None:
                         tree_mode=True,
                         sessions_dict=AppContext().sessions_dict,
                     )
+                else:
+                    with hd.box(padding=(2, 0, 4, 0), align="center"):
+                        hd.text(
+                            "No workouts match the selected filters.",
+                            font_color="neutral-500",
+                        )
 
