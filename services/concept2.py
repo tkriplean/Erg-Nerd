@@ -483,8 +483,13 @@ class Concept2Client:
                 time.sleep(_PAGE_DELAY)
 
             # Bypass short-lived cache — we manage freshness ourselves.
-            response = self._http.get("/users/me/results", params={"page": page})
-            response.raise_for_status()
+            try:
+                response = self._http.get("/users/me/results", params={"page": page})
+                response.raise_for_status()
+            except:
+                print("[concept2] Could not connect to Concept2")
+                break
+
             data = response.json()
             page_results = data.get("data", [])
             pagination = data.get("meta", {}).get("pagination", {})
@@ -644,6 +649,9 @@ def extract_c2_profile(user_data: dict) -> dict:
         "weight_unit": "kg",
         "weight_class": weight_class,
         "max_heart_rate": max_hr,
+        # Preserved separately so the profile page can flag a mismatch when
+        # the user has overridden ``max_heart_rate`` and the two disagree.
+        "concept2_max_heart_rate": max_hr,
         "display_name": display_name,
         "profile_image": user_data.get("profile_image") or "",
         "fetched_at": time.time(),
