@@ -118,7 +118,7 @@ window.hyperdiv.registerPlugin("VolumeChart", (ctx) => {
         title(items) {
           if (!items.length) return "";
           const idx = items[0].dataIndex;
-          console.log(tooltipTitles[idx]);
+
           if (idx != null && tooltipTitles[idx] != null) {
             return tooltipTitles[idx];
           }

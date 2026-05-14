@@ -89,35 +89,39 @@ from components.workout_table import always_white
 # Top-of-dropdown header — one sentence describing what each filter does.
 _HEADER_DESC = {
     "severity": (
-        "Filter by overall workout severity — peak rolling intensity, "
-        "W' depletion, and glycogen drain combined."
+        "Filter by session severity. Severity is calculated by combining peak "
+        "rolling intensity in different power zones, a measure of anaerobic depletion (W'), "
+        "and an estimate of glycogen depletion."
     ),
     "engaged": (
-        "Filter to workouts that engaged these power systems "
-        "(≥10% of work time in the band's EMA)."
+        "Filter to sessions that engaged these power zones. "
+        "Zones are estimated based on your performances. "
+        "The zones used for a workout you did 5 years ago will be different than "
+        "for one today."
     ),
     "trained": (
-        "Filter to workouts that delivered at least partial training "
-        "stimulus to these systems (dose ≥ 0.50×)."
+        "Filter to sessions that stimulated these systems. Which systems are "
+        "stimulated and the dose is from a combination of severity and time in the corresponding "
+        "power zone (or faster)."
     ),
-    "hr": ("Filter to workouts with meaningful time in these heart-rate " "zones."),
+    "hr": ("Filter to sessions with meaningful time in these heart-rate zones."),
 }
 
 # Brief per-option descriptions shown inline next to the swatch + name.
 _SEVERITY_BRIEF = {
-    "Low": "Below tempo; reservoirs largely intact",
-    "Moderate": "Meaningful intensity but sub-threshold",
-    "High": "Threshold-grade peak, W' debt, or glycogen drain",
-    "Maximal": "Race-pace or PB territory; high recovery demand",
+    "Low": "Low intensity with reservoirs largely intact",
+    "Moderate": "Moderate intensity with little recovery demand",
+    "High": "Significant intensity alongside W' and/or glycogen depletion",
+    "Maximal": "Race-pace territory with high recovery demand",
 }
 
 _POWER_BRIEF = {
-    1: "Very short maximal efforts (~20s)",
-    2: "1–2 min supra-threshold efforts (~90s)",
-    3: "3–8 min VO₂max efforts (~5min)",
-    4: "10–30 min sustained efforts (~20min)",
-    5: "40+ min sub-threshold work (~60min)",
-    6: "60+ min low-intensity base (~2h)",
+    1: "Very short maximal efforts at about your estimated 20s power",
+    2: "Supra-threshold efforts at about your estimated 90s power",
+    3: "VO₂max efforts at about your estimated 5min power",
+    4: "Sustained efforts at about your estimated 20min power",
+    5: "Sub-threshold work at about your estimated 60min power",
+    6: "Low-intensity base work at about your estimated 2hr power",
 }
 
 _TRAINED_BRIEF = {
@@ -247,12 +251,14 @@ def _selector_row(
     the entire row is a click target; ``label_style`` stretches the label
     slot to 100% so the inner hbox can left-align.
     """
-    bg_color = "primary-100" if is_active else "neutral-0"
+    bg_color = "primary-50" if is_active else "neutral-0"
     with hd.button(
         width="100%",
         variant="text",
         border_radius=0,
-        base_style=hd.style(background_color=bg_color),
+        base_style=hd.style(
+            background_color="neutral-0", hover_background_color="primary-50"
+        ),
         label_style=hd.style(
             width="100%",
             # display="flex",
@@ -260,7 +266,13 @@ def _selector_row(
             padding=(0.4, 0.6),
         ),
     ) as row_btn:
-        with hd.hbox(gap=0.6, align="center", width="100%", justify="start"):
+        with hd.hbox(
+            gap=1,
+            align="start",
+            width="100%",
+            justify="start",
+            padding=(0.4, 0, 0.4, 0),
+        ):
             # Check-mark slot — reserves space whether active or not so
             # rows stay column-aligned.
             with hd.box(width=1.2, align="center", justify="center"):
@@ -274,18 +286,21 @@ def _selector_row(
                 src=swatch_svg(color_str, size=12, radius=swatch_radius),
                 width=0.95,
                 height=0.95,
+                padding_top="3px",
             )
-            with hd.box(gap=0.05, align="start"):
+            with hd.box(align="start", padding_right=1):
                 hd.text(
                     name,
                     font_size="small",
                     font_weight="semibold",
                     font_color="neutral-800",
+                    line_height="normal",
                 )
                 hd.text(
                     description,
                     font_size="x-small",
                     font_color="neutral-500",
+                    line_height="normal",
                 )
     return row_btn.clicked
 
@@ -305,24 +320,19 @@ def _filter_dropdown(
     ``items`` is a list of (key, name, color_str, description) tuples.
     """
     count = len(active_keys)
-    label_text = f"{label} ({count})" if count > 0 else label
+    label_text = label  # f"{label} ({count})" if count > 0 else label
 
     with hd.dropdown() as dd:
-        if count > 0:
-            btn = hd.button(
-                label_text,
-                caret=True,
-                size="small",
-                variant="primary",
-                slot=dd.trigger,
-            )
-        else:
-            btn = hd.button(
-                label_text,
-                caret=True,
-                size="small",
-                slot=dd.trigger,
-            )
+        btn = hd.button(
+            label_text,
+            caret=True,
+            size="medium",
+            slot=dd.trigger,
+            border="none",
+            base_style=hd.style(
+                background_color="neutral-50", hover_background_color="primary-100"
+            ),
+        )
         if btn.clicked:
             dd.opened = not dd.opened
 
@@ -330,16 +340,16 @@ def _filter_dropdown(
         with hd.box(
             background_color="neutral-0",
             min_width=22,
-            max_width=32,
+            max_width=28,
             gap=0,
             padding=0,
         ):
-            with hd.box(padding=(0.6, 0.75, 0.5, 0.75)):
+            with hd.box(padding=(0.6, 1, 0.6, 1)):
                 hd.text(
                     header_desc,
-                    font_size="x-small",
-                    font_color="neutral-500",
-                    font_style="italic",
+                    font_size="small",
+                    # font_color="neutral-500",
+                    # font_style="italic",
                 )
             hd.divider(spacing=0)
 
@@ -353,6 +363,7 @@ def _filter_dropdown(
                         swatch_radius=swatch_radius,
                     )
                     if clicked:
+                        dd.opened = not dd.opened
                         on_toggle(key)
 
 
@@ -363,7 +374,9 @@ def _filter_dropdown(
 
 def _severity_items() -> list:
     items = []
-    for label, _upper in SEVERITY_THRESHOLDS:
+    for label, _upper in sorted(
+        SEVERITY_THRESHOLDS, key=lambda x: SEVERITY_ORDER[x[0]]
+    ):
         c = SEVERITY_STYLE[label]["bg"]
         color_str = f"rgba({c[0]},{c[1]},{c[2]},{c[3]})"
         items.append((label, label, color_str, _SEVERITY_BRIEF.get(label, "")))
@@ -425,11 +438,11 @@ def _active_chip(
             base_style=hd.style(background_color=color_rgba),
         ) as btn:
             with hd.hbox(gap=0.4, align="center", justify="center"):
-                hd.image(
-                    src=swatch_svg(color_str, size=10, radius=swatch_radius),
-                    width=0.65,
-                    height=0.65,
-                )
+                # hd.image(
+                #     src=swatch_svg(color_str, size=10, radius=swatch_radius),
+                #     width=0.65,
+                #     height=0.65,
+                # )
                 hd.text(
                     label_text,
                     font_size="small",
@@ -474,7 +487,7 @@ def _active_filter_chips(state: SpreadSeverityFilters, is_dark: bool) -> None:
                 )
 
             _active_chip(
-                label_text=f"Severity · {label}",
+                label_text=f"{label} Severity",
                 color_str=color_str,
                 on_clear=_on_clear,
                 key=f"sev_{label}",
@@ -488,7 +501,7 @@ def _active_filter_chips(state: SpreadSeverityFilters, is_dark: bool) -> None:
                 state.active_bins = _toggle_in_set(state.active_bins, _bi)
 
             _active_chip(
-                label_text=f"Engaged · {name}",
+                label_text=f"{name} Power Zone",
                 color_str=color_str,
                 on_clear=_on_clear,
                 key=f"eng_{bin_idx}",
@@ -506,7 +519,7 @@ def _active_filter_chips(state: SpreadSeverityFilters, is_dark: bool) -> None:
                 )
 
             _active_chip(
-                label_text=f"Trained · {name}",
+                label_text=f"{name} Training Stimulus",
                 color_str=color_str,
                 on_clear=_on_clear,
                 key=f"trn_{band_s}",
@@ -521,7 +534,7 @@ def _active_filter_chips(state: SpreadSeverityFilters, is_dark: bool) -> None:
                 state.active_hr_bins = _toggle_in_set(state.active_hr_bins, _zi)
 
             _active_chip(
-                label_text=f"HR · {name}",
+                label_text=f"{name} HR",
                 color_str=color_str,
                 on_clear=_on_clear,
                 key=f"hr_{zi}",
@@ -576,7 +589,20 @@ def workout_filter_bar(max_hr: int | None) -> None:
     state = SpreadSeverityFilters()
 
     with hd.box(gap=0.25, padding=(0.5, 0, 0.25, 0)):
-        with hd.hbox(align="center", gap=0.5):
+        with hd.hbox(
+            align="center",
+            gap=0.5,
+            border="1px solid neutral-100",
+            border_radius="small",
+            background_color="neutral-50",
+        ):
+            hd.icon(
+                "filter",
+                font_size="large",
+                font_color="neutral-700",
+                padding_left="1rem",
+            )
+
             with hd.button_group():
                 # ── Severity ─────────────────────────────────────────────
                 def _sev_toggle(key):
@@ -617,7 +643,7 @@ def workout_filter_bar(max_hr: int | None) -> None:
                     )
 
                 _filter_dropdown(
-                    label="Trained System",
+                    label="Training Stimulus",
                     header_desc=_HEADER_DESC["trained"],
                     items=_trained_items(is_dark),
                     active_keys=set(state.active_stimulus_bands),
@@ -643,9 +669,6 @@ def workout_filter_bar(max_hr: int | None) -> None:
                     )
                 else:
                     _hr_placeholder()
-
-            # Filter icon on the right
-            hd.icon("funnel", font_size="medium", font_color="neutral-400")
 
         # Active-filter chip row
         _active_filter_chips(state, is_dark)

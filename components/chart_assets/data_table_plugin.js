@@ -89,8 +89,6 @@ window.hyperdiv.registerPlugin("DataTable", (ctx) => {
     defaultSortCol: ctx.initialProps.default_sort_col || "",
     defaultSortAsc: !!ctx.initialProps.default_sort_asc,
   };
-  console.log("LDSDS", state.showAllClicked)
-  console.log(state)
 
   // ── State persistence across remount ─────────────────────────────────────
   // Mirror sort/page/show-all to sessionStorage so a back-button revisit

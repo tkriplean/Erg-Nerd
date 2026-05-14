@@ -992,8 +992,6 @@ def intervals_page() -> None:
             # 2D grid browser — counts reflect pace/HR/structure filters
             _grid_browser(pre_filtered, state)
 
-            workout_filter_bar(max_hr)
-
             # Apply cell filter on top of already pace/HR/structure filtered
             active_cells = frozenset(state.active_cells)
             filtered = _filter_by_cells(pre_filtered, active_cells)
@@ -1047,7 +1045,9 @@ def intervals_page() -> None:
                             state.active_cells = ()
 
             with hd.box(align="center", justify="space-between", padding=(0.5, 0)):
-                hd.h2("Workouts")
+                hd.h2("Interval Workouts")
+
+                workout_filter_bar(max_hr)
 
                 # hd.text(
                 #     f"{total_filtered} workout{'s' if total_filtered != 1 else ''}",

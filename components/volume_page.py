@@ -346,7 +346,6 @@ def _distribution_table(rows: list, view: str, zone_mode: str = "power_spread") 
         ]
 
     with hd.box(padding=(1, 0, 0, 0)):
-        print(len(rows))
         DataTable(
             rows,
             columns,
@@ -737,7 +736,7 @@ def _training_stimulus_tab(workouts: list, is_dark: bool) -> None:
             with grid_box(
                 grid_template_columns="auto 3.5rem 3.5rem 3.5rem", gap="0.5rem 2rem"
             ):
-                hd.text("System", font_size="x-small", font_weight="semibold")
+                hd.text("", font_size="x-small", font_weight="semibold")
                 for col, _floor in _DAYS_SINCE_THRESHOLDS:
                     with hd.scope(f"{col} {_floor}"):
                         hd.text(

@@ -62,7 +62,7 @@ window.hyperdiv.registerPlugin("WorkoutsChart", (ctx) => {
       height: 88px;
       flex-shrink: 0;
       position: relative;
-      border-bottom: 1px solid rgba(128,128,128,0.20);
+      // border-bottom: 1px solid rgba(128,128,128,0.20);
       margin-top: 3px;
       cursor: grab;
       user-select: none;
@@ -241,8 +241,6 @@ window.hyperdiv.registerPlugin("WorkoutsChart", (ctx) => {
       const i = Math.floor(pos), j = Math.ceil(pos);
       return i === j ? sortedY[i] : sortedY[i] + (sortedY[j] - sortedY[i]) * (pos - i);
     };
-
-    console.log(points)
 
     if (showWatts) {
       // Watts: low watts = slow → trim bottom at 2nd percentile; preserve
