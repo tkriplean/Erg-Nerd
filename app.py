@@ -44,6 +44,7 @@ from services.concept2 import (
 )
 from components.experimental_page import experimental_page
 from components.intervals_page import intervals_page
+from components.methods_page import methods_page
 from components.profile_page import profile_page
 from components.power_curve_page import power_curve_page
 from components.race_page import race_page
@@ -210,6 +211,7 @@ _PAGES_ROUTES: dict[str, str] = {
     "Race": "/race",
     "Rank": "/rank",
     "Experimental": "/experimental",
+    "Methods": "/methods",
     "Profile": "/profile",
 }
 _ROUTES_PAGES: dict[str, str] = {v: k for k, v in _PAGES_ROUTES.items()}
@@ -562,6 +564,8 @@ def _dashboard_view(app_state, path_suffix: str | None = None) -> None:
             rank_page()
         elif current_page == "Experimental":
             experimental_page()
+        elif current_page == "Methods":
+            methods_page()
         else:
             # Profile page is owner-only; public-mode requests render 404.
             if is_public:
