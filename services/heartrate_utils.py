@@ -20,7 +20,10 @@ Exported:
 
     is_valid_hr(val, max_hr)        → bool
     estimate_max_hr(workouts)       → int | None
+    estimate_max_hr_with_count(workouts) → (int | None, int)
     resolve_max_hr(profile, workouts) → (int | None, bool)  # (max_hr, is_estimated)
+    stroke_level_candidates(workouts, …) → list[workout]
+    stroke_level_peak_hr(candidates, strokes_by_id) → (int | None, metadata)
     hr_zone_idx(avg_hr, max_hr)     → int 1–5
     workout_hr_meters(workout, max_hr) → list[float]  (7 bins, same shape as workout_zone_meters)
     hr_spread_score(_hr_bin_meters) → float | None  (0–100 weighted average)
@@ -194,7 +197,7 @@ def estimate_max_hr_with_count(workouts: list) -> tuple[Optional[int], int]:
         return None, contributing_workouts
 
     vals.sort()
-    idx = max(0, int(len(vals) * 0.98) - 1)
+    idx = max(0, int(len(vals) * 1) - 1)
     return vals[idx], contributing_workouts
 
 
@@ -218,6 +221,149 @@ def resolve_max_hr(
     if explicit and is_valid_hr(explicit):
         return int(explicit), False
     return estimate_max_hr(workouts), True
+
+
+# ---------------------------------------------------------------------------
+# Stroke-level HRmax estimator (opt-in, runs on user action)
+# ---------------------------------------------------------------------------
+#
+# The split-average percentile estimator above is fast but biased low:
+# split averages are means over 30+ seconds of work, so the within-split
+# peak gets washed out.  When stroke-level data is available (Concept2's
+# per-stroke ``hr`` field on workouts with ``stroke_data=True``) the peak
+# HR within a long sustained effort gives a much closer read on the
+# rower's true HRmax.  Fetching every stroke series is expensive, so
+# this estimator runs in two phases:
+#
+#   Phase 1 (cheap, every render):
+#       ``stroke_level_candidates`` filters the workout history to
+#       long-enough efforts with valid HR data, ranks by peak
+#       split-average HR, returns the top N (default 5).
+#
+#   Phase 2 (expensive, runs on user action):
+#       Caller fetches per-stroke data for those N workouts via the
+#       existing ``components.concept2_sync.strokes_batch`` pipeline
+#       (with IndexedDB caching), then passes the result to
+#       ``stroke_level_peak_hr`` to extract the maximum valid stroke-HR
+#       reading across the survivors.
+#
+# Workout-context weighting is handled at the filter stage: shorter
+# all-out efforts (< 6 min) don't allow HR to climb to true peak, so
+# they're excluded outright rather than down-weighted.
+
+
+def _workout_peak_hr_for_ranking(workout: dict) -> Optional[int]:
+    """Highest valid HR observed across a workout's top-level, split, and
+    interval ``heart_rate.average`` fields.  Used to rank stroke-level
+    candidates before paying for the stroke fetch."""
+    seen: list[int] = []
+    top = _extract_hr(workout.get("heart_rate"))
+    if top and is_valid_hr(top):
+        seen.append(top)
+    workout_data = workout.get("workout") or {}
+    for sp in workout_data.get("splits") or []:
+        v = _extract_hr(sp.get("heart_rate"))
+        if v and is_valid_hr(v):
+            seen.append(v)
+    for iv in workout_data.get("intervals") or []:
+        v = _extract_hr(iv.get("heart_rate"))
+        if v and is_valid_hr(v):
+            seen.append(v)
+    return max(seen) if seen else None
+
+
+#: Default minimum workout duration (seconds) considered a stroke-level
+#: HRmax candidate.  Six minutes gives HR enough time to climb out of the
+#: 60–120 s warm-up plateau into its sustained-effort peak.
+STROKE_LEVEL_MIN_DURATION_S: float = 360.0
+
+#: Default top-N candidate window for stroke-data fetching.  Five workouts
+#: is enough to surface a peak across recent maximal-effort sessions
+#: without flooding the Concept2 API.
+STROKE_LEVEL_TOP_N: int = 5
+
+
+def stroke_level_candidates(
+    workouts: list,
+    *,
+    min_duration_s: float = STROKE_LEVEL_MIN_DURATION_S,
+    top_n: int = STROKE_LEVEL_TOP_N,
+) -> list[dict]:
+    """Pick the top-N stroke-level HRmax candidates from a workout history.
+
+    A candidate is a workout that (1) carries the Concept2 ``stroke_data``
+    flag, so per-stroke HR is fetchable; (2) is at least
+    ``min_duration_s`` long, so HR had time to climb; and (3) has at least
+    one valid HR reading at the split / interval / top level.  Survivors
+    are ranked by their peak split-average HR; the top ``top_n`` are
+    returned in descending order.
+
+    Returns the raw workout dicts so the caller can pass them straight to
+    the stroke-batch fetcher.
+    """
+    ranked: list[tuple[int, dict]] = []
+    for w in workouts:
+        if not w.get("stroke_data"):
+            continue
+        t_tenths = w.get("time")
+        if not t_tenths or float(t_tenths) / 10.0 < min_duration_s:
+            continue
+        peak = _workout_peak_hr_for_ranking(w)
+        if peak is None:
+            continue
+        ranked.append((peak, w))
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    return [w for _, w in ranked[:top_n]]
+
+
+def stroke_level_peak_hr(
+    candidates: list[dict],
+    strokes_by_id: dict,
+) -> tuple[Optional[int], dict]:
+    """Highest valid stroke-level HR across candidate workouts.
+
+    ``candidates`` is the survivors from :func:`stroke_level_candidates`;
+    ``strokes_by_id`` maps ``str(workout_id)`` to a normalised stroke list
+    (each stroke dict carries an ``"hr"`` field when the rower wore a
+    monitor).  Strokes whose HR fails :func:`is_valid_hr` are ignored.
+
+    Returns ``(peak_bpm, metadata)`` where ``metadata`` describes which
+    workout produced the peak and how many strokes / candidates were
+    actually surveyed.  When no stroke produced a valid reading,
+    ``peak_bpm`` is ``None``; the metadata still records what was tried.
+    """
+    best_peak: Optional[int] = None
+    best_workout: Optional[dict] = None
+    n_with_strokes = 0
+    n_readings = 0
+    for w in candidates:
+        wid = w.get("id")
+        if wid is None:
+            continue
+        strokes = strokes_by_id.get(str(wid)) or []
+        if not strokes:
+            continue
+        n_with_strokes += 1
+        for s in strokes:
+            hr = s.get("hr")
+            if hr and is_valid_hr(hr):
+                n_readings += 1
+                if best_peak is None or hr > best_peak:
+                    best_peak = int(hr)
+                    best_workout = w
+    meta = {
+        "from_workout_id": best_workout.get("id") if best_workout else None,
+        "from_workout_date": (
+            (best_workout.get("date") or "")[:10] if best_workout else None
+        ),
+        "from_workout_distance": (
+            best_workout.get("distance") if best_workout else None
+        ),
+        "n_candidates": len(candidates),
+        "n_with_strokes": n_with_strokes,
+        "n_readings": n_readings,
+    }
+    return best_peak, meta
 
 
 # ---------------------------------------------------------------------------

@@ -33,7 +33,12 @@ import hyperdiv as hd
 
 from services.rowing_utils import age_from_dob
 from services.glycogen import RESERVE_KJ_PER_KG, mass_kg_from_profile
-from services.heartrate_utils import estimate_max_hr_with_count, is_valid_hr
+from services.heartrate_utils import (
+    estimate_max_hr_with_count,
+    is_valid_hr,
+    stroke_level_candidates,
+    stroke_level_peak_hr,
+)
 from services import public_profiles
 from components.app_context import (
     AppContext,
@@ -126,6 +131,15 @@ def profile_page() -> None:
         # action_key of the last publish task whose completion we processed,
         # so we don't re-roll-back state on subsequent renders.
         task_processed_key="",
+        # Stroke-level HRmax re-estimate.  ``hrmax_estimate_active`` toggles
+        # the workflow on; the workflow drives a strokes_batch fetch and
+        # surfaces the result in the *_estimate_* fields once it lands.  A
+        # zero ``hrmax_estimate_result`` means "no result yet".
+        hrmax_estimate_active=False,
+        hrmax_estimate_result=0,
+        hrmax_estimate_result_date="",
+        hrmax_estimate_result_readings=0,
+        hrmax_estimate_result_workouts=0,
     )
 
     if not state.loaded:
@@ -426,6 +440,7 @@ def _max_hr_provenance(state, profile: dict, ctx) -> None:
         return
 
     est_val, n_workouts = estimate_max_hr_with_count(workouts)
+
     if est_val is None:
         return
 
@@ -437,6 +452,150 @@ def _max_hr_provenance(state, profile: dict, ctx) -> None:
         font_color="neutral-500",
         max_width=24,
     )
+
+    _stroke_level_reestimate_workflow(state, workouts)
+
+
+def _stroke_level_reestimate_workflow(state, workouts: list) -> None:
+    """Stroke-level HRmax re-estimate flow rendered under the Max HR input.
+
+    Two-phase: a "Re-estimate from stroke data" button launches the flow,
+    which uses :func:`stroke_level_candidates` to pick the top-5 long-effort
+    PB-candidate workouts and ``components.concept2_sync.strokes_batch`` to
+    fetch (or read from IndexedDB) the per-stroke HR series for each.  The
+    survivor with the highest valid stroke-level HR drives the surfaced
+    estimate, which the user can then promote into the Max HR input.
+
+    Idempotent: re-fetched workouts come from the IndexedDB cache so a
+    repeated click is essentially free.
+    """
+    if state.hrmax_estimate_result and not state.hrmax_estimate_active:
+        _render_estimate_result(state)
+        return
+
+    if not state.hrmax_estimate_active:
+        with hd.box(padding=(0.4, 0, 0, 0)):
+            btn = hd.button(
+                "Re-estimate HRmax from stroke data",
+                size="small",
+                variant="default",
+            )
+            if btn.clicked:
+                state.hrmax_estimate_active = True
+                state.hrmax_estimate_result = 0
+                state.hrmax_estimate_result_date = ""
+                state.hrmax_estimate_result_readings = 0
+                state.hrmax_estimate_result_workouts = 0
+        return
+
+    # ── Active: drive a stroke-batch fetch over the top-N candidates ──
+    candidates = stroke_level_candidates(workouts)
+    if not candidates:
+        with hd.box(
+            gap=0.3,
+            padding=(0.5, 0.8),
+            border="1px solid neutral-200",
+            border_radius="medium",
+            background_color="neutral-50",
+            margin_top=0.4,
+            max_width=24,
+        ):
+            hd.text(
+                "No stroke-level candidates yet — needs at least one workout "
+                "longer than six minutes with stroke data and HR readings.",
+                font_size="x-small",
+                font_color="neutral-600",
+            )
+            if hd.button("Cancel", size="small", variant="text").clicked:
+                state.hrmax_estimate_active = False
+        return
+
+    # Lazy import — strokes_batch lives in a HyperDiv-aware module.
+    from components.concept2_sync import strokes_batch
+
+    batch = strokes_batch(candidates)
+    if batch.get("is_loading"):
+        with hd.hbox(gap=0.5, align="center", padding_top=0.4):
+            hd.spinner()
+            total = batch.get("total") or len(candidates)
+            done = batch.get("done") or 0
+            hd.text(
+                f"Fetching stroke data… ({done}/{total})",
+                font_size="x-small",
+                font_color="neutral-600",
+            )
+        return
+
+    peak, meta = stroke_level_peak_hr(candidates, batch.get("by_id") or {})
+    if peak is None:
+        with hd.box(
+            gap=0.3,
+            padding=(0.5, 0.8),
+            border="1px solid neutral-200",
+            border_radius="medium",
+            background_color="neutral-50",
+            margin_top=0.4,
+            max_width=24,
+        ):
+            hd.text(
+                "Stroke data fetched but no valid HR readings surfaced. "
+                "Wear an HR monitor on your next long effort to make this "
+                "estimator work.",
+                font_size="x-small",
+                font_color="neutral-600",
+            )
+            if hd.button("OK", size="small", variant="text").clicked:
+                state.hrmax_estimate_active = False
+        return
+
+    state.hrmax_estimate_result = int(peak)
+    state.hrmax_estimate_result_date = meta.get("from_workout_date") or ""
+    state.hrmax_estimate_result_readings = int(meta.get("n_readings") or 0)
+    state.hrmax_estimate_result_workouts = int(meta.get("n_with_strokes") or 0)
+    state.hrmax_estimate_active = False
+
+
+def _render_estimate_result(state) -> None:
+    """Show the stroke-level peak with Apply / Dismiss controls."""
+    peak = int(state.hrmax_estimate_result)
+    date = state.hrmax_estimate_result_date or "an unknown date"
+    readings = int(state.hrmax_estimate_result_readings)
+    workouts = int(state.hrmax_estimate_result_workouts)
+
+    with hd.box(
+        gap=0.4,
+        padding=(0.6, 0.8),
+        border="1px solid primary-200",
+        border_radius="medium",
+        background_color="primary-50",
+        margin_top=0.4,
+        max_width=24,
+    ):
+        hd.text(
+            f"Stroke-level peak: {peak} bpm",
+            font_size="small",
+            font_weight="semibold",
+            font_color="primary-800",
+        )
+        hd.text(
+            f"From your effort on {date} — {readings:,} stroke readings "
+            f"across {workouts} workouts.",
+            font_size="x-small",
+            font_color="primary-800",
+        )
+        with hd.hbox(gap=0.5, padding_top=0.3):
+            if hd.button("Use this value", size="small", variant="primary").clicked:
+                state.max_heart_rate = str(peak)
+                state.dirty = True
+                state.hrmax_estimate_result = 0
+                state.hrmax_estimate_result_date = ""
+                state.hrmax_estimate_result_readings = 0
+                state.hrmax_estimate_result_workouts = 0
+            if hd.button("Dismiss", size="small", variant="text").clicked:
+                state.hrmax_estimate_result = 0
+                state.hrmax_estimate_result_date = ""
+                state.hrmax_estimate_result_readings = 0
+                state.hrmax_estimate_result_workouts = 0
 
 
 def _public_profile_section(state, publish_action, display_name: str) -> None:
