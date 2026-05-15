@@ -722,6 +722,46 @@ def _training_stimulus_tab(workouts: list, is_dark: bool) -> None:
     """
     today = date.today()
 
+    with hd.box(gap=0.5, width="100%", max_width=70):
+        hd.text(
+            "Which physiological systems your training has reached recently, "
+            "and how often. Each row is a duration-band system — from short "
+            "neuromuscular (20s) through long aerobic base (2h). The left "
+            "panel shows how long since the last workout that delivered each "
+            "stimulus category; the right counts stimulus-grade workouts "
+            "across recent time windows.",
+            font_size="small",
+            font_color="neutral-600",
+        )
+        with hd.details("Learn more", font_size="small"):
+            with hd.box(gap=0.5):
+                hd.text(
+                    "Stimulus categories — a workout earns Partial credit "
+                    "for a band when its dose for that band reaches 0.50 of "
+                    "the saturation curve, Solid at 0.80, Full at 0.95. The "
+                    "dose itself is sustained time near the band's reference "
+                    "power; thresholds are set where a steady effort at that "
+                    "target power would saturate the curve.",
+                    font_size="small",
+                    font_color="neutral-500",
+                )
+                hd.text(
+                    "Recency colour on the days-since panel tracks rough "
+                    "adaptation-decay timescales: green within seven days "
+                    "(recent enough to reinforce), yellow within fourteen "
+                    "(window for the next dose), red past that (the "
+                    "adaptation signal is fading).",
+                    font_size="small",
+                    font_color="neutral-500",
+                )
+                hd.text(
+                    "Use the right panel to spot systems you've quietly "
+                    "stopped training; use the left to time your next "
+                    "session into a system that's still warm.",
+                    font_size="small",
+                    font_color="neutral-500",
+                )
+
     with hd.box(gap=2, wrap="wrap", align="center", justify="center"):
         # Panel: days-since-last-stimulus (3 thresholds)
         with hd.box(gap=0.5, min_width=36, align="center"):
@@ -883,6 +923,15 @@ def _training_load_tab(workouts: list, is_dark: bool) -> None:
                         "fresh; negative = carrying fatigue. Rough ranges: "
                         "above +10 (tapered), −10 to +5 (productive), "
                         "below −25 (overreached).",
+                        font_size="small",
+                        font_color="neutral-500",
+                    )
+                    hd.text(
+                        "Warm-up — CTL and ATL are seeded with the mean "
+                        "ESS over your first seven days of data, then "
+                        "settle within about two weeks. Read the first "
+                        "fortnight of the chart as a warm-up rather than "
+                        "as a true rested-or-fatigued reading.",
                         font_size="small",
                         font_color="neutral-500",
                     )

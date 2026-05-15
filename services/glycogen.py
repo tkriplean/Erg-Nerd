@@ -23,17 +23,19 @@ Model
 The CHO oxidation rate as a fraction of total energy expenditure rises with
 intensity (Brooks's "crossover concept"; Achten & Jeukendrup).  At rest /
 low intensities CHO contributes ~30 % of fuel; at VO2max+ it contributes
-~100 %.  Approximated as a linear ramp against the multi-band intensity
+~100 %.  Approximated as a power-law ramp against the multi-band intensity
 signal :math:`I(t)`:
 
-    cho_fraction(I)        = clip(0.30 + 0.70 · I, 0.30, 1.00)
+    cho_fraction(I)        = clip(0.30 + 0.70 · I^1.5, 0.30, 1.00)
     metabolic_W            = P / GROSS_EFFICIENCY    (mech → metabolic)
     cho_burn_rate(t) [kJ/s] = (metabolic_W · cho_fraction(I)) / 1000
     session_kj             = ∫ cho_burn_rate(t) dt  over work-only seconds
     glycogen_used          = session_kj / (RESERVE_KJ_PER_KG · mass_kg)
 
-Linear ramp is a deliberate v1 simplification; can upgrade to a power curve
-(:math:`0.30 + 0.70 · I^{1.5}`) if real data reads off.
+The ``I^1.5`` exponent slows the rise at low intensities so long Z2 base
+rows don't over-attribute CHO to fuel cost.  At sustained-at-zone effort
+(``I → 1``) the fraction reaches the ceiling; at idle (``I → 0``) it sits
+at the 0.30 floor.
 
 Constants
 ---------
@@ -41,17 +43,23 @@ Constants
 ``GROSS_EFFICIENCY = 0.25`` — mechanical / metabolic ratio for trained
 rowers.  Lit range 0.22–0.27; fixed in v1.
 
-``RESERVE_KJ_PER_KG = 80.0`` — *functional depletable* glycogen reserve
+``RESERVE_KJ_PER_KG = 65.0`` — *functional depletable* glycogen reserve
 per kg body mass.  Trained athletes never deplete to zero (a non-zero
 "floor" of glycogen remains even at the wall); the depletable fraction is
-typically ~70–80 % of total stores.  Total stores ≈ 100–145 kJ/kg
-(15–25 g/kg muscle × 17 kJ/g × ~30–40 % muscle fraction + 80–120 g liver
-glycogen / mass), so depletable reserve ≈ 80 kJ/kg at the conservative
-end.  Calibrated against real-world data points: a bonk-finishing
-marathon PB reads ~95 %, the "wall" / bonk-onset feeling lands around
-75 %, an HM PB finished hard but not bonked reads ~55 %, and a 4-hour
-ultra-aerobic effort tips well over 100 % (bonk territory).  Affects all
-readings linearly; the load-bearing tunable.
+typically ~70–80 % of total stores.  Recalibrated against two of the
+rower's recent marathons where they started bonking mid-race — at
+``RESERVE_KJ_PER_KG = 80`` (the pre-``I^1.5`` value) those efforts read
+66 % and 73 %, well below the bonk-onset landmark.  Lowering the reserve
+to 65 lifts those readings to ~81 % and ~90 % respectively, which lands
+in the "marathon, started bonking" band.  Affects all readings linearly;
+the load-bearing tunable.
+
+History: ``RESERVE_KJ_PER_KG`` started at 80 kJ/kg under the linear v1
+``cho_fraction`` ramp.  The switch to ``I^1.5`` reduced CHO attribution
+at Z2 base (~10 %) and LT2 (~5 %), which pulled marathon-bonk
+readings below their landmarks.  This recalibration to 65 kJ/kg restores
+them under the new ramp.  The next refit will come from RPE / bonk-feel
+data once enough marathons accumulate.
 
 Severity contribution
 ---------------------
@@ -85,17 +93,24 @@ GROSS_EFFICIENCY: float = 0.25
 #: Functional depletable glycogen reserve per kg body mass (kJ/kg).
 #: Trained athletes never deplete glycogen to zero — a non-zero floor
 #: remains even at the wall.  Depletable fraction ≈ 70–80 % of total
-#: stores; ~80 kJ/kg sits at the conservative end of that range.
-#: Calibrated against real-world data: bonk-finishing marathon PB reads
-#: ~95 %, bonk-onset (the "wall") ~75 %, HM PB hard-but-not-bonked
-#: ~55 %, 4-hour ultra-aerobic > 100 %.  Affects all readings linearly.
-RESERVE_KJ_PER_KG: float = 80.0
+#: stores.  Calibrated against the rower's bonk-landmark workouts under
+#: the I^1.5 ``cho_fraction`` model: two recent marathons where the rower
+#: started bonking mid-race read 66 % and 73 % at ``RESERVE_KJ_PER_KG =
+#: 80``; lowering to 65 lifts those into the 80–90 % range that matches
+#: the "started bonking" landmark for a marathon-length effort.  Affects
+#: all readings linearly.
+RESERVE_KJ_PER_KG: float = 65.0
 
 #: CHO fraction of energy expenditure at rest / low intensity (I → 0).
 CHO_FRACTION_FLOOR: float = 0.30
 
-#: Slope of the linear ramp from floor to ceiling against intensity I.
+#: Slope of the power-law ramp from floor to ceiling against intensity I.
 CHO_FRACTION_SLOPE: float = 0.70
+
+#: Exponent in the power-law ramp ``floor + slope · I^exp``.  Values > 1
+#: slow the rise at low intensities (better fit to Brooks crossover for
+#: long Z2 base rows); 1.0 reproduces the linear v1 model.
+CHO_FRACTION_EXP: float = 1.5
 
 #: Default body mass (kg) used when the rower's profile has no weight set.
 DEFAULT_MASS_KG: float = 75.0
@@ -110,11 +125,17 @@ def cho_fraction(I_t):
     """Fraction of energy from CHO at intensity I.
 
     ``I_t`` may be a scalar or a numpy array.  Returns a value in
-    ``[CHO_FRACTION_FLOOR, 1.0]``.  Uses a linear ramp ``0.30 + 0.70·I``
-    clipped at the ceiling — a deliberate v1 simplification.
+    ``[CHO_FRACTION_FLOOR, 1.0]``.  Uses a power-law ramp
+    ``0.30 + 0.70·I^1.5`` clipped at the ceiling — slower rise at low
+    intensities than the v1 linear ramp, closer to Brooks's crossover
+    behaviour for long Z2 base rows.
     """
+    I_arr = np.asarray(I_t, dtype=np.float64)
+    # Guard against negative intensity (shouldn't happen but ``** 1.5`` of a
+    # negative reads as NaN).  Clip the input to non-negative before raising.
+    I_pos = np.clip(I_arr, 0.0, None)
     return np.clip(
-        CHO_FRACTION_FLOOR + CHO_FRACTION_SLOPE * I_t,
+        CHO_FRACTION_FLOOR + CHO_FRACTION_SLOPE * np.power(I_pos, CHO_FRACTION_EXP),
         CHO_FRACTION_FLOOR,
         1.0,
     )

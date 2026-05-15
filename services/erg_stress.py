@@ -440,10 +440,23 @@ INTENSITY_SCALE = 1
 #: still count as one session.  30 minutes.
 SESSION_GAP_S = 1800.0 * 2
 
-#: Population-default anaerobic capacity (joules) when no CP fit is
-#: available.  Cycling-derived; rowing W' tends slightly higher.
-W_PRIME_DEFAULT_M = 28_000.0
-W_PRIME_DEFAULT_F = 22_000.0
+#: Population-default anaerobic capacity coefficients (joules per kg of
+#: body mass) when no CP fit is available.  Cycling-derived; rowing W'
+#: tends slightly higher.  ``W'_default = W_PRIME_PER_KG · mass_kg``.
+W_PRIME_PER_KG_M: float = 350.0  # ≈ 0.35 kJ/kg
+W_PRIME_PER_KG_F: float = 300.0  # ≈ 0.30 kJ/kg
+
+#: Fallback body mass (kg) used when the rower's profile has no weight set.
+#: 80 kg M / 73 kg F at the per-kg defaults above reproduce the legacy
+#: flat values; we keep one shared fallback so the gender split is the
+#: only knob.
+W_PRIME_FALLBACK_MASS_KG: float = 75.0
+
+#: Legacy population-default W' (joules), preserved for any callers that
+#: read these constants directly.  New code should pass ``mass_kg`` to
+#: :func:`compute_w_prime_estimate` and let it derive the mass-scaled value.
+W_PRIME_DEFAULT_M: float = W_PRIME_PER_KG_M * 80.0  # 28 000 J — legacy 80 kg M
+W_PRIME_DEFAULT_F: float = W_PRIME_PER_KG_F * 73.0  # 21 900 J — legacy 73 kg F
 
 #: Bounds on Skiba τ_W' to keep DCP-driven formula sensible for short workouts.
 TAU_W_MIN = 200.0
@@ -682,12 +695,15 @@ def build_segments(workout: dict) -> list[dict]:
 def compute_w_prime_estimate(
     cp_params: Optional[dict],
     gender: Optional[str],
+    mass_kg: Optional[float] = None,
 ) -> float:
     """Return an anaerobic-capacity estimate (joules).
 
     Uses ``Pow1 × tau1`` from a 4-parameter CP fit when available — a rough
     proxy for the rower's anaerobic work capacity.  Falls back to a
-    population default keyed by ``gender`` (``"Male"`` / ``"Female"``).
+    mass-scaled population default keyed by ``gender`` (``"Male"`` /
+    ``"Female"``).  When ``mass_kg`` is missing or non-positive, a
+    fallback body mass is used so the estimate stays a real number.
     """
     if cp_params:
         p1 = cp_params.get("Pow1")
@@ -695,9 +711,9 @@ def compute_w_prime_estimate(
         if p1 and t1 and p1 > 0 and t1 > 0:
             return float(p1) * float(t1)
     g = (gender or "").strip().lower()
-    if g.startswith("f"):
-        return W_PRIME_DEFAULT_F
-    return W_PRIME_DEFAULT_M
+    per_kg = W_PRIME_PER_KG_F if g.startswith("f") else W_PRIME_PER_KG_M
+    m = float(mass_kg) if (mass_kg and mass_kg > 0) else W_PRIME_FALLBACK_MASS_KG
+    return per_kg * m
 
 
 # ---------------------------------------------------------------------------

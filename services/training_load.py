@@ -59,7 +59,9 @@ ATL_DECAY_DAYS: float = 7.0
 # ---------------------------------------------------------------------------
 
 
-def _ew_mean(loads: np.ndarray, tau_days: float) -> np.ndarray:
+def _ew_mean(
+    loads: np.ndarray, tau_days: float, *, seed: float = 0.0
+) -> np.ndarray:
     """Exponentially-weighted moving average with time-constant ``tau_days``.
 
     Implements the TrainingPeaks PMC recurrence:
@@ -67,18 +69,32 @@ def _ew_mean(loads: np.ndarray, tau_days: float) -> np.ndarray:
         EW[t] = EW[t-1] + (load[t] − EW[t-1]) · α     where  α = 1 / τ
 
     Equivalent to the standard "first-order low-pass filter" formulation.
-    Initial value seeded at zero.
+    ``seed`` is the starting value for ``EW[-1]`` — pass the mean of the
+    first 7 days to avoid the ~42-day "very rested" artifact when a fresh
+    workout history starts at zero.
     """
     n = loads.shape[0]
     out = np.empty(n, dtype=np.float64)
     if n == 0:
         return out
     alpha = 1.0 / tau_days
-    prev = 0.0
+    prev = float(seed)
     for i in range(n):
         prev = prev + (float(loads[i]) - prev) * alpha
         out[i] = prev
     return out
+
+
+#: Window (days) used to seed CTL / ATL at the start of the timeline.
+#: Mean ESS over the first 7 days approximates the rower's loading state
+#: at the start of the observation window.
+SEED_WINDOW_DAYS: int = 7
+
+#: Days at the start of the timeline annotated as "warm-up" in the chart
+#: caption.  The seed leaves only ~14 days of EMA transient before CTL
+#: tracks the true loading; rendering a band over that window keeps the
+#: caveat visible.
+WARMUP_DAYS: int = 14
 
 
 def compute_ctl_atl_tsb(
@@ -118,8 +134,15 @@ def compute_ctl_atl_tsb(
     dates = [p[0] for p in pairs]
     loads = np.asarray([float(p[1]) for p in pairs], dtype=np.float64)
 
-    ctl = _ew_mean(loads, float(decay_ctl))
-    atl = _ew_mean(loads, float(decay_atl))
+    # Seed both averages with the mean of the first ``SEED_WINDOW_DAYS``
+    # days of load.  Zero-seeding produces a spurious ~42-day "very rested"
+    # ramp at the start of an established rower's history; seeding with the
+    # observed loading state collapses it.
+    seed_n = min(SEED_WINDOW_DAYS, loads.shape[0])
+    seed_value = float(loads[:seed_n].mean()) if seed_n > 0 else 0.0
+
+    ctl = _ew_mean(loads, float(decay_ctl), seed=seed_value)
+    atl = _ew_mean(loads, float(decay_atl), seed=seed_value)
     tsb = ctl - atl
 
     return {

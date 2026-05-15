@@ -92,19 +92,21 @@ def _ref_watts_at_duration_fn(ref_watts_for: Callable):
     return fn
 
 
-def _cp_w_prime_for_refs(refs: dict, gender: Optional[str]) -> tuple:
+def _cp_w_prime_for_refs(
+    refs: dict, gender: Optional[str], mass_kg: Optional[float] = None
+) -> tuple:
     """Return ``(cp_watts, w_prime_joules, cp_params_or_None)`` from a refs dict.
 
     Builds a synthetic PB list from the date's ranked-event reference watts
     and runs :func:`fit_critical_power` over it; the resulting Pow1·tau1
-    feeds :func:`compute_w_prime_estimate`.  Falls back to a population
-    default for W' when the fit doesn't converge.
+    feeds :func:`compute_w_prime_estimate`.  Falls back to a mass-scaled
+    population default for W' when the fit doesn't converge.
 
     CP itself is the rower's 60-min reference watts (``("time", 36000)``);
     falls back to ``None`` if the anchor is missing.
     """
     if not refs:
-        return (None, compute_w_prime_estimate(None, gender), None)
+        return (None, compute_w_prime_estimate(None, gender, mass_kg), None)
 
     pb_list = []
     for ck, watts in refs.items():
@@ -119,7 +121,7 @@ def _cp_w_prime_for_refs(refs: dict, gender: Optional[str]) -> tuple:
 
     cp_params = fit_critical_power(pb_list)
     cp = refs.get(("time", 36000))
-    w_prime = compute_w_prime_estimate(cp_params, gender)
+    w_prime = compute_w_prime_estimate(cp_params, gender, mass_kg)
     return (cp, w_prime, cp_params)
 
 
@@ -271,10 +273,13 @@ def add_metrics(
     session_memo: dict = {}
     cp_memo: dict = {}
     gender_key = (gender or "").lower()
+    # Round mass to 0.5 kg for the cache key — the W' default is linear in
+    # mass, so half-kg quantisation keeps within-noise.  None stays None.
+    mass_key = round(mass_kg * 2.0) / 2.0 if mass_kg else None
 
     def _cached_cp_w_prime(refs: Optional[dict]) -> tuple:
         if not refs:
-            return _cp_w_prime_for_refs(refs, gender)
+            return _cp_w_prime_for_refs(refs, gender, mass_kg)
         # Round watts to nearest 5W for the cache key (the fit itself still
         # runs on unrounded watts).  Empirically this collapses ~46% of
         # distinct keys with <1% mean shift in CP/W' — well below physiological
@@ -285,10 +290,10 @@ def add_metrics(
         cached = cp_memo.get(content_key)
         if cached is not None:
             return cached
-        global_key = (content_key, gender_key)
+        global_key = (content_key, gender_key, mass_key)
         cached = _CP_FIT_CACHE.get(global_key)
         if cached is None:
-            cached = _cp_w_prime_for_refs(refs, gender)
+            cached = _cp_w_prime_for_refs(refs, gender, mass_kg)
             if len(_CP_FIT_CACHE) >= _CP_FIT_CACHE_MAX:
                 _CP_FIT_CACHE.clear()
             _CP_FIT_CACHE[global_key] = cached
