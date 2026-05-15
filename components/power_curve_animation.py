@@ -97,7 +97,7 @@ from services.rowing_utils import (
     parse_date,
 )
 from services.formatters import fmt_split
-from services.critical_power_model import fit_critical_power
+from services.power_duration_model import fit_power_duration
 from services.predictions import build_prediction_table_data
 
 from components.power_curve_workouts import WorkoutView
@@ -134,7 +134,7 @@ def compute_timeline_snapshot(
     rl_predictions: dict | None,
     selected_dist_set: set | None = None,
     selected_time_set: set | None = None,
-    cp_fit_cache: dict | None = None,
+    pd_fit_cache: dict | None = None,
     machine: str = "rower",
 ) -> dict:
     """
@@ -150,7 +150,7 @@ def compute_timeline_snapshot(
     selected_dist_set / selected_time_set — enabled event sets for the
                      per-model accuracy (RMSE / R²) computation in the
                      prediction table.  None means "every event counts".
-    cp_fit_cache   — optional mutable dict {fit_key: cp_params} shared across
+    pd_fit_cache   — optional mutable dict {fit_key: pd_params} shared across
                      multiple keyframes by build_keyframes.  When None
                      (slow/static path), CP is recomputed fresh each call.
 
@@ -161,12 +161,12 @@ def compute_timeline_snapshot(
         lb_all_anchor   — all-event lifetime bests in anchor format
         pauls_k_fit     — personalised Paul's constant, or None if < 2 PBs
         pauls_k         — pauls_k_fit or population default 5.0
-        cp_params       — Critical Power fit dict, or None if insufficient data
+        pd_params       — Power Duration fit dict, or None if insufficient data
         ll_slope        — log-log slope (None if < 2 PBs) — JS samples curve
         ll_intercept    — log-log intercept paired with ll_slope
         pred_table_rows — list of prediction table row dicts
         accuracy        — dict keyed by Predictor.key ("average",
-                          "critical_power", "loglog", "pauls_law",
+                          "power_duration", "loglog", "pauls_law",
                           "rowinglevel") → {"rmse", "r2", "n"} over
                           enabled events
     """
@@ -179,25 +179,25 @@ def compute_timeline_snapshot(
     pauls_k_fit = compute_pauls_constant(lb, lb_anchor)
     pauls_k = pauls_k_fit if pauls_k_fit is not None else 5.0
 
-    # ── Critical Power fit ────────────────────────────────────────────────────
-    # Always fit: the prediction table's CP column needs cp_params regardless
-    # of which predictor's chart curve is drawn. cp_fit_cache makes repeat
+    # ── Power Duration fit ────────────────────────────────────────────────────
+    # Always fit: the prediction table's CP column needs pd_params regardless
+    # of which predictor's chart curve is drawn. pd_fit_cache makes repeat
     # fits free across keyframes during animation.
-    cp_pb_list = []
+    pd_pb_list = []
     for w in apply_best_only(sim_wkts):
         dur = compute_duration_s(w)
         if dur:
-            cp_pb_list.append({"duration_s": dur, "watts": w["watts"]})
+            pd_pb_list.append({"duration_s": dur, "watts": w["watts"]})
 
     fit_key = str(
-        sorted((round(p["duration_s"], 1), round(p["watts"], 1)) for p in cp_pb_list)
+        sorted((round(p["duration_s"], 1), round(p["watts"], 1)) for p in pd_pb_list)
     )
-    if cp_fit_cache is not None:
-        if fit_key not in cp_fit_cache:
-            cp_fit_cache[fit_key] = fit_critical_power(cp_pb_list)
-        cp_params = cp_fit_cache[fit_key]
+    if pd_fit_cache is not None:
+        if fit_key not in pd_fit_cache:
+            pd_fit_cache[fit_key] = fit_power_duration(pd_pb_list)
+        pd_params = pd_fit_cache[fit_key]
     else:
-        cp_params = fit_critical_power(cp_pb_list)
+        pd_params = fit_power_duration(pd_pb_list)
 
     # ── Log-log fit (JS samples pred curves from these params) ───────────────
     _ll = loglog_fit(lb, lb_anchor)
@@ -209,7 +209,7 @@ def compute_timeline_snapshot(
         lifetime_best=lb,
         lifetime_best_anchor=lb_anchor,
         all_lifetime_best=lb_all,
-        critical_power_params=cp_params,
+        power_duration_params=pd_params,
         rl_predictions=rl_predictions,
         pauls_k=pauls_k,
         selected_dist_set=selected_dist_set,
@@ -223,7 +223,7 @@ def compute_timeline_snapshot(
         "lb_all_anchor": lb_all_anchor,
         "pauls_k_fit": pauls_k_fit,
         "pauls_k": pauls_k,
-        "cp_params": cp_params,
+        "pd_params": pd_params,
         "ll_slope": ll_slope,
         "ll_intercept": ll_intercept,
         "pred_table_rows": _pred["rows"],
@@ -523,7 +523,7 @@ def build_keyframes(
             "snapshot": {
                 "lb": {},
                 "lb_anchor": {},
-                "cp_params": None,
+                "pd_params": None,
                 "ll_slope": None,
                 "ll_intercept": None,
                 "pauls_k": 5.0,
@@ -540,7 +540,7 @@ def build_keyframes(
         0: {"pred_rows": [], "pauls_k_fit": None, "accuracy": {}}
     }
     prev_lb_str = {}  # cat_key_str -> pace
-    cp_fit_cache: dict = {}  # fit_key -> cp_params (shared across keyframes)
+    pd_fit_cache: dict = {}  # fit_key -> pd_params (shared across keyframes)
 
     # ── Fast path: single end-state snapshot ─────────────────────────────────
     # When fast_only=True, skip the per-date walk and emit one snapshot that
@@ -566,7 +566,7 @@ def build_keyframes(
             "snapshot": {
                 "lb": lb_str,
                 "lb_anchor": lb_anchor_str,
-                "cp_params": _snap["cp_params"],
+                "pd_params": _snap["pd_params"],
                 "ll_slope": _snap["ll_slope"],
                 "ll_intercept": _snap["ll_intercept"],
                 "pauls_k": _snap["pauls_k"],
@@ -620,7 +620,7 @@ def build_keyframes(
             rl_predictions=rl_predictions,
             selected_dist_set=selected_dist_set,
             selected_time_set=selected_time_set,
-            cp_fit_cache=cp_fit_cache,
+            pd_fit_cache=pd_fit_cache,
             machine=machine,
         )
 
@@ -628,7 +628,7 @@ def build_keyframes(
             "snapshot": {
                 "lb": lb_str,
                 "lb_anchor": lb_anchor_str,
-                "cp_params": _snap["cp_params"],
+                "pd_params": _snap["pd_params"],
                 "ll_slope": _snap["ll_slope"],
                 "ll_intercept": _snap["ll_intercept"],
                 "pauls_k": _snap["pauls_k"],

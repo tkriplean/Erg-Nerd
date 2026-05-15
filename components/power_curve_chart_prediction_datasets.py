@@ -11,7 +11,7 @@ This module keeps:
 
   _pred_dataset / _with_alpha / wr_scatter_dataset /
   wr_pred_datasets / _rowinglevel_datasets / _pauls_law_datasets /
-  _loglog_dataset / _cp_datasets / _average_datasets
+  _loglog_dataset / _pd_datasets / _average_datasets
                            — shared with components/power_curve_animation.py,
                              which builds the world-record overlay datasets
                              baked into every timeline snapshot.  These stay
@@ -39,10 +39,10 @@ from services.rowing_utils import (
     loglog_fit,
     loglog_predict_pace,
 )
-from services.critical_power_model import (
-    critical_power_model,
-    critical_power_curve_points,
-    critical_power_event_points,
+from services.power_duration_model import (
+    power_duration_model,
+    power_duration_curve_points,
+    power_duration_event_points,
     crossover_point,
 )
 
@@ -134,14 +134,14 @@ def wr_pred_datasets(
 ) -> list:
     """
     Build WC prediction datasets using the currently selected predictor applied
-    to WC records (lb/lba/cp_params).  WC predictions use the same green color
+    to WC records (lb/lba/pd_params).  WC predictions use the same green color
     and the same function as the user's prediction, making them the WC 'synthetic
     user'.
 
     rowinglevel has no WC equivalent — falls back to CP then loglog.
     """
     wr_color = "rgba(60,180,90,0.85)" if is_dark else "rgba(30,140,60,0.85)"
-    lb, lba, cp = wr_data["lb"], wr_data["lba"], wr_data.get("cp_params")
+    lb, lba, cp = wr_data["lb"], wr_data["lba"], wr_data.get("pd_params")
 
     if predictor == "none":
         return []
@@ -158,11 +158,11 @@ def wr_pred_datasets(
             for d in ds:
                 d["label"] = "_wr_pred"
             return ds
-        eff = "critical_power"  # fallback when WC RL predictions unavailable
+        eff = "power_duration"  # fallback when WC RL predictions unavailable
 
-    if eff == "critical_power":
+    if eff == "power_duration":
         if cp is not None:
-            ds_list, _ = _cp_datasets(
+            ds_list, _ = _pd_datasets(
                 cp,
                 x_min,
                 x_max,
@@ -389,8 +389,8 @@ def _loglog_dataset(
     return [_pred_dataset("_loglog_fit", pred_pts, pred_color, point_radius=3)]
 
 
-def _cp_datasets(
-    critical_power_params,
+def _pd_datasets(
+    power_duration_params,
     x_min,
     x_max,
     y_min,
@@ -431,33 +431,33 @@ def _cp_datasets(
     out = []
     crossover_labels = []
 
-    # Smooth curve — critical_power_curve_points produces x=distance, so we
+    # Smooth curve — power_duration_curve_points produces x=distance, so we
     # use x_min/x_max in distance-space always, then convert x values after.
     # (x_min/x_max in duration mode are already pre-converted from power_curve_page.py,
     # so we fall back to large safe distance bounds for the CP curve generation itself.)
-    _cp_x_min_dist = 100.0
-    _cp_x_max_dist = 50_000.0
-    cp_pts = critical_power_curve_points(
-        critical_power_params,
-        x_min=_cp_x_min_dist,
-        x_max=_cp_x_max_dist,
+    _pd_x_min_dist = 100.0
+    _pd_x_max_dist = 50_000.0
+    pd_pts = power_duration_curve_points(
+        power_duration_params,
+        x_min=_pd_x_min_dist,
+        x_max=_pd_x_max_dist,
         show_watts=show_watts,
     )
-    cp_pts = _convert_pts(cp_pts)
+    pd_pts = _convert_pts(pd_pts)
     # After conversion, filter to the actual chart x range.
-    cp_pts = [p for p in cp_pts if x_min <= p["x"] <= x_max]
-    if len(cp_pts) >= 2:
-        out.append(_pred_dataset("_critical_power", cp_pts, pred_color, point_radius=0))
+    pd_pts = [p for p in pd_pts if x_min <= p["x"] <= x_max]
+    if len(pd_pts) >= 2:
+        out.append(_pred_dataset("_power_duration", pd_pts, pred_color, point_radius=0))
 
     # Event marker dots — active event sets are injected by the caller
     # (build_pred_curves_for_snapshot in power_curve_animation, or _wr_pred_datasets
-    # for WC overlay) as "_sel_dists" / "_sel_times" keys on critical_power_params.
-    _cp_sel_dists_key = critical_power_params.get("_sel_dists", set())
-    _cp_sel_times_key = critical_power_params.get("_sel_times", set())
-    ev_pts = critical_power_event_points(
-        critical_power_params,
-        selected_dists=_cp_sel_dists_key,
-        selected_times=_cp_sel_times_key,
+    # for WC overlay) as "_sel_dists" / "_sel_times" keys on power_duration_params.
+    _pd_sel_dists_key = power_duration_params.get("_sel_dists", set())
+    _pd_sel_times_key = power_duration_params.get("_sel_times", set())
+    ev_pts = power_duration_event_points(
+        power_duration_params,
+        selected_dists=_pd_sel_dists_key,
+        selected_times=_pd_sel_times_key,
         show_watts=show_watts,
         machine=machine,
     )
@@ -467,7 +467,7 @@ def _cp_datasets(
         out.append(
             {
                 "type": "scatter",
-                "label": "_cp_event_markers",
+                "label": "_pd_event_markers",
                 "data": ev_pts,
                 "backgroundColor": pred_color,
                 "borderColor": pred_color,
@@ -483,7 +483,7 @@ def _cp_datasets(
     # Crossover — only shown when show_components is enabled.
     # Rendered as a dashed vertical line, a marker at the component intersection,
     # and a bottom-anchored explanatory text annotation.
-    xo = crossover_point(critical_power_params, show_watts=show_watts)
+    xo = crossover_point(power_duration_params, show_watts=show_watts)
     if show_components and xo is not None:
         # xo["x"] is distance; xo["t_seconds"] is duration.
         # In duration mode use t_seconds directly; in distance mode use xo["x"].
@@ -505,8 +505,8 @@ def _cp_datasets(
             # components have equal watts at t_star, so this is the y where the
             # two component curves visually intersect.
             xo_t = xo["t_seconds"]
-            xo_component_watts = critical_power_params["Pow1"] / (
-                1.0 + xo_t / critical_power_params["tau1"]
+            xo_component_watts = power_duration_params["Pow1"] / (
+                1.0 + xo_t / power_duration_params["tau1"]
             )
             xo_dot_y = (
                 round(xo_component_watts, 2)
@@ -518,7 +518,7 @@ def _cp_datasets(
             out.append(
                 {
                     "type": "line",
-                    "label": "_cp_crossover_vline",
+                    "label": "_pd_crossover_vline",
                     "data": [
                         {"x": xo_x, "y": y_min},
                         {"x": xo_x, "y": y_max},
@@ -536,7 +536,7 @@ def _cp_datasets(
             out.append(
                 {
                     "type": "scatter",
-                    "label": "_cp_crossover_dot",
+                    "label": "_pd_crossover_dot",
                     "data": [{"x": xo_x, "y": xo_dot_y}],
                     "backgroundColor": xo_dot_color,
                     "borderColor": xo_ring_color,
@@ -562,9 +562,9 @@ def _cp_datasets(
 
     # Fast/slow component curves (optional)
     if show_components:
-        _cp_dim = _with_alpha(pred_color, 0.62)
-        Pow1, tau1 = critical_power_params["Pow1"], critical_power_params["tau1"]
-        Pow2, tau2 = critical_power_params["Pow2"], critical_power_params["tau2"]
+        _pd_dim = _with_alpha(pred_color, 0.62)
+        Pow1, tau1 = power_duration_params["Pow1"], power_duration_params["tau1"]
+        Pow2, tau2 = power_duration_params["Pow2"], power_duration_params["tau2"]
         _fast_pts, _slow_pts = [], []
         for _t in np.logspace(math.log10(10.0), math.log10(10_800.0), 200):
             _w_combined = Pow1 / (1.0 + _t / tau1) + Pow2 / (1.0 + _t / tau2)
@@ -592,13 +592,13 @@ def _cp_datasets(
         if len(_fast_pts) >= 2:
             out.append(
                 _pred_dataset(
-                    "_cp_fast", _fast_pts, _cp_dim, point_radius=0, border_width=1.0
+                    "_pd_fast", _fast_pts, _pd_dim, point_radius=0, border_width=1.0
                 )
             )
         if len(_slow_pts) >= 2:
             out.append(
                 _pred_dataset(
-                    "_cp_slow", _slow_pts, _cp_dim, point_radius=0, border_width=1.0
+                    "_pd_slow", _slow_pts, _pd_dim, point_radius=0, border_width=1.0
                 )
             )
 
@@ -613,7 +613,7 @@ def _cp_datasets(
 def _average_datasets(
     lifetime_best,
     lifetime_best_anchor,
-    critical_power_params,
+    power_duration_params,
     rl_predictions,
     pauls_k,
     x_min,
@@ -628,7 +628,7 @@ def _average_datasets(
     """Ensemble average of all available prediction models + optional component curves.
 
     Samples at ~80 log-spaced distances from x_min to x_max.  At each distance,
-    computes available paces from loglog, Paul's Law (per-anchor avg), Critical Power,
+    computes available paces from loglog, Paul's Law (per-anchor avg), Power Duration,
     and RowingLevel (distance-weighted avg), then averages the non-None values.
 
     When show_components=True, also draws each individual model curve dimly so the
@@ -650,9 +650,9 @@ def _average_datasets(
     _ll_slope, _ll_intercept = _ll_fit if _ll_fit is not None else (None, None)
 
     # ── CP tuple ───────────────────────────────────────────────────────────────
-    _cp = critical_power_params
-    _cp_valid = _cp is not None and all(
-        k in _cp for k in ("Pow1", "tau1", "Pow2", "tau2")
+    _pd = power_duration_params
+    _pd_valid = _pd is not None and all(
+        k in _pd for k in ("Pow1", "tau1", "Pow2", "tau2")
     )
 
     # ── RL string-keyed anchor lookup ─────────────────────────────────────────
@@ -670,10 +670,12 @@ def _average_datasets(
     _machine_dists = ranked_dist_values(machine)
     _samp_lo = float(min(_machine_dists)) if _machine_dists else 100.0
     _samp_hi = float(max(_machine_dists)) if _machine_dists else 42195.0
-    _sample_dists = list(np.logspace(math.log10(_samp_lo), math.log10(_samp_hi), _n_pts))
+    _sample_dists = list(
+        np.logspace(math.log10(_samp_lo), math.log10(_samp_hi), _n_pts)
+    )
 
     # Containers for per-model curves (used when show_components)
-    _ll_pts, _pl_pts, _cp_pts_avg, _rl_pts_avg = [], [], [], []
+    _ll_pts, _pl_pts, _pd_pts_avg, _rl_pts_avg = [], [], [], []
     _avg_pts = []
 
     for _d in _sample_dists:
@@ -702,23 +704,23 @@ def _average_datasets(
                 _pl_p = sum(_pl_paces) / len(_pl_paces)
                 _paces.append(_pl_p)
 
-        # Critical Power — numerically solve for distance
-        _cp_p = None
-        if _cp_valid:
-            Pow1, tau1, Pow2, tau2 = _cp["Pow1"], _cp["tau1"], _cp["Pow2"], _cp["tau2"]
+        # Power Duration — numerically solve for distance
+        _pd_p = None
+        if _pd_valid:
+            Pow1, tau1, Pow2, tau2 = _pd["Pow1"], _pd["tau1"], _pd["Pow2"], _pd["tau2"]
 
-            def _cp_resid(_t, _dist=_d):
-                P = critical_power_model(_t, Pow1, tau1, Pow2, tau2)
+            def _pd_resid(_t, _dist=_d):
+                P = power_duration_model(_t, Pow1, tau1, Pow2, tau2)
                 return (_dist - (_t * (500.0 / watts_to_pace(P)))) if P > 0 else -_dist
 
             try:
-                _t_star = _brentq(_cp_resid, 10.0, 20_000.0, xtol=0.5)
-                _w = critical_power_model(_t_star, Pow1, tau1, Pow2, tau2)
+                _t_star = _brentq(_pd_resid, 10.0, 20_000.0, xtol=0.5)
+                _w = power_duration_model(_t_star, Pow1, tau1, Pow2, tau2)
                 if _w > 0:
-                    _pace_cp = watts_to_pace(_w)
-                    if PACE_MIN <= _pace_cp <= PACE_MAX:
-                        _cp_p = _pace_cp
-                        _paces.append(_cp_p)
+                    _pace_pd = watts_to_pace(_w)
+                    if PACE_MIN <= _pace_pd <= PACE_MAX:
+                        _pd_p = _pace_pd
+                        _paces.append(_pd_p)
             except Exception:
                 pass
 
@@ -753,8 +755,8 @@ def _average_datasets(
             _ll_pts.append({"x": x_fn(_d, _ll_p), "y": y_fn(_ll_p)})
         if _pl_p is not None:
             _pl_pts.append({"x": x_fn(_d, _pl_p), "y": y_fn(_pl_p)})
-        if _cp_p is not None:
-            _cp_pts_avg.append({"x": x_fn(_d, _cp_p), "y": y_fn(_cp_p)})
+        if _pd_p is not None:
+            _pd_pts_avg.append({"x": x_fn(_d, _pd_p), "y": y_fn(_pd_p)})
         if _rl_p is not None:
             _rl_pts_avg.append({"x": x_fn(_d, _rl_p), "y": y_fn(_rl_p)})
 
@@ -789,7 +791,7 @@ def _average_datasets(
         for label, pts in [
             ("_avg_ll", _ll_pts),
             ("_avg_pl", _pl_pts),
-            ("_avg_cp", _cp_pts_avg),
+            ("_avg_pd", _pd_pts_avg),
             ("_avg_rl", _rl_pts_avg),
         ]:
             pts = _in_range(pts)

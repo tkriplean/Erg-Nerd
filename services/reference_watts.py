@@ -88,11 +88,11 @@ import math
 from datetime import date, timedelta
 from typing import Optional
 
-from services.critical_power_model import (
+from services.power_duration_model import (
     _CURVE_T_MAX,
     _CURVE_T_MIN,
-    critical_power_model,
-    fit_critical_power,
+    power_duration_model,
+    fit_power_duration,
 )
 from services.rowing_utils import (
     ranked_distances,
@@ -378,14 +378,14 @@ def build_reference_watts_index(
     first_effort = min(w["date_dt"] for w in quality)
     markers = _quarter_markers(first_effort, date.today())
 
-    cp_fit_cache: dict = {}
+    pd_fit_cache: dict = {}
     result_markers: list = []
     n = len(markers)
     for i, m in enumerate(markers):
         label = m.isoformat()
         if on_progress:
             on_progress(i, n, label)
-        refs = _compute_marker_refs(m, quality, cp_fit_cache, machine)
+        refs = _compute_marker_refs(m, quality, pd_fit_cache, machine)
         if refs is not None:
             result_markers.append(refs)
 
@@ -466,7 +466,7 @@ def _window_pbs(quality: list, start: date, end: date) -> dict:
 
 
 def _compute_marker_refs(
-    marker: date, quality: list, cp_cache: dict, machine: str
+    marker: date, quality: list, pd_cache: dict, machine: str
 ) -> Optional[dict]:
     """Build ``MarkerRefs`` for one marker, or None if no PBs in window."""
     start = marker - timedelta(days=WINDOW_DAYS)
@@ -479,14 +479,14 @@ def _compute_marker_refs(
     all_cat_keys = _all_cat_keys(machine)
 
     # Predictor cascade.
-    cp_params = None
+    pd_params = None
     if len(pb_list) >= 5:
-        cp_params = _cached_cp_fit(pb_list, cp_cache)
+        pd_params = _cached_pd_fit(pb_list, pd_cache)
 
     predicted: dict = {}
     source_tag: dict = {}
 
-    if cp_params is not None:
+    if pd_params is not None:
         # Bound CP extrapolation by the duration range of the actual PBs.
         # The 4-parameter CP model is poorly constrained outside its anchor
         # data: with no sub-1min PB, the fast-twitch component runs free and
@@ -501,7 +501,7 @@ def _compute_marker_refs(
             t_lo, t_hi = None, None
 
         for ck, dist_m, dur_s in all_events:
-            w = _cp_watts_at_event(cp_params, dist_m, dur_s)
+            w = _pd_watts_at_event(pd_params, dist_m, dur_s)
             if w is None:
                 continue
             # Derive the event's implied duration so we can gate the CP
@@ -629,13 +629,13 @@ def _compute_marker_refs(
     }
 
 
-def _cached_cp_fit(pb_list: list, cp_cache: dict) -> Optional[dict]:
+def _cached_pd_fit(pb_list: list, pd_cache: dict) -> Optional[dict]:
     """CP fit with a caller-provided cache keyed by sorted PB ids."""
     key = frozenset((p["id"] or (p["cat_key"], p["duration_s"])) for p in pb_list)
-    if key in cp_cache:
-        return cp_cache[key]
-    params = fit_critical_power(pb_list)
-    cp_cache[key] = params
+    if key in pd_cache:
+        return pd_cache[key]
+    params = fit_power_duration(pb_list)
+    pd_cache[key] = params
     return params
 
 
@@ -644,7 +644,7 @@ def _cached_cp_fit(pb_list: list, cp_cache: dict) -> Optional[dict]:
 # ---------------------------------------------------------------------------
 
 
-def _cp_watts_at_event(
+def _pd_watts_at_event(
     params: dict, dist_m: Optional[int], dur_s: Optional[float]
 ) -> Optional[float]:
     """Predicted watts at one event under the fitted CP model.
@@ -658,14 +658,14 @@ def _cp_watts_at_event(
     tau2 = params["tau2"]
 
     if dur_s is not None:
-        watts = critical_power_model(dur_s, Pow1, tau1, Pow2, tau2)
+        watts = power_duration_model(dur_s, Pow1, tau1, Pow2, tau2)
         return float(watts) if watts > 0 else None
 
     if dist_m is None or brentq is None:
         return None
 
     def _residual(t, _d=dist_m):
-        P = critical_power_model(t, Pow1, tau1, Pow2, tau2)
+        P = power_duration_model(t, Pow1, tau1, Pow2, tau2)
         if P <= 0:
             return -_d
         return (P / 2.80) ** (1.0 / 3.0) * t - _d
@@ -674,7 +674,7 @@ def _cp_watts_at_event(
         t_star = brentq(_residual, _CURVE_T_MIN, _CURVE_T_MAX, xtol=0.1)
     except Exception:
         return None
-    watts = critical_power_model(t_star, Pow1, tau1, Pow2, tau2)
+    watts = power_duration_model(t_star, Pow1, tau1, Pow2, tau2)
     return float(watts) if watts > 0 else None
 
 

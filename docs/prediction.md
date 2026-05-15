@@ -132,7 +132,7 @@ and bodyweight).  When the profile is incomplete:
 
 ---
 
-### 2.4 Critical Power (Two-Component Model)
+### 2.4 Power Duration (Two-Component Model)
 
 **Formula:**  `P(t) = Pow1 / (1 + t/tau1)  +  Pow2 / (1 + t/tau2)`
 
@@ -226,7 +226,7 @@ dist   = t × (500 / pace)                   # parametric: speed = 500/pace m/s
 ```
 
 The chart x-axis is always **distance in meters**.  For models that work in time
-(log-log, Paul's Law for timed events, Critical Power), this parametric conversion
+(log-log, Paul's Law for timed events, Power Duration), this parametric conversion
 maps `(t, watts)` → `(dist, y)`.
 
 The y-axis is either **pace** (sec/500m, displayed as M:SS.t by Chart.js) or
@@ -248,7 +248,7 @@ scatter data.  Chart settings:
 | Log Y / Log X | Toggle logarithmic axes |
 
 The **Show components** control only appears when the selected predictor supports
-it (Paul's Law, RowingLevel, Critical Power).  Log-Log has a single curve with no
+it (Paul's Law, RowingLevel, Power Duration).  Log-Log has a single curve with no
 components to separate.
 
 ---
@@ -263,7 +263,7 @@ The table appears below the chart whenever any ranked PBs are in scope.
 |---|---|
 | Event | Ranked event name + enable/disable toggle |
 | Your PB | Pace (sec/500m) and total time or distance of personal best |
-| Critical Power | Model prediction |
+| Power Duration | Model prediction |
 | Log-Log Watts Fit | Model prediction |
 | Avg. Paul's Law | Averaged Paul's Law prediction |
 | Avg. RowingLevel | Averaged RowingLevel prediction |

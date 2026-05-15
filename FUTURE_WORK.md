@@ -24,17 +24,17 @@ The deepest physiological upgrade still on the table. Turns population-zone heur
 
 ### F1.2 — 60-min Power field in Profile
 
-**Motivation.** Several metrics (ESS calibration, W'bal recovery rate, the implicit "Critical Power" the W'bal model uses) are anchored to the rower's 60-min reference watts derived from their PB curve. When the rower knows their true 60-min sustainable power from a real test, that should override the derived value. The 60-min Power field is also the lever that resolves the longstanding "W'bal uses 60-min RW as CP" honesty issue.
+**Motivation.** Several metrics (ESS calibration, W'bal recovery rate, the implicit "Power Duration" the W'bal model uses) are anchored to the rower's 60-min reference watts derived from their PB curve. When the rower knows their true 60-min sustainable power from a real test, that should override the derived value. The 60-min Power field is also the lever that resolves the longstanding "W'bal uses 60-min RW as CP" honesty issue.
 
 **Scope.** New profile field `sixty_min_power_watts`. When set, it overrides the 60-min reference watts at the user's chosen anchor date, propagating into [services/erg_stress.py:1259-1271](services/erg_stress.py) (W'bal `cp` resolution) and [services/reference_watts.py](services/reference_watts.py) (the time-aware ref-watts cascade). The profile copy is the field language from the plan ("Your sustainable wattage for ~60 minutes ... we avoid the names 'FTP' and 'Threshold Power' because rowing has multiple physiological thresholds").
 
-**Effort.** Half a day for the field plus the propagation. The downstream code paths already accept a `cp_watts` argument from a single resolver, so the threading is light.
+**Effort.** Half a day for the field plus the propagation. The downstream code paths already accept a `pd_watts` argument from a single resolver, so the threading is light.
 
 **Expected impact.** Removes one of the largest source-of-truth gaps in the app. W'bal becomes a calibrated joule count rather than a "relative-to-self" reading.
 
 **Risks / open questions.** A user-entered 60-min Power that conflicts with what the PB curve implies needs a discoverable mismatch prompt, similar to the HRmax / Concept2 mismatch already implemented in Tier 0.5.
 
-**Related.** F1.3 (True CP test) supplies a higher-priority W'bal anchor when available. The Tier-0 Power-Duration rename and this field together close the "Critical Power is not CP" issue end to end.
+**Related.** F1.3 (True CP test) supplies a higher-priority W'bal anchor when available. The Tier-0 Power-Duration rename and this field together close the "Power Duration is not CP" issue end to end.
 
 ### F1.3 — True CP test workflow
 

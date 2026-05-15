@@ -27,9 +27,9 @@ Public API
                           "gender": "M" | "F"}, ...}
         result is seconds (dist events) or meters (time events).
 
-  records_to_cp_input(records)
+  records_to_pd_input(records)
       → [{"duration_s": float, "watts": float}, ...]
-        suitable for fit_critical_power()
+        suitable for fit_power_duration()
 
   records_to_lbest(records)
       → (lb, lba) dicts compatible with loglog_fit(), _loglog_dataset(), etc.
@@ -37,7 +37,7 @@ Public API
         lba {(etype, evalue): anchor_distance_meters}
 
   fetch_wr_data(gender_api, age, weight_kg, machine="rower")
-      → dict{"records", "cp_params", "lb", "lba", "rl_predictions"} or None
+      → dict{"records", "pd_params", "lb", "lba", "rl_predictions"} or None
         Blocking: fetch records, fit CP, optionally fetch RL predictions
         (rower only).  Intended to run inside hd.task().
 """
@@ -57,7 +57,7 @@ from services.rowing_utils import (
     age_from_dob,
     profile_complete,
 )
-from services.critical_power_model import fit_critical_power
+from services.power_duration_model import fit_power_duration
 from services.rowinglevel import fetch_predictions as rl_fetch_predictions
 
 # ---------------------------------------------------------------------------
@@ -116,6 +116,7 @@ _AGE_BANDS: list[tuple[int, str]] = [
     (13, "13-14"),
     (0, "12 and Under"),
 ]
+
 
 def _ranked_dist_set_for(machine: str) -> set[int]:
     """Distance event values (meters) that Concept2 publishes WRs for."""
@@ -578,10 +579,10 @@ def get_records_for_age(
     return _filter_records(raw, gender, age_cat, wt_class, machine)
 
 
-def records_to_cp_input(records: dict) -> list[dict]:
+def records_to_pd_input(records: dict) -> list[dict]:
     """
     Convert a records dict (from get_age_group_records) to a list of
-    {duration_s, watts} dicts suitable for fit_critical_power().
+    {duration_s, watts} dicts suitable for fit_power_duration().
 
     Excludes entries that produce non-finite or non-positive watts.
     Returns the list sorted by duration_s ascending.
@@ -670,7 +671,7 @@ def fetch_wr_data(
     and (rower only) fetches RowingLevel predictions using the WC 2k record
     as the reference performance.
 
-    Returns a dict {"records", "cp_params", "lb", "lba", "rl_predictions"}
+    Returns a dict {"records", "pd_params", "lb", "lba", "rl_predictions"}
     or None if the API returned no records at all (or ``machine`` has no WRs).
     """
     if not wr_machine_supported(machine):
@@ -678,8 +679,8 @@ def fetch_wr_data(
     records = get_age_group_records(gender_api, age, weight_kg, machine)
     if not records:
         return None
-    cp_input = records_to_cp_input(records)
-    cp_params = fit_critical_power(cp_input) if len(cp_input) >= 5 else None
+    pd_input = records_to_pd_input(records)
+    pd_params = fit_power_duration(pd_input) if len(pd_input) >= 5 else None
     lb, lba = records_to_lbest(records)
 
     # RowingLevel predictions: rower-only (RowingLevel.com is rower-only).
@@ -687,7 +688,7 @@ def fetch_wr_data(
     if machine != "rower":
         return {
             "records": records,
-            "cp_params": cp_params,
+            "pd_params": pd_params,
             "lb": lb,
             "lba": lba,
             "rl_predictions": rl_predictions,
@@ -711,7 +712,7 @@ def fetch_wr_data(
 
     return {
         "records": records,
-        "cp_params": cp_params,
+        "pd_params": pd_params,
         "lb": lb,
         "lba": lba,
         "rl_predictions": rl_predictions,

@@ -119,7 +119,7 @@ were doing the work at each moment.
    from the prior piece.
 
 3. **Numbers are date-aware.**  Both the reference watts that anchor each
-   zone and your modeled critical power and W' come from your PB history at
+   zone and your modeled power duration and W' come from your PB history at
    each workout's date.  As you set new PBs, historical ESS values for the
    workouts that broke them will shift slightly downward (because the new
    PBs raise the bar for "at-zone" effort).  This is intentional.
@@ -261,7 +261,7 @@ DCP       = mean(P) over seconds where P < CP, else CP/2 fallback
 ```
 
 * `CP` is the rower's date-aware 60-min reference watts.
-* `W' = Pow1 · tau1` from `fit_critical_power` when a CP fit converges,
+* `W' = Pow1 · tau1` from `fit_power_duration` when a CP fit converges,
   else a population default (28 kJ men, 22 kJ women).
 
 `anaerobic_strain` is `1 − min(W'bal) / W'` over the session.  Per
@@ -362,8 +362,8 @@ computed at module import).
   training stress in distance runners: the development of the GOVSS
   algorithm.  Online publication.
 * Skiba, P. F., et al. (2012). Modeling the expenditure and reconstitution
-  of work capacity above critical power. *Medicine & Science in Sports
+  of work capacity above power duration. *Medicine & Science in Sports
   & Exercise*, 44(8), 1526–1532.
 * Skiba, P. F., et al. (2014). Intramuscular determinants of the ability
-  to recover work capacity above critical power. *European Journal of
+  to recover work capacity above power duration. *European Journal of
   Applied Physiology*, 114(11), 2289–2298.

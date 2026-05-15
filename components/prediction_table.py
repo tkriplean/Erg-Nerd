@@ -28,7 +28,7 @@ def prediction_table(
 
     if not any(
         r.get("pb_pace", None)
-        or r.get("cp_pace", None)
+        or r.get("pd_pace", None)
         or r.get("loglog_pace", None)
         or r.get("pl_pace", None)
         or r.get("rl_pace", None)
@@ -58,9 +58,9 @@ def prediction_table(
     ]
     _anchor_min = min(_anchor_dists) if _anchor_dists else None
     _anchor_max = max(_anchor_dists) if _anchor_dists else None
-    _cp_r2 = (accuracy or {}).get("critical_power", {}).get("r2")
+    _pd_r2 = (accuracy or {}).get("power_duration", {}).get("r2")
     _few_anchors = len(_anchor_dists) < 3
-    _poor_r2 = _cp_r2 is not None and _cp_r2 < 0.95
+    _poor_r2 = _pd_r2 is not None and _pd_r2 < 0.95
 
     def _is_extrapolation(row):
         if _few_anchors or _poor_r2:

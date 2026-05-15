@@ -1,5 +1,5 @@
 """
-Critical Power model — four-parameter two-component power-duration curve.
+Power Duration model — four-parameter two-component power-duration curve.
 
 Model (veloclinic / rowsandall):
     P(t) = Pow1 / (1 + t/tau1)  +  Pow2 / (1 + t/tau2)
@@ -14,10 +14,10 @@ Fitting uses scipy.optimize.curve_fit in log-log space so that sprint and
 endurance events are weighted equally.
 
 Exported:
-    critical_power_model()         — model function (also usable as a scipy callable)
-    fit_critical_power()           — fit params from a list of PB dicts
-    critical_power_curve_points()  — generate Chart.js {x, y} smooth curve points
-    critical_power_event_points()  — generate Chart.js {x, y} marker points at ranked events
+    power_duration_model()         — model function (also usable as a scipy callable)
+    fit_power_duration()           — fit params from a list of PB dicts
+    power_duration_curve_points()  — generate Chart.js {x, y} smooth curve points
+    power_duration_event_points()  — generate Chart.js {x, y} marker points at ranked events
     crossover_point()              — fast/slow crossover as a Chart.js point
     stayer_sprinter_metrics()      — sprint/stayer index values
 """
@@ -64,7 +64,7 @@ _UPPER = [5000.0, 240.0, 2000.0, 14400.0]
 # ---------------------------------------------------------------------------
 
 
-def critical_power_model(
+def power_duration_model(
     t: float | np.ndarray,
     Pow1: float,
     tau1: float,
@@ -84,9 +84,9 @@ def critical_power_model(
 # ---------------------------------------------------------------------------
 
 
-def fit_critical_power(pb_list: list[dict]) -> Optional[dict]:
+def fit_power_duration(pb_list: list[dict]) -> Optional[dict]:
     """
-    Fit the critical power model to personal-best data.
+    Fit the power duration model to personal-best data.
 
     Parameters
     ----------
@@ -132,7 +132,7 @@ def fit_critical_power(pb_list: list[dict]) -> Optional[dict]:
     def _log_model(_log_t_arr, Pow1, tau1, Pow2, tau2):
         # ``durations`` (closure) is the unlogged form of curve_fit's xdata —
         # using it directly avoids a per-iteration np.exp on the same array.
-        p_arr = critical_power_model(durations, Pow1, tau1, Pow2, tau2)
+        p_arr = power_duration_model(durations, Pow1, tau1, Pow2, tau2)
         # Guard against non-positive predictions before taking log.
         return np.log(np.clip(p_arr, 1e-3, None))
 
@@ -161,7 +161,7 @@ def fit_critical_power(pb_list: list[dict]) -> Optional[dict]:
     Pow1, tau1, Pow2, tau2 = popt
 
     # R² on the original (t, P) scale.
-    p_pred = critical_power_model(durations, Pow1, tau1, Pow2, tau2)
+    p_pred = power_duration_model(durations, Pow1, tau1, Pow2, tau2)
     ss_res = float(np.sum((powers - p_pred) ** 2))
     ss_tot = float(np.sum((powers - np.mean(powers)) ** 2))
     r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
@@ -199,7 +199,7 @@ def _t_to_chart_point(
 
     Returns None if the resulting pace is outside PACE_MIN/PACE_MAX.
     """
-    watts = critical_power_model(t, Pow1, tau1, Pow2, tau2)
+    watts = power_duration_model(t, Pow1, tau1, Pow2, tau2)
     if watts <= 0:
         return None
     pace = watts_to_pace(watts)
@@ -211,14 +211,14 @@ def _t_to_chart_point(
     return {"x": round(dist, 1), "y": y}
 
 
-def critical_power_curve_points(
+def power_duration_curve_points(
     params: dict,
     x_min: float,
     x_max: float,
     show_watts: bool,
 ) -> list[dict]:
     """
-    Generate Chart.js {x, y} points for the critical power prediction curve.
+    Generate Chart.js {x, y} points for the power duration prediction curve.
 
     x = distance in meters, y = watts or pace (sec/500m).
     Points outside [x_min, x_max] or outside PACE_MIN/PACE_MAX are dropped.
@@ -247,7 +247,7 @@ def critical_power_curve_points(
 # ---------------------------------------------------------------------------
 
 
-def critical_power_event_points(
+def power_duration_event_points(
     params: dict,
     selected_dists: set,
     selected_times: set,
@@ -256,7 +256,7 @@ def critical_power_event_points(
 ) -> list[dict]:
     """
     Generate one Chart.js {x, y, _event_label} point per selected ranked event,
-    positioned at the Critical Power model's prediction for that event.
+    positioned at the Power Duration model's prediction for that event.
 
     Distance events: solve numerically for the duration t at which the model
     predicts the rower covers exactly dist_m meters.
@@ -278,7 +278,7 @@ def critical_power_event_points(
             continue
 
         def _residual(t, _d=dist_m):
-            P = critical_power_model(t, Pow1, tau1, Pow2, tau2)
+            P = power_duration_model(t, Pow1, tau1, Pow2, tau2)
             if P <= 0:
                 return -_d
             return (P / 2.80) ** (1.0 / 3.0) * t - _d
@@ -379,9 +379,9 @@ def stayer_sprinter_metrics(params: dict) -> dict:
         params["Pow2"],
         params["tau2"],
     )
-    P10 = critical_power_model(10.0, Pow1, tau1, Pow2, tau2)
-    P240 = critical_power_model(240.0, Pow1, tau1, Pow2, tau2)
-    P3600 = critical_power_model(3600.0, Pow1, tau1, Pow2, tau2)
+    P10 = power_duration_model(10.0, Pow1, tau1, Pow2, tau2)
+    P240 = power_duration_model(240.0, Pow1, tau1, Pow2, tau2)
+    P3600 = power_duration_model(3600.0, Pow1, tau1, Pow2, tau2)
     return {
         "P10": round(P10, 1),
         "P240": round(P240, 1),

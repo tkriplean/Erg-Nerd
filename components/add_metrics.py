@@ -41,7 +41,7 @@ from typing import Callable, Optional
 
 from components.app_context import AppContext, get_profile
 from components.concept2_sync import get_all_workouts
-from services.critical_power_model import fit_critical_power
+from services.power_duration_model import fit_power_duration
 from services.erg_stress import (
     compute_session_metrics,
     compute_w_prime_estimate,
@@ -58,15 +58,15 @@ from services.volume_bins import zone_fractions_to_bin_list
 from services.workout_metrics_cache import get_or_compute
 
 
-# Process-wide critical-power fit cache.  ``fit_critical_power`` (scipy
+# Process-wide critical-power fit cache.  ``fit_power_duration`` (scipy
 # ``curve_fit`` over a 4-parameter 2-component CP model) costs ~3.5 ms
 # per call but fires once per distinct refs-content per render.  The
 # refs dict is purely a function of the rower's PB index, so two renders
 # with the same PBs produce the same fit — caching by content here
-# survives across renders (the per-render ``cp_memo`` inside
+# survives across renders (the per-render ``pd_memo`` inside
 # :func:`add_metrics` only collapses fits within one render).
-_CP_FIT_CACHE: dict[tuple, tuple] = {}
-_CP_FIT_CACHE_MAX = 4096
+_PD_FIT_CACHE: dict[tuple, tuple] = {}
+_PD_FIT_CACHE_MAX = 4096
 
 
 def _ref_watts_at_duration_fn(ref_watts_for: Callable):
@@ -92,13 +92,13 @@ def _ref_watts_at_duration_fn(ref_watts_for: Callable):
     return fn
 
 
-def _cp_w_prime_for_refs(
+def _pd_w_prime_for_refs(
     refs: dict, gender: Optional[str], mass_kg: Optional[float] = None
 ) -> tuple:
-    """Return ``(cp_watts, w_prime_joules, cp_params_or_None)`` from a refs dict.
+    """Return ``(pd_watts, w_prime_joules, pd_params_or_None)`` from a refs dict.
 
     Builds a synthetic PB list from the date's ranked-event reference watts
-    and runs :func:`fit_critical_power` over it; the resulting Pow1·tau1
+    and runs :func:`fit_power_duration` over it; the resulting Pow1·tau1
     feeds :func:`compute_w_prime_estimate`.  Falls back to a mass-scaled
     population default for W' when the fit doesn't converge.
 
@@ -119,10 +119,10 @@ def _cp_w_prime_for_refs(
             d = pace * ck[1] / 500.0
         pb_list.append({"duration_s": d, "watts": watts})
 
-    cp_params = fit_critical_power(pb_list)
+    pd_params = fit_power_duration(pb_list)
     cp = refs.get(("time", 36000))
-    w_prime = compute_w_prime_estimate(cp_params, gender, mass_kg)
-    return (cp, w_prime, cp_params)
+    w_prime = compute_w_prime_estimate(pd_params, gender, mass_kg)
+    return (cp, w_prime, pd_params)
 
 
 def _assign_session_metrics(r: dict, sm: Optional[dict], wid) -> None:
@@ -178,9 +178,7 @@ def _assign_session_metrics(r: dict, sm: Optional[dict], wid) -> None:
     r["_stimulus_systems"] = pw.get("stimulus_systems") if pw else None
     if pw and pw.get("zone_time_fractions"):
         r["_zone_time_fractions"] = pw["zone_time_fractions"]
-        r["_zone_bin_fractions"] = zone_fractions_to_bin_list(
-            pw["zone_time_fractions"]
-        )
+        r["_zone_bin_fractions"] = zone_fractions_to_bin_list(pw["zone_time_fractions"])
     else:
         r["_zone_time_fractions"] = None
         r["_zone_bin_fractions"] = None
@@ -224,7 +222,7 @@ def add_metrics(
       * :func:`get_all_workouts(apply_season_filters=False)` — full
         machine-filtered corpus, used to build the date-aware reference-
         watts resolver (the corpus *must* be unfiltered, otherwise the
-        synthetic PB list fed to :func:`fit_critical_power` collapses
+        synthetic PB list fed to :func:`fit_power_duration` collapses
         and severity scores tank — this used to be a footgun on every
         caller).
 
@@ -263,23 +261,23 @@ def add_metrics(
     #   redundant cache lookups when several session-mate workouts ask
     #   for the same SessionMetrics inside one render.
     #
-    # * ``cp_memo`` — keyed by the rower's reference-watts contents.  The
-    #   underlying ``fit_critical_power`` call (scipy curve_fit) is the
+    # * ``pd_memo`` — keyed by the rower's reference-watts contents.  The
+    #   underlying ``fit_power_duration`` call (scipy curve_fit) is the
     #   second-largest hot spot in compute-uncached ESS rendering.  Date-
     #   aware reference watts change only when a new PB lands, so
     #   consecutive same-date workouts resolve to the *same refs dict
     #   content* — caching by content here collapses N curve-fits to one
     #   per distinct refs profile per render.
     session_memo: dict = {}
-    cp_memo: dict = {}
+    pd_memo: dict = {}
     gender_key = (gender or "").lower()
     # Round mass to 0.5 kg for the cache key — the W' default is linear in
     # mass, so half-kg quantisation keeps within-noise.  None stays None.
     mass_key = round(mass_kg * 2.0) / 2.0 if mass_kg else None
 
-    def _cached_cp_w_prime(refs: Optional[dict]) -> tuple:
+    def _cached_pd_w_prime(refs: Optional[dict]) -> tuple:
         if not refs:
-            return _cp_w_prime_for_refs(refs, gender, mass_kg)
+            return _pd_w_prime_for_refs(refs, gender, mass_kg)
         # Round watts to nearest 5W for the cache key (the fit itself still
         # runs on unrounded watts).  Empirically this collapses ~46% of
         # distinct keys with <1% mean shift in CP/W' — well below physiological
@@ -287,17 +285,17 @@ def add_metrics(
         content_key = tuple(
             sorted((d, int(round(w / 5.0) * 5)) for d, w in refs.items())
         )
-        cached = cp_memo.get(content_key)
+        cached = pd_memo.get(content_key)
         if cached is not None:
             return cached
         global_key = (content_key, gender_key, mass_key)
-        cached = _CP_FIT_CACHE.get(global_key)
+        cached = _PD_FIT_CACHE.get(global_key)
         if cached is None:
-            cached = _cp_w_prime_for_refs(refs, gender, mass_kg)
-            if len(_CP_FIT_CACHE) >= _CP_FIT_CACHE_MAX:
-                _CP_FIT_CACHE.clear()
-            _CP_FIT_CACHE[global_key] = cached
-        cp_memo[content_key] = cached
+            cached = _pd_w_prime_for_refs(refs, gender, mass_kg)
+            if len(_PD_FIT_CACHE) >= _PD_FIT_CACHE_MAX:
+                _PD_FIT_CACHE.clear()
+            _PD_FIT_CACHE[global_key] = cached
+        pd_memo[content_key] = cached
         return cached
 
     for r in workouts:
@@ -335,7 +333,7 @@ def add_metrics(
 
             def _compute(_session=session, _r=r):
                 ref_watts = ref_watts_for(_r)
-                cp, w_prime, _cp_params = _cached_cp_w_prime(ref_watts)
+                cp, w_prime, _pd_params = _cached_pd_w_prime(ref_watts)
                 return compute_session_metrics(
                     _session,
                     rwd_fn,

@@ -19,7 +19,7 @@ Every number you see has a provenance tag, telling you where it came from and ho
 
 *Estimated.* Your estimated watts at every ranked event distance, **for the date you're looking at.**
 
-Most training apps grade every workout against a single snapshot of "current fitness." Erg Nerd builds a quarterly index instead, with markers at Jan 1, Apr 1, Jul 1, and Oct 1 of every year you have data, so a 2009 row gets graded against 2009 fitness, not 2026 fitness. Between markers, watts are linearly interpolated.
+Most training apps grade every workout against a single snapshot of "current fitness." Erg Nerd builds a quarterly index for every year you have data, so a 2009 row gets graded against 2009 fitness, not 2026 fitness. Between markers, watts are linearly interpolated.
 
 For each marker, the app pulls your PBs from the prior 365 days and runs a predictor cascade:
 
@@ -49,11 +49,11 @@ P(t) = Pow1 / (1 + t/τ1) + Pow2 / (1 + t/τ2)
 
 `Pow1` and `τ1` describe a short-duration component (high power, fast falloff). `Pow2` and `τ2` describe a long-duration component (lower power, slow falloff). Their sum is your power-duration curve. The fit runs in log-log space so sprint and endurance events get equal weight.
 
-This is not the Critical Power model in the sense some endurance-physiology literature uses the term. Monod-Scherrer / Skiba Critical Power has a defined biological meaning (the highest power you can sustain without progressive W' depletion) and W' as a finite work integral. The Veloclinic fit is purely empirical: it captures curve shape, nothing more. We don't claim `Pow1` and `Pow2` map to fast-twitch versus slow-twitch fibers; they are mathematical components.
+This is not the Power Duration model in the sense some endurance-physiology literature uses the term. Monod-Scherrer / Skiba Power Duration has a defined biological meaning (the highest power you can sustain without progressive W' depletion) and W' as a finite work integral. The Veloclinic fit is purely empirical: it captures curve shape, nothing more. We don't claim `Pow1` and `Pow2` map to fast-twitch versus slow-twitch fibers; they are mathematical components.
 
 **Used on:** Power Curve page chart and prediction table. The fit also feeds Reference Watts (predictor cascade step 1) and W' Remaining (as a proxy for the anaerobic capacity baseline).
 
-**Sources for the model:** Damoiseaux at Veloclinic, [Power Model Derivation (PDF)](https://veloclinic.com/wp-content/uploads/2014/04/PowerModelDerivation-1.pdf). Sander Roosendaal at rowsandall, [How do we calculate critical power](https://analytics.rowsandall.com/2017/06/17/how-do-we-calculate-critical-power/).
+**Sources for the model:** Damoiseaux at Veloclinic, [Power Model Derivation (PDF)](https://veloclinic.com/wp-content/uploads/2014/04/PowerModelDerivation-1.pdf). Sander Roosendaal at rowsandall, [How do we calculate power duration](https://analytics.rowsandall.com/2017/06/17/how-do-we-calculate-critical-power/).
 
 **Limits.** The fit is only accepted when you have ≥5 PBs, ≥10:1 duration ratio, and R² ≥ 0.90. Otherwise the app falls back to other predictors.
 
@@ -254,9 +254,9 @@ dW'bal/dt = (W'₀ - W'bal) / τ_W'                when P < CP   (recovery below
 τ_W'      = 546 · exp(-0.01 · DCP) + 316
 ```
 
-Where `CP` is your 60-minute Reference Watts (used as a proxy for true Critical Power), `W'₀` is the starting anaerobic capacity (taken as `Pow1 · τ1` from your Power-Duration fit when available, falling back to a population default of 28 kJ for men or 22 kJ for women), and `DCP` is the session-mean watts below `CP`.
+Where `CP` is your 60-minute Reference Watts (used as a proxy for true Power Duration), `W'₀` is the starting anaerobic capacity (taken as `Pow1 · τ1` from your Power-Duration fit when available, falling back to a population default of 28 kJ for men or 22 kJ for women), and `DCP` is the session-mean watts below `CP`.
 
-This is *model proxy* rather than *computed* because several inputs are approximate. The 60-minute Reference Watts is not the true Critical Power. CP in the Monod-Scherrer / Skiba sense is closer to 95% of 20-minute power, or about 105% of FTP. Using 60-min power as `CP` makes every watt above your 60-min power count as "above CP," so W' depletes too easily and the recovery time constant gets calibrated against the wrong baseline. `Pow1 · τ1` from the Veloclinic fit is dimensionally watts·seconds, but it is not a finite anaerobic work integral the way Skiba's W' is. The population defaults are gendered without scaling for mass; a 60kg lightweight woman and a 95kg heavyweight man should not get the same W'.
+This is *model proxy* rather than *computed* because several inputs are approximate. The 60-minute Reference Watts is not the true Power Duration. CP in the Monod-Scherrer / Skiba sense is closer to 95% of 20-minute power, or about 105% of FTP. Using 60-min power as `CP` makes every watt above your 60-min power count as "above CP," so W' depletes too easily and the recovery time constant gets calibrated against the wrong baseline. `Pow1 · τ1` from the Veloclinic fit is dimensionally watts·seconds, but it is not a finite anaerobic work integral the way Skiba's W' is. The population defaults are gendered without scaling for mass; a 60kg lightweight woman and a 95kg heavyweight man should not get the same W'.
 
 Read W' Remaining as a relative-to-yourself tracker. It is useful for comparing how much anaerobic dig each of your own workouts demanded, but not as a calibrated joule count to compare across rowers or against published research.
 
@@ -373,6 +373,6 @@ What helps:
 - Monod, H., & Scherrer, J. (1965). The work capacity of a synergic muscular group. *Ergonomics.*
 - Pinot, J., & Grappe, F. (2011). The record power profile. *International Journal of Sports Medicine.*
 - Roosendaal, S. [Ergometer scores, how great are you?](https://analytics.rowsandall.com/2018/01/12/ergometer-scores-how-great-are-you/) rowsandall (2018).
-- Roosendaal, S. [How do we calculate critical power?](https://analytics.rowsandall.com/2017/06/17/how-do-we-calculate-critical-power/) rowsandall (2017).
+- Roosendaal, S. [How do we calculate power duration?](https://analytics.rowsandall.com/2017/06/17/how-do-we-calculate-critical-power/) rowsandall (2017).
 - Seiler, S., & Tønnessen, E. (2009). Intervals, thresholds, and long slow distance. *Sportscience.*
 - Skiba, P. F., et al. (2012, 2014). W'bal dynamics; CP modeling.

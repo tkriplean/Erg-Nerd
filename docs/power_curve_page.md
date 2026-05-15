@@ -30,7 +30,7 @@ Chart box:
         Compare vs. World-Class (when profile complete)
 
 Prediction table (below chart):
-    Columns: Event | Your PB | Critical Power | Log-Log | Avg. Paul's Law |
+    Columns: Event | Your PB | Power Duration | Log-Log | Avg. Paul's Law |
              Avg. RowingLevel | Average
     Accuracy footer: RMSE + R² per predictor (computed in services layer)
 
@@ -141,7 +141,7 @@ files.
 |                           | description`, `computed_from_            |
 |                           | components`, optional `component_label`  |
 |                           | / `component_desc`), per-model pace      |
-|                           | samplers (`cp_pace_at`, `loglog_pace_    |
+|                           | samplers (`pd_pace_at`, `loglog_pace_    |
 |                           | at`, `pauls_law_pace_at`, `rowinglevel_  |
 |                           | pace_at`), and `build_prediction_table_  |
 |                           | data` (multi-model prediction            |
@@ -150,7 +150,7 @@ files.
 |                           | R² / n over enabled events; makes        |
 |                           | `_prediction_table` a pure renderer).    |
 +---------------------------+------------------------------------------+
-| `critical_power_model.py` | 2-component CP model fitting, curve      |
+| `power_duration_model.py` | 2-component CP model fitting, curve      |
 |                           | generation, sprint/stayer crossover,     |
 |                           | performance metrics.                     |
 +---------------------------+------------------------------------------+
@@ -226,7 +226,7 @@ receives (`hash(filters)` invalidates the whole pipeline atomically).
 +-------------------------+---------------+--------------------+---------+------------------------------------------+
 | `chart_log_y`           | `bool`        | `False`            | Style   | Log scale on y-axis                      |
 +-------------------------+---------------+--------------------+---------+------------------------------------------+
-| `chart_predictor`       | `str`         | `"critical_power"` | Style   | `PREDICTORS_BY_KEY` key                  |
+| `chart_predictor`       | `str`         | `"power_duration"` | Style   | `PREDICTORS_BY_KEY` key                  |
 +-------------------------+---------------+--------------------+---------+------------------------------------------+
 | `chart_show_components` | `bool`        | `False`            | Style   | Show per-anchor / component sub-curves   |
 +-------------------------+---------------+--------------------+---------+------------------------------------------+
@@ -544,7 +544,7 @@ the countdown expires.
 
 ### CP crossover annotation
 
-When predictor is Critical Power and Show Components is enabled, each keyframe
+When predictor is Power Duration and Show Components is enabled, each keyframe
 carries `pred_canvas_labels` — a bottom-anchored canvas label array. JS merges
 these into `allCanvasLabels` every tick so the "Fast-twitch and aerobic
 contributions are equal here" annotation tracks the current CP crossover point.
@@ -692,7 +692,7 @@ description). See [docs/prediction.md][2] for full model mathematics.
 +--------------------+------------------------------------------+
 | `"pauls_law"`      | Paul's Law (personalised K)              |
 +--------------------+------------------------------------------+
-| `"critical_power"` | Two-component Critical Power             |
+| `"power_duration"` | Two-component Power Duration             |
 +--------------------+------------------------------------------+
 | `"rowinglevel"`    | RowingLevel population norms             |
 +--------------------+------------------------------------------+
@@ -709,7 +709,7 @@ Label and description are pulled from the registry — no duplicated metadata.
 ### CP Crossover point
 
 The duration `t*` at which fast-twitch and slow-twitch CP contributions are
-equal. Visible when Critical Power is selected with Show components enabled.
+equal. Visible when Power Duration is selected with Show components enabled.
 Rendered as a dashed vertical teal line at `t*` with an explanation label at the
 chart bottom.
 
@@ -756,7 +756,7 @@ Accuracy is folded into the services layer so it's computed once per snapshot
 | Your PB           | Unfiltered personal best pace + total    |
 |                   | time/distance                            |
 +-------------------+------------------------------------------+
-| Critical Power    | CP model prediction + delta vs PB        |
+| Power Duration    | CP model prediction + delta vs PB        |
 +-------------------+------------------------------------------+
 | Log-Log Watts Fit | Log-log prediction + delta               |
 +-------------------+------------------------------------------+
@@ -828,8 +828,8 @@ A dismissible warning banner appears (dismissal stored in `localStorage` under
 1.  `fetch_wr_data(gender, age, weight_kg)` (in `services/concept2_records.py`)
     retrieves age-group WRs.
 
-2.  Records are converted to CP inputs via `records_to_cp_input()` and fitted
-    with `fit_critical_power()` — same four-parameter curve as the user's own CP
+2.  Records are converted to CP inputs via `records_to_pd_input()` and fitted
+    with `fit_power_duration()` — same four-parameter curve as the user's own CP
     fit.
 
 3.  Result cached in `state.wr_data`, invalidated by `state.wr_fetch_key`

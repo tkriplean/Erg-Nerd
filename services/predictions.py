@@ -16,8 +16,8 @@ Three logical sections:
    [PACE_MIN, PACE_MAX].
        loglog_pace_at(slope, intercept, dist_m)
        pauls_law_pace_at(lifetime_best, lifetime_best_anchor, dist_m, k=5.0)
-       cp_pace_at(cp_params, dist_m)         cp_params: dict or 4-tuple
-       cp_pace_at_time(cp_params, T_seconds) direct watts(t) evaluation
+       pd_pace_at(pd_params, dist_m)         pd_params: dict or 4-tuple
+       pd_pace_at_time(pd_params, T_seconds) direct watts(t) evaluation
        rowinglevel_pace_at(rl_predictions, lifetime_best_anchor, dist_m)
 
 3. **Prediction-table builder** — `build_prediction_table_data` computes all
@@ -52,7 +52,7 @@ from services.rowing_utils import (
     pauls_law_pace,
     watts_to_pace,
 )
-from services.critical_power_model import critical_power_model
+from services.power_duration_model import power_duration_model
 from services.formatters import fmt_split, fmt_result_duration
 
 
@@ -70,7 +70,7 @@ class Predictor:
     decide how to render them.
     """
 
-    key: str  # "critical_power" | "loglog" | "pauls_law" | "rowinglevel" | "average" | "none"
+    key: str  # "power_duration" | "loglog" | "pauls_law" | "rowinglevel" | "average" | "none"
     name: str  # Short display label (dropdown + table column header)
     extended_description: str  # Full description — dropdown option text + prediction-table tooltip
     computed_from_components: bool  # True when this model is computed by averaging per-anchor / per-model components
@@ -80,7 +80,7 @@ class Predictor:
 
 PREDICTORS: tuple = (
     Predictor(
-        key="critical_power",
+        key="power_duration",
         name="Power-Duration",
         extended_description=(
             "Veloclinic two-component fit — a short-duration curve plus a "
@@ -200,61 +200,61 @@ def pauls_law_pace_at(
     return sum(paces) / len(paces) if paces else None
 
 
-def _cp_unpack(cp_params):
-    """Return (Pow1, tau1, Pow2, tau2) or None if cp_params is malformed."""
-    if cp_params is None:
+def _pd_unpack(pd_params):
+    """Return (Pow1, tau1, Pow2, tau2) or None if pd_params is malformed."""
+    if pd_params is None:
         return None
-    if isinstance(cp_params, dict):
-        if not all(k in cp_params for k in ("Pow1", "tau1", "Pow2", "tau2")):
+    if isinstance(pd_params, dict):
+        if not all(k in pd_params for k in ("Pow1", "tau1", "Pow2", "tau2")):
             return None
         return (
-            cp_params["Pow1"],
-            cp_params["tau1"],
-            cp_params["Pow2"],
-            cp_params["tau2"],
+            pd_params["Pow1"],
+            pd_params["tau1"],
+            pd_params["Pow2"],
+            pd_params["tau2"],
         )
-    return cp_params
+    return pd_params
 
 
-def cp_pace_at(cp_params, dist_m: float) -> Optional[float]:
-    """Critical Power pace at dist_m.
+def pd_pace_at(pd_params, dist_m: float) -> Optional[float]:
+    """Power Duration pace at dist_m.
 
-    cp_params accepts either a dict {Pow1, tau1, Pow2, tau2} or a 4-tuple
+    pd_params accepts either a dict {Pow1, tau1, Pow2, tau2} or a 4-tuple
     in that order.  Requires numerical inversion to solve for the duration
     at which the rower covers exactly dist_m meters at the model's pace.
     """
-    params = _cp_unpack(cp_params)
+    params = _pd_unpack(pd_params)
     if params is None:
         return None
     Pow1, tau1, Pow2, tau2 = params
 
     def _resid(t, _d=dist_m):
-        P = critical_power_model(t, Pow1, tau1, Pow2, tau2)
+        P = power_duration_model(t, Pow1, tau1, Pow2, tau2)
         return (P / 2.80) ** (1.0 / 3.0) * t - _d if P > 0 else -_d
 
     try:
         t_star = brentq(_resid, 10.0, 20_000.0, xtol=0.5)
     except Exception:
         return None
-    watts = critical_power_model(t_star, Pow1, tau1, Pow2, tau2)
+    watts = power_duration_model(t_star, Pow1, tau1, Pow2, tau2)
     if watts <= 0:
         return None
     return _pace_if_valid(watts_to_pace(watts))
 
 
-def cp_pace_at_time(cp_params, T_seconds: float) -> Optional[float]:
-    """Critical Power pace at a fixed duration T_seconds.
+def pd_pace_at_time(pd_params, T_seconds: float) -> Optional[float]:
+    """Power Duration pace at a fixed duration T_seconds.
 
     CP is formulated as watts(t), so for a timed event of T seconds the
     predicted watts are a direct evaluation — no inversion needed.  This is
     the correct sampler for timed events; ``_solve_timed_pace`` fails to
-    bracket a root when composed with ``cp_pace_at``'s own inversion.
+    bracket a root when composed with ``pd_pace_at``'s own inversion.
     """
-    params = _cp_unpack(cp_params)
+    params = _pd_unpack(pd_params)
     if params is None:
         return None
     Pow1, tau1, Pow2, tau2 = params
-    watts = critical_power_model(T_seconds, Pow1, tau1, Pow2, tau2)
+    watts = power_duration_model(T_seconds, Pow1, tau1, Pow2, tau2)
     if watts <= 0:
         return None
     return _pace_if_valid(watts_to_pace(watts))
@@ -413,7 +413,7 @@ def _compute_predictor_raws(
     event_type: str,
     event_value: int,
     *,
-    cp_params: Optional[tuple],
+    pd_params: Optional[tuple],
     ll_slope: Optional[float],
     ll_intercept: Optional[float],
     lifetime_best: dict,
@@ -424,14 +424,14 @@ def _compute_predictor_raws(
     """
     Compute raw pace (sec/500m) for each predictor for one event.
 
-    Returns a dict with keys: cp_raw, ll_raw, pl_raw, rl_raw.
+    Returns a dict with keys: pd_raw, ll_raw, pl_raw, rl_raw.
     Any value may be None if unavailable or outside [PACE_MIN, PACE_MAX].
 
     event_type == "dist": event_value is meters — sampler called directly.
     event_type == "time": event_value is tenths-of-seconds; each sampler is
         inverted via _solve_timed_pace to find the distance a rower covers
         in exactly T seconds.
-    cp_params: (Pow1, tau1, Pow2, tau2) tuple or None.
+    pd_params: (Pow1, tau1, Pow2, tau2) tuple or None.
     pauls_k: personalised Paul's Law constant (sec/500m per doubling); default 5.0.
     """
     is_dist = event_type == "dist"
@@ -445,12 +445,12 @@ def _compute_predictor_raws(
         return _solve_timed_pace(sampler, T)
 
     # CP is formulated as watts(t), so for timed events evaluate directly.
-    # Composing _solve_timed_pace with cp_pace_at's own inversion fails to
+    # Composing _solve_timed_pace with pd_pace_at's own inversion fails to
     # bracket a root in brentq.
-    cp_raw = cp_pace_at(cp_params, dist_m) if is_dist else cp_pace_at_time(cp_params, T)
+    pd_raw = pd_pace_at(pd_params, dist_m) if is_dist else pd_pace_at_time(pd_params, T)
 
     return {
-        "cp_raw": cp_raw,
+        "pd_raw": pd_raw,
         "ll_raw": _at(lambda d: loglog_pace_at(ll_slope, ll_intercept, d)),
         "pl_raw": _at(
             lambda d: pauls_law_pace_at(
@@ -469,7 +469,7 @@ def build_prediction_table_data(
     lifetime_best: dict,
     lifetime_best_anchor: dict,
     all_lifetime_best: dict,
-    critical_power_params: Optional[dict] = None,
+    power_duration_params: Optional[dict] = None,
     rl_predictions: Optional[dict] = None,
     pauls_k: float = 5.0,
     selected_dist_set: Optional[set] = None,
@@ -497,7 +497,7 @@ def build_prediction_table_data(
       rows      — list of per-event row dicts.  Keys:
                     label, event_type, event_value,
                     average_pace/result/raw,
-                    critical_power_pace/result/raw,
+                    power_duration_pace/result/raw,
                     loglog_pace/result/raw,
                     pauls_law_pace/result/raw,
                     rowinglevel_pace/result/raw,
@@ -505,7 +505,7 @@ def build_prediction_table_data(
                   Prefixes match ``Predictor.key`` so callers can use
                   ``row[f"{p.key}_pace"]`` directly.
       accuracy  — dict[str, dict] keyed by Predictor.key
-                  ("average", "critical_power", "loglog", "pauls_law",
+                  ("average", "power_duration", "loglog", "pauls_law",
                   "rowinglevel") → {"rmse": float|None, "r2": float|None,
                   "n": int}.  rmse/r2 are None when fewer than one (rmse) or
                   two (r2) matching (prediction, PB) pairs exist.
@@ -515,10 +515,10 @@ def build_prediction_table_data(
     _ll_slope, _ll_intercept = _ll_fit if _ll_fit is not None else (None, None)
 
     # ── CP params — convert dict to tuple once ────────────────────────────────
-    _cp = critical_power_params
-    _cp_tuple: Optional[tuple] = (
-        (_cp["Pow1"], _cp["tau1"], _cp["Pow2"], _cp["tau2"])
-        if _cp is not None
+    _pd = power_duration_params
+    _pd_tuple: Optional[tuple] = (
+        (_pd["Pow1"], _pd["tau1"], _pd["Pow2"], _pd["tau2"])
+        if _pd is not None
         else None
     )
 
@@ -531,7 +531,7 @@ def build_prediction_table_data(
 
     def _predictor_kwargs():
         return dict(
-            cp_params=_cp_tuple,
+            pd_params=_pd_tuple,
             ll_slope=_ll_slope,
             ll_intercept=_ll_intercept,
             lifetime_best=lifetime_best,
@@ -544,13 +544,13 @@ def build_prediction_table_data(
 
     def _build_row(event_type: str, event_value: int, label: str) -> dict:
         raws = _compute_predictor_raws(event_type, event_value, **_predictor_kwargs())
-        cp_raw, cp_pace, cp_result = _cell(raws["cp_raw"], event_type, event_value)
+        pd_raw, pd_pace, pd_result = _cell(raws["pd_raw"], event_type, event_value)
         ll_raw, ll_pace, ll_result = _cell(raws["ll_raw"], event_type, event_value)
         pl_raw, pl_pace, pl_result = _cell(raws["pl_raw"], event_type, event_value)
         rl_raw, rl_pace, rl_result = _cell(raws["rl_raw"], event_type, event_value)
         pb_raw = all_lifetime_best.get((event_type, event_value))
         pb_raw, pb_pace, pb_result = _cell(pb_raw, event_type, event_value)
-        _avg_cands = [r for r in [cp_raw, ll_raw, pl_raw, rl_raw] if r is not None]
+        _avg_cands = [r for r in [pd_raw, ll_raw, pl_raw, rl_raw] if r is not None]
         _avg_r = sum(_avg_cands) / len(_avg_cands) if _avg_cands else None
         _avg_r, avg_pace, avg_result = _cell(_avg_r, event_type, event_value)
         return {
@@ -560,9 +560,9 @@ def build_prediction_table_data(
             "average_pace": avg_pace,
             "average_result": avg_result,
             "average_raw": _avg_r,
-            "critical_power_pace": cp_pace,
-            "critical_power_result": cp_result,
-            "critical_power_raw": cp_raw,
+            "power_duration_pace": pd_pace,
+            "power_duration_result": pd_result,
+            "power_duration_raw": pd_raw,
             "loglog_pace": ll_pace,
             "loglog_result": ll_result,
             "loglog_raw": ll_raw,
@@ -588,7 +588,7 @@ def build_prediction_table_data(
     accuracy: dict = {}
     _dist_ok = selected_dist_set is None
     _time_ok = selected_time_set is None
-    for _ck in ("average", "critical_power", "loglog", "pauls_law", "rowinglevel"):
+    for _ck in ("average", "power_duration", "loglog", "pauls_law", "rowinglevel"):
         _pairs = [
             (r[f"{_ck}_raw"], r["pb_raw"])
             for r in rows

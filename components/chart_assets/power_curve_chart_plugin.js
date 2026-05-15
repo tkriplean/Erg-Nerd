@@ -431,7 +431,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
           if (!items.length) return "";
           const raw = items[0].raw;
           // Crossover point gets its own header.
-          if (raw && raw._cp_crossover) return "Power-Duration — Sprint/Endurance Crossover";
+          if (raw && raw._pd_crossover) return "Power-Duration — Sprint/Endurance Crossover";
           // All other prediction points get a "Predicted" header instead of a date.
           if (items[0].dataset.isPrediction) return "Predicted";
           return (raw && raw.date) ? raw.date : "";
@@ -456,7 +456,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
         },
         afterLabel(context) {
           const raw = context.raw;
-          if (raw && raw._cp_crossover && raw._t_label) {
+          if (raw && raw._pd_crossover && raw._t_label) {
             return [
               `At ${raw._t_label} effort duration`,
               "Short-duration and long-duration components are equal here.",
@@ -646,7 +646,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     const empty = {
       snapshot: {
         lb: {}, lb_anchor: {},
-        cp_params: null, ll_slope: null, ll_intercept: null, pauls_k: 5.0,
+        pd_params: null, ll_slope: null, ll_intercept: null, pauls_k: 5.0,
       },
     };
     if (!timelineSnapshots || !selectionKey) return empty;
@@ -1086,7 +1086,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
 
   // -----------------------------------------------------------------------
   // Prediction-curve math — ports of services/predictions.py +
-  // services/critical_power_model.py.  All pure; consumed by the
+  // services/power_duration_model.py.  All pure; consumed by the
   // snapshot-driven dataset builders below.
   // -----------------------------------------------------------------------
 
@@ -1105,16 +1105,16 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     [18000, "30 min"], [36000, "60 min"],
   ];
 
-  // CP curve generation — matches services/critical_power_model.py constants.
-  const CP_T_MIN = 10.0;
-  const CP_T_MAX = 10_800.0;
-  const CP_CURVE_N_PTS = 200;
+  // CP curve generation — matches services/power_duration_model.py constants.
+  const PD_T_MIN = 10.0;
+  const PD_T_MAX = 10_800.0;
+  const PD_CURVE_N_PTS = 200;
 
   function paceValid(p) {
     return p !== null && p !== undefined && Number.isFinite(p) && p >= PACE_MIN && p <= PACE_MAX;
   }
 
-  /** Critical Power model: P(t) = Pow1/(1+t/tau1) + Pow2/(1+t/tau2) */
+  /** Power Duration model: P(t) = Pow1/(1+t/tau1) + Pow2/(1+t/tau2) */
   function criticalPowerModel(t, Pow1, tau1, Pow2, tau2) {
     return Pow1 / (1.0 + t / tau1) + Pow2 / (1.0 + t / tau2);
   }
@@ -1178,9 +1178,9 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
   }
 
   /**
-   * Critical Power pace at a distance — invert the monotone P(t) model:
+   * Power Duration pace at a distance — invert the monotone P(t) model:
    * find t* such that (P(t*)/2.80)^(1/3) * t* = distM, then return
-   * paceFromWatts(P(t*)).  Matches cp_pace_at in services/predictions.py.
+   * paceFromWatts(P(t*)).  Matches pd_pace_at in services/predictions.py.
    */
   function paceFromCP(cpParams, distM) {
     const p = cpUnpack(cpParams);
@@ -1265,7 +1265,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
 
   // -----------------------------------------------------------------------
   // Prediction-dataset builders — driven by a per-keyframe "snapshot" dict
-  // {lb, lb_anchor, cp_params, ll_slope, ll_intercept, pauls_k} plus
+  // {lb, lb_anchor, pd_params, ll_slope, ll_intercept, pauls_k} plus
   // bundle-level opts {predictor, show_components, show_watts, x_mode,
   // is_dark, x_bounds, y_bounds, rl_predictions}.
   //
@@ -1461,12 +1461,12 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     return out;
   }
 
-  // ── Critical Power ──────────────────────────────────────────────────────
+  // ── Power Duration ──────────────────────────────────────────────────────
   // Returns { datasets, canvasLabels } — datasets include the curve, event
   // markers, optional fast/slow components and crossover vline; canvasLabels
   // carries the bottom-anchored crossover annotation when show_components.
   function buildCPDatasets(snap, opts) {
-    const cp = snap.cp_params;
+    const cp = snap.pd_params;
     if (!cp) return { datasets: [], canvasLabels: [] };
     const unpacked = cpUnpack(cp);
     if (!unpacked) return { datasets: [], canvasLabels: [] };
@@ -1481,10 +1481,10 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
 
     // ── Smooth curve ────────────────────────────────────────────────────
     const cpPts = [];
-    const logMin = Math.log10(CP_T_MIN);
-    const logMax = Math.log10(CP_T_MAX);
-    for (let i = 0; i < CP_CURVE_N_PTS; i++) {
-      const lt = logMin + (logMax - logMin) * (i / (CP_CURVE_N_PTS - 1));
+    const logMin = Math.log10(PD_T_MIN);
+    const logMax = Math.log10(PD_T_MAX);
+    for (let i = 0; i < PD_CURVE_N_PTS; i++) {
+      const lt = logMin + (logMax - logMin) * (i / (PD_CURVE_N_PTS - 1));
       const t = Math.pow(10, lt);
       const w = criticalPowerModel(t, Pow1, tau1, Pow2, tau2);
       if (w <= 0) continue;
@@ -1497,7 +1497,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
       cpPts.push({ x: Math.round(xv * 10) / 10, y: yFn(pace) });
     }
     if (cpPts.length >= 2) {
-      datasets.push(predDataset("_critical_power", cpPts, opts.color, 0, 1.5));
+      datasets.push(predDataset("_power_duration", cpPts, opts.color, 0, 1.5));
     }
 
     // ── Event markers (one per selected ranked event) ─────────────────
@@ -1511,7 +1511,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
         const P = criticalPowerModel(t, Pow1, tau1, Pow2, tau2);
         return P > 0 ? Math.pow(P / 2.80, 1.0 / 3.0) * t - distM : -distM;
       };
-      const tStar = bisect(resid, CP_T_MIN, CP_T_MAX, 0.1);
+      const tStar = bisect(resid, PD_T_MIN, PD_T_MAX, 0.1);
       if (tStar == null) continue;
       const w = criticalPowerModel(tStar, Pow1, tau1, Pow2, tau2);
       if (w <= 0) continue;
@@ -1537,7 +1537,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     if (evPts.length) {
       datasets.push({
         type: "scatter",
-        label: "_cp_event_markers",
+        label: "_pd_event_markers",
         data: evPts,
         backgroundColor: opts.color,
         borderColor: opts.color,
@@ -1555,8 +1555,8 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     if (opts.show_components) {
       const diff = (t) => Pow1 / (1.0 + t / tau1) - Pow2 / (1.0 + t / tau2);
       let tCross = null;
-      if (diff(CP_T_MIN) * diff(CP_T_MAX) <= 0) {
-        tCross = bisect(diff, CP_T_MIN, CP_T_MAX, 0.1);
+      if (diff(PD_T_MIN) * diff(PD_T_MAX) <= 0) {
+        tCross = bisect(diff, PD_T_MIN, PD_T_MAX, 0.1);
       }
       if (tCross != null) {
         const wCross = criticalPowerModel(tCross, Pow1, tau1, Pow2, tau2);
@@ -1570,7 +1570,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
               const xoTextColor = isDark ? "rgba(20, 210, 190, 0.90)" : "rgba(0, 140, 128, 0.90)";
               datasets.push({
                 type: "line",
-                label: "_cp_crossover_vline",
+                label: "_pd_crossover_vline",
                 data: [{ x: xCross, y: yMin }, { x: xCross, y: yMax }],
                 borderColor: xoColor,
                 backgroundColor: "rgba(0,0,0,0)",
@@ -1609,8 +1609,8 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
       // Fast/slow component curves.
       const dim = withAlpha(opts.color, 0.62);
       const fastPts = [], slowPts = [];
-      for (let i = 0; i < CP_CURVE_N_PTS; i++) {
-        const lt = logMin + (logMax - logMin) * (i / (CP_CURVE_N_PTS - 1));
+      for (let i = 0; i < PD_CURVE_N_PTS; i++) {
+        const lt = logMin + (logMax - logMin) * (i / (PD_CURVE_N_PTS - 1));
         const t = Math.pow(10, lt);
         const wCombined = Pow1 / (1.0 + t / tau1) + Pow2 / (1.0 + t / tau2);
         if (wCombined <= 0) continue;
@@ -1631,8 +1631,8 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
           if (paceValid(ps)) slowPts.push({ x: Math.round(xv * 100) / 100, y: Math.round(ps * 10000) / 10000 });
         }
       }
-      if (fastPts.length >= 2) datasets.push(predDataset("_cp_fast", fastPts, dim, 0, 1.0));
-      if (slowPts.length >= 2) datasets.push(predDataset("_cp_slow", slowPts, dim, 0, 1.0));
+      if (fastPts.length >= 2) datasets.push(predDataset("_pd_fast", fastPts, dim, 0, 1.0));
+      if (slowPts.length >= 2) datasets.push(predDataset("_pd_slow", slowPts, dim, 0, 1.0));
     }
 
     return { datasets, canvasLabels };
@@ -1640,7 +1640,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
 
   // ── Average ensemble ────────────────────────────────────────────────────
   function buildAverageDatasets(snap, opts) {
-    const { lb, lb_anchor, cp_params, ll_slope, ll_intercept, pauls_k } = snap;
+    const { lb, lb_anchor, pd_params, ll_slope, ll_intercept, pauls_k } = snap;
     const yFn = makeYFn(opts.show_watts);
     const xFn = makeXFn(opts.x_mode);
     const [xMin, xMax] = opts.x_bounds;
@@ -1660,7 +1660,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
       const pl = paceFromPauls(lb, lb_anchor, d, pauls_k);
       if (paceValid(pl)) { paces.push(pl); plPts.push({ x: xFn(d, pl), y: yFn(pl) }); }
 
-      const cp = paceFromCP(cp_params, d);
+      const cp = paceFromCP(pd_params, d);
       if (paceValid(cp)) { paces.push(cp); cpPts.push({ x: xFn(d, cp), y: yFn(cp) }); }
 
       const rl = paceFromRL(opts.rl_predictions, lb_anchor, d);
@@ -1679,7 +1679,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     }
     if (opts.show_components) {
       const dim = withAlpha(opts.color, 0.55);
-      const pairs = [["_avg_ll", llPts], ["_avg_pl", plPts], ["_avg_cp", cpPts], ["_avg_rl", rlPts]];
+      const pairs = [["_avg_ll", llPts], ["_avg_pl", plPts], ["_avg_pd", cpPts], ["_avg_rl", rlPts]];
       for (const [label, pts] of pairs) {
         const sorted = inRange(pts, xMin, xMax);
         if (sorted.length >= 2) out.push(predDataset(label, sorted, dim, 0, 1.0));
@@ -1693,7 +1693,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
    * construction on the JS side using fit parameters baked into each
    * timeline snapshot.
    *
-   * snap = {lb, lb_anchor, cp_params, ll_slope, ll_intercept, pauls_k}
+   * snap = {lb, lb_anchor, pd_params, ll_slope, ll_intercept, pauls_k}
    * opts = {predictor, show_components, show_watts, x_mode, is_dark,
    *         x_bounds, y_bounds, rl_predictions, selected_dists,
    *         selected_times}
@@ -1705,16 +1705,16 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
     if (!snap) return { datasets: [], canvasLabels: [] };
     const opts = { ...rawOpts, color: predColor(rawOpts.is_dark) };
     let p = opts.predictor;
-    // CP → log-log fallback.  fit_critical_power() needs ≥5 PBs; early in the
-    // timeline there aren't enough and cp_params is null.  Python's slow path
+    // CP → log-log fallback.  fit_power_duration() needs ≥5 PBs; early in the
+    // timeline there aren't enough and pd_params is null.  Python's slow path
     // (power_curve_page:1266) falls back to log-log in that case; mirror it
     // here so the prediction curve doesn't vanish mid-animation.
-    if (p === "critical_power" && !snap.cp_params) p = "loglog";
+    if (p === "power_duration" && !snap.pd_params) p = "loglog";
     if (p === "none") return { datasets: [], canvasLabels: [] };
     if (p === "loglog") return { datasets: buildLogLogDataset(snap, opts), canvasLabels: [] };
     if (p === "pauls_law") return { datasets: buildPaulsLawDatasets(snap, opts), canvasLabels: [] };
     if (p === "rowinglevel") return { datasets: buildRowingLevelDatasets(snap, opts), canvasLabels: [] };
-    if (p === "critical_power") return buildCPDatasets(snap, opts);
+    if (p === "power_duration") return buildCPDatasets(snap, opts);
     if (p === "average") return { datasets: buildAverageDatasets(snap, opts), canvasLabels: [] };
     return { datasets: [], canvasLabels: [] };
   }

@@ -156,7 +156,7 @@ def _extract_hr(hr_dict) -> Optional[int]:
 
 def estimate_max_hr_with_count(workouts: list) -> tuple[Optional[int], int]:
     """
-    Estimate max HR as the 98th-percentile of valid HR readings across all
+    Estimate max HR as the top percentile of valid HR readings across all
     workouts.  Considers top-level workout HR, per-split HR, and per-interval
     HR.  Returns (estimated_bpm, count_of_contributing_workouts).
 

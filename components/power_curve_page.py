@@ -928,7 +928,7 @@ class PowerCurveState(hd.BaseState):
     chart_log_y = hd.Prop(hd.Bool, False)
     chart_y_metric = hd.Prop(hd.String, "pace")
     chart_x_metric = hd.Prop(hd.String, "distance")
-    chart_predictor = hd.Prop(hd.String, "critical_power")
+    chart_predictor = hd.Prop(hd.String, "power_duration")
     chart_show_components = hd.Prop(hd.Bool, False)
     overlay_bests = hd.Prop(hd.String, "PBs")
     sim_playing = hd.Prop(hd.Bool, False)

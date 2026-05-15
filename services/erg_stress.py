@@ -58,7 +58,7 @@ Power Profile (multi-band PDC framing).
 W' / W'bal
 ----------
 We approximate ``W'`` as ``Pow1 × tau1`` from
-:func:`services.critical_power_model.fit_critical_power` when a CP fit is
+:func:`services.power_duration_model.fit_power_duration` when a CP fit is
 available, else fall back to a population default (28 kJ men, 22 kJ women).
 ``CP`` is the rower's date-aware 60-min reference watts.  Skiba's recovery
 time constant ``τ_W' = 546 × exp(−0.01 × DCP) + 316`` where DCP is the
@@ -71,7 +71,7 @@ Public API
 cp, w_prime)`` — the workhorse.
 ``build_segments(workout)`` — split a workout into work/rest segments at
 the highest available resolution (intervals → splits → whole workout).
-``compute_w_prime_estimate(cp_params, gender)`` — pick W' for a rower.
+``compute_w_prime_estimate(pd_params, gender)`` — pick W' for a rower.
 ``severity_bucket(score)`` — bucket label from a numeric severity score.
 ``SEVERITY_STYLE`` — color metadata for the UI chip.
 ``ZONE_BANDS_S`` — the six band time-constants (= τ_d), in seconds.
@@ -693,7 +693,7 @@ def build_segments(workout: dict) -> list[dict]:
 
 
 def compute_w_prime_estimate(
-    cp_params: Optional[dict],
+    pd_params: Optional[dict],
     gender: Optional[str],
     mass_kg: Optional[float] = None,
 ) -> float:
@@ -705,9 +705,9 @@ def compute_w_prime_estimate(
     ``"Female"``).  When ``mass_kg`` is missing or non-positive, a
     fallback body mass is used so the estimate stays a real number.
     """
-    if cp_params:
-        p1 = cp_params.get("Pow1")
-        t1 = cp_params.get("tau1")
+    if pd_params:
+        p1 = pd_params.get("Pow1")
+        t1 = pd_params.get("tau1")
         if p1 and t1 and p1 > 0 and t1 > 0:
             return float(p1) * float(t1)
     g = (gender or "").strip().lower()
@@ -1346,7 +1346,7 @@ def compute_session_metrics(
         once per band against the session's representative date (the last
         workout's date — Concept2 logs end-time).
     cp:
-        Rower's critical power (watts).  Typically the date-aware 60-min
+        Rower's power duration (watts).  Typically the date-aware 60-min
         reference watts.  ``None`` disables the W'bal track.
     w_prime:
         Rower's anaerobic capacity (joules).  ``None`` disables the

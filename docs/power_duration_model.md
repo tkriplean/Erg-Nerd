@@ -1,8 +1,8 @@
-# Critical Power Model & Stayer/Sprinter Metric
+# Power Duration Model & Stayer/Sprinter Metric
 
 ## Overview
 
-This document describes the plan for adding a Critical Power prediction curve and a
+This document describes the plan for adding a Power Duration prediction curve and a
 stayer/sprinter profile to the ranked-workouts chart. It is a living design document
 — sections will be updated as the feature is built and iterated on.
 
@@ -90,8 +90,8 @@ numerically.
 - Spanning **at least a 10× duration range** (e.g., at least one point under
   ~3 minutes and at least one point over ~30 minutes)
 
-If the data threshold is not met, the Critical Power option silently produces no
-curve. A brief note in the UI ("insufficient data range for Critical Power model")
+If the data threshold is not met, the Power Duration option silently produces no
+curve. A brief note in the UI ("insufficient data range for Power Duration model")
 may be added later.
 
 ### Initial parameter guesses (derived from data)
@@ -129,7 +129,7 @@ given duration**. These connect parametrically:
 
 Given duration `t` (seconds):
 ```python
-P    = critical_power_model(t, Pow1, tau1, Pow2, tau2)   # watts
+P    = power_duration_model(t, Pow1, tau1, Pow2, tau2)   # watts
 pace = 500 * (2.80 / P) ** (1/3)                         # sec/500m
 d    = t * (P / 2.80) ** (1/3)                           # meters
 y    = P if show_watts else pace
@@ -199,20 +199,20 @@ tooltip and/or in a small summary panel below the chart.
 
 ## Architecture
 
-### `services/critical_power_model.py`
+### `services/power_duration_model.py`
 
 ```python
-def critical_power_model(t, Pow1, tau1, Pow2, tau2) -> float:
+def power_duration_model(t, Pow1, tau1, Pow2, tau2) -> float:
     """Four-parameter two-component power-duration model."""
 
-def fit_critical_power(pb_list: list[dict]) -> dict | None:
+def fit_power_duration(pb_list: list[dict]) -> dict | None:
     """
     Fit the model to a list of {'duration_s': float, 'watts': float} dicts.
     Returns {'Pow1', 'tau1', 'Pow2', 'tau2', 'r_squared'} or None if fit fails
     or data quality threshold is not met.
     """
 
-def critical_power_curve_points(
+def power_duration_curve_points(
     params: dict,
     x_min: float, x_max: float,
     y_min: float, y_max: float,
@@ -242,24 +242,24 @@ def stayer_sprinter_metrics(params: dict) -> dict:
 
 ### `components/power_curve_chart_prediction_datasets.py`
 
-- Imports from `critical_power_model`
-- `build_chart_config()` accepts a `critical_power_params` keyword argument
-- `"critical_power"` predictor branch:
-  - Calls `critical_power_curve_points()` → passes to `_pred_dataset()`
+- Imports from `power_duration_model`
+- `build_chart_config()` accepts a `power_duration_params` keyword argument
+- `"power_duration"` predictor branch:
+  - Calls `power_duration_curve_points()` → passes to `_pred_dataset()`
   - Calls `crossover_point()` → adds as a separate single-point dataset with a
     distinctive color and `pointRadius` ≈ 8
 
 ### `components/power_curve_page.py`
 
-- "Critical Power" is available in the predictor dropdown (default selection)
+- "Power Duration" is available in the predictor dropdown (default selection)
 - After collecting filtered workouts, gathers the best-per-category `(duration_s,
-  watts)` pairs and calls `fit_critical_power()`. Result cached in `state.cp_fit_result`
-  keyed on `state.cp_fit_key` (hash of input data).
-- Passes `critical_power_params=state.cp_fit_result` to `build_chart_config()`
+  watts)` pairs and calls `fit_power_duration()`. Result cached in `state.pd_fit_result`
+  keyed on `state.pd_fit_key` (hash of input data).
+- Passes `power_duration_params=state.pd_fit_result` to `build_chart_config()`
 
 ### Dependency: `scipy`
 
-Used by `fit_critical_power()` for bounded nonlinear least squares.
+Used by `fit_power_duration()` for bounded nonlinear least squares.
 
 ---
 

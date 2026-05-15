@@ -10,7 +10,7 @@ implementation details so that future changes can be made with full context.
 
 1. [Architecture overview](#architecture-overview)
 2. [Data pipeline](#data-pipeline)
-3. [Outlier filter (Critical Power)](#outlier-filter-critical-power)
+3. [Outlier filter (Power Duration)](#outlier-filter-critical-power)
 4. [Season-best detection](#season-best-detection)
 5. [Point preparation](#point-preparation)
 6. [Visual encoding](#visual-encoding)
@@ -127,17 +127,17 @@ to `[7 days, full data range]`.
 
 ---
 
-## Outlier filter (Critical Power)
+## Outlier filter (Power Duration)
 
 **Purpose:** drop warm-up rows, aborted pieces, and erroneous entries that would
 otherwise balloon the y-axis or visually mislead.
 
-**Method:** four-parameter veloclinic (Critical Power) model.
+**Method:** four-parameter veloclinic (Power Duration) model.
 
 1. Collect the athlete's personal best at each ranked event (non-interval only):
    - Distance events ≥ 500m: best = lowest elapsed time.
    - Timed events: best = greatest distance (highest wattage).
-2. Fit the CP model via `fit_critical_power()` (≥ 5 ranked bests required).
+2. Fit the CP model via `fit_power_duration()` (≥ 5 ranked bests required).
 3. Solve numerically (Brent's method) for the predicted 2 000m time using the
    fitted curve.
 4. Drop any workout whose pace > 1.75× the predicted 2k pace.
@@ -149,7 +149,7 @@ keep every workout ≥ 500m.
 
 | Name | Value | Meaning |
 |---|---|---|
-| `_CP_MIN_DIST_M` | 500 | Min distance included in CP fit |
+| `_PD_MIN_DIST_M` | 500 | Min distance included in CP fit |
 | `_OUTLIER_FACTOR` | 1.75 | Pace must be ≤ this × predicted 2k pace |
 | `_MIN_DIST_M` | 500 | Hard floor — nothing shorter is ever plotted |
 
@@ -580,4 +580,4 @@ the totals footer.
 | `components/rowing_chart_assets/workouts_chart.js` | Chart.js plugin, brush logic, hatch pattern generator, tooltip callbacks |
 | `components/workouts_page.py` | Tab entry point; loads workouts, calls `workouts_chart()` |
 | `services/rowing_utils.py` | `INTERVAL_WORKOUT_TYPES`, `RANKED_DIST_SET`, `RANKED_TIME_SET`, `compute_pace` |
-| `services/critical_power_model.py` | `fit_critical_power()`, `critical_power_model()` |
+| `services/power_duration_model.py` | `fit_power_duration()`, `power_duration_model()` |
