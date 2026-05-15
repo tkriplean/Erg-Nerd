@@ -36,6 +36,56 @@ def prediction_table(
     ):
         return
 
+    # ── Caption: predictions come from imperfect models ──────────────────
+    with hd.box(padding=(0, 0, 1, 0), max_width=70):
+        hd.text(
+            "Predictions come from imperfect models and should be read as "
+            "guidance, not as targets. RMSE and R² in the footer show how "
+            "closely each model fits your PB history.",
+            font_size="small",
+            font_color="neutral-600",
+        )
+
+    # ── Extrapolation flag: precompute per-row ─────────────────────────────
+    # Anchor distances = dist events where the user has a PB.  Rows outside
+    # [min, max] are extrapolations.  When fewer than 3 anchors exist, OR
+    # the Power-Duration R² is below 0.95, every row is flagged — the model
+    # is poorly constrained and the user shouldn't read predictions as targets.
+    _anchor_dists = [
+        r["event_value"]
+        for r in pred_rows
+        if r["event_type"] == "dist" and r.get("pb_raw") is not None
+    ]
+    _anchor_min = min(_anchor_dists) if _anchor_dists else None
+    _anchor_max = max(_anchor_dists) if _anchor_dists else None
+    _cp_r2 = (accuracy or {}).get("critical_power", {}).get("r2")
+    _few_anchors = len(_anchor_dists) < 3
+    _poor_r2 = _cp_r2 is not None and _cp_r2 < 0.95
+
+    def _is_extrapolation(row):
+        if _few_anchors or _poor_r2:
+            return True
+        if row["event_type"] != "dist":
+            return False
+        if _anchor_min is None:
+            return True
+        return row["event_value"] < _anchor_min or row["event_value"] > _anchor_max
+
+    _extrap_tip = (
+        "This prediction goes beyond the distances you actually have PBs "
+        "for. Use as a sanity check, not a target."
+    )
+    if _few_anchors:
+        _extrap_tip = (
+            "Fewer than three PBs anchor these predictions — the fit is "
+            "poorly constrained. Use as a sanity check, not a target."
+        )
+    elif _poor_r2:
+        _extrap_tip = (
+            "The Power-Duration fit is loose (R² below 0.95) — predictions "
+            "may not match your form. Use as a sanity check, not a target."
+        )
+
     from components.power_curve_page import PowerCurveState
 
     state = PowerCurveState()
@@ -68,7 +118,7 @@ def prediction_table(
     _ACC_BG = "neutral-100"
 
     # CSS Grid: fixed Event column + one 1fr column per prediction model
-    _col_template = "8rem " + " ".join(["1fr"] * len(_PRED_COLS))
+    _col_template = "minmax(8rem,12rem) " + " ".join(["1fr"] * len(_PRED_COLS))
 
     with grid_box(
         grid_template_columns=_col_template,
@@ -81,7 +131,7 @@ def prediction_table(
         with hd.box(
             padding=1,
             background_color=_HEADER_BG,
-            border_right="1px solid neutral-200",
+            # border_right="1px solid neutral-200",
             border_bottom="1px solid neutral-200",
         ):
             hd.text("Event", font_weight="semibold", font_size="small")
@@ -121,12 +171,14 @@ def prediction_table(
                         state.time_enabled[_ev_idx] if _ev_idx is not None else False
                     )
 
+                _row_extrap = _is_extrapolation(_row)
+
                 # Event cell
                 with hd.box(
                     padding=1,
                     background_color=_row_bg,
                     border_top="1px solid neutral-200",
-                    border_right="1px solid neutral-200",
+                    # border_right="1px solid neutral-200",
                 ):
                     with hd.hbox(gap=0.5, align="center"):
                         with hd.tooltip(
@@ -150,6 +202,16 @@ def prediction_table(
                             font_size="small",
                             font_color="neutral-600" if _ev_enabled else "neutral-400",
                         )
+                        if _row_extrap:
+                            with hd.tooltip(_extrap_tip):
+                                hd.icon(
+                                    "exclamation-circle",
+                                    # size="medium",
+                                    font_color="warning-700",
+                                    # background_color="warning-50",
+                                    # padding=(0.1, 0.4, 0.1, 0.4),
+                                    # border_radius="small",
+                                )
 
                 # Prediction cells
                 for col_key, col_label, _tip in _PRED_COLS:

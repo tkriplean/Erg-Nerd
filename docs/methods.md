@@ -2,8 +2,6 @@
 
 This page is the reference for every number Erg Nerd shows you. For each metric, what it estimates, where it came from, where it's calibrated, where it's a guess. Each entry also notes where the metric appears in the app.
 
-A note on naming. The app uses **Power-Duration** for what some training literature calls "Critical Power." Critical Power has a specific meaning in the Monod-Scherrer / Skiba mechanistic models that doesn't match what this app fits, which is a Veloclinic two-component empirical curve. So we rename it.
-
 <a id="provenance-tags"></a>
 ## Provenance tags
 
@@ -11,18 +9,15 @@ Every number you see has a provenance tag, telling you where it came from and ho
 
 | Tag | Meaning |
 |---|---|
-| **Measured** | Direct from your workout data: pace, time, heart rate, strokes per minute. The Concept2 monitor recorded it; we just display it. |
-| **Computed** | Derived from measured data via a calibrated calculation. Reference Watts, CTL/ATL/TSB, ESS. Math you can trust if the input is clean. |
-| **Estimated** | Inferred when you haven't given us the input directly. HRmax pulled from your workout history is an estimate; HRmax you entered manually is not. |
-| **Population default** | A literature constant or population mean used until you give us something better. The W' anaerobic-capacity defaults are population averages and may differ from yours by 30%. |
-| **Heuristic** | A first-cut rule of thumb, not validated against data. Severity bucket boundaries, stimulus-dose thresholds. Picked using physiological intuition and canonical interval prescriptions, not yet checked against recovery time or adaptive response. |
-
-The tag is the first word of every entry below.
+| **Measured** | Direct from your workout data: pace, time, heart rate, strokes per minute. The Concept2 monitor recorded it and we just display it. |
+| **Estimated** | Derived from measured data. Reference Watts, CTL/ATL/TSB, ESS. HRmax derived from HR data in your workout history is an estimate, while HRmax you entered manually is not. |
+| **Population default** | A literature constant or population mean used until you give us something better (or you give us enough data to make a better estimate). The W' anaerobic-capacity defaults are population averages and may differ from yours by 30%. |
+| **Heuristic** | A rule of thumb, not validated against data, like severity bucket boundaries and stimulus-dose thresholds. Picked using physiological intuition and calibrated against max efforts in your workout history, but not validated against recovery time or adaptive response. |
 
 <a id="reference-watts"></a>
 ## Reference Watts
 
-*Computed.* Your estimated watts at every ranked event distance, **for the date you're looking at.**
+*Estimated.* Your estimated watts at every ranked event distance, **for the date you're looking at.**
 
 Most training apps grade every workout against a single snapshot of "current fitness." Erg Nerd builds a quarterly index instead, with markers at Jan 1, Apr 1, Jul 1, and Oct 1 of every year you have data, so a 2009 row gets graded against 2009 fitness, not 2026 fitness. Between markers, watts are linearly interpolated.
 
@@ -36,8 +31,6 @@ For each marker, the app pulls your PBs from the prior 365 days and runs a predi
 
 **Used on:** The Power Curve page (the chart and prediction table are built from this index). The Volume page (every workout's time-in-zone is classified against the reference watts for that workout's own date). The Workout page (stimulus dose, ESS, and severity all use reference-watts-anchored intensity). The Intervals page (filter chips use the same zones). Reference Watts is the most-used computation in the app.
 
-**Source:** `services/reference_watts.py`
-
 **Limits.** The quarterly cadence means watts at events without PBs in a quarter window are interpolated between adjacent markers. Small discontinuities at quarter boundaries are possible when a big PB lands on one side.
 
 <a id="predictors"></a>
@@ -48,7 +41,7 @@ The Power Curve page can overlay one of several models fit through your PBs. Pic
 <a id="power-duration"></a>
 ### Power-Duration (Veloclinic two-component fit)
 
-*Computed.* A two-component empirical curve:
+*Estimated.* A two-component empirical curve:
 
 ```
 P(t) = Pow1 / (1 + t/τ1) + Pow2 / (1 + t/τ2)
@@ -60,8 +53,6 @@ This is not the Critical Power model in the sense some endurance-physiology lite
 
 **Used on:** Power Curve page chart and prediction table. The fit also feeds Reference Watts (predictor cascade step 1) and W' Remaining (as a proxy for the anaerobic capacity baseline).
 
-**Source:** `services/critical_power_model.py`
-
 **Sources for the model:** Damoiseaux at Veloclinic, [Power Model Derivation (PDF)](https://veloclinic.com/wp-content/uploads/2014/04/PowerModelDerivation-1.pdf). Sander Roosendaal at rowsandall, [How do we calculate critical power](https://analytics.rowsandall.com/2017/06/17/how-do-we-calculate-critical-power/).
 
 **Limits.** The fit is only accepted when you have ≥5 PBs, ≥10:1 duration ratio, and R² ≥ 0.90. Otherwise the app falls back to other predictors.
@@ -69,22 +60,19 @@ This is not the Critical Power model in the sense some endurance-physiology lite
 <a id="log-log"></a>
 ### Log-Log
 
-*Computed.* A power-law fit through your PBs in log-log space (linear regression on `log(pace)` versus `log(distance)`). Less sensitive to outliers than the four-parameter fit. Tends to be conservative on the long-duration end.
+*Estimated.* A power-law fit through your PBs in log-log space (linear regression on `log(pace)` versus `log(distance)`). Less sensitive to outliers than the four-parameter fit. Tends to be conservative on the long-duration end.
 
 **Used on:** Power Curve page.
-
-**Source:** `services/predictions.py`
 
 <a id="pauls-law"></a>
 ### Paul's Law
 
-*Computed.* Paul Smith's coaching observation: when distance doubles, your 500m pace slows by a fixed number of seconds. Your personal `k` is fit from your PBs when you have at least 3 anchor distances. With fewer anchors the app uses the population default `k = 5.0` (typical for trained adults; well-trained rowers commonly land 4-6).
+*Estimated.* Paul Smith's coaching observation: when distance doubles, your 500m pace slows by a fixed number of seconds. Your personal `k` is fit from your PBs when you have at least 3 anchor distances. With fewer anchors the app uses the population default `k = 5.0` (typical for trained adults; well-trained rowers commonly land 4-6).
 
 Single-anchor extrapolation has a sprint-bias when projecting from a long PB to a short event. The app handles this by averaging across all anchors rather than projecting from only one.
 
 **Used on:** Power Curve page; also Reference Watts (predictor cascade steps 2 and 3).
 
-**Source:** `services/predictions.py`
 
 <a id="rowinglevel"></a>
 ### RowingLevel
@@ -95,7 +83,6 @@ For atypical athletes (very strong or very new), RowingLevel pulls toward the po
 
 **Used on:** Power Curve page chart and prediction table.
 
-**Source:** `services/rowinglevel.py` (scraper + cache)
 
 <a id="average"></a>
 ### Average
@@ -104,12 +91,11 @@ For atypical athletes (very strong or very new), RowingLevel pulls toward the po
 
 **Used on:** Power Curve page.
 
-**Source:** `services/predictions.py`
 
 <a id="r2-rmse"></a>
 ## R² and RMSE
 
-*Computed.* Goodness-of-fit numbers in the prediction-table footer:
+*Estimated.* Goodness-of-fit numbers in the prediction-table footer:
 
 - **R²** measures how much of the variance in your PBs each model explains. 1.0 is perfect; below 0.95 suggests the model is missing structure your data contains.
 - **RMSE** is root-mean-square error in seconds per 500m, between each model's predictions and your actual PBs at the events you've enabled.
@@ -118,12 +104,11 @@ Predictions are middle estimates from imperfect models, not targets. The R² and
 
 **Used on:** Power Curve page prediction table.
 
-**Source:** `services/predictions.py`
 
 <a id="power-zones"></a>
 ## Power zones
 
-*Computed.* Each second of every workout is classified into one of six PB-anchored power zones, based on where the second-by-second power lands relative to your Reference Watts at the relevant duration band.
+*Estimated.* Each second of every workout is classified into one of six PB-anchored power zones, based on where the second-by-second power lands relative to your Reference Watts at the relevant duration band.
 
 | Zone | Driven by |
 |---|---|
@@ -138,7 +123,6 @@ The classification is PB-anchored: a second's power is graded against the watts 
 
 **Used on:** Volume page Power Spread tab (the default view; stacks per-zone meters across week/month/season). Workout page per-workout breakdown. Filter chips on the Workouts and Intervals pages (Power Zones Engaged / Power Zones Trained).
 
-**Source:** `services/volume_bins.py`
 
 **Limits.** The bin boundaries are tuned against your own PB shape. They are stable within your data but may differ from a coach's externally-defined zones.
 
@@ -161,7 +145,6 @@ Until you give us a measured threshold HR, treat zone classifications as a rough
 
 **Used on:** Volume page HR Spread tab. HR Zone filter chips on the Workouts and Intervals pages.
 
-**Source:** `services/heartrate_utils.py`
 
 **Limits.** Outlier detection rejects HR ≤ 40, HR > 220, and HR > 1.05 × HRmax as monitor artifacts.
 
@@ -187,14 +170,13 @@ Bucketed as:
 
 **Used on:** Workout page (the chip on the workout summary). Volume page (Workout Severity stacking tab; filter chips). Workouts list (color-coded scatter dots when Severity-coloring is selected).
 
-**Source:** `services/erg_stress.py`
 
 **Limits.** The 0.50 and 0.40 weights are hand-picked. The bucket boundaries are first-cut guesses. Neither has been validated against next-day RPE or recovery time. Treat severity as a relative ordering ("this workout was harder on me than that one") rather than a calibrated recovery prediction. In real physiology, draining both the W' (anaerobic) and glycogen (fuel) reservoirs likely produces super-additive recovery demand, not the simple addition used here.
 
 <a id="ess"></a>
 ## ESS (Erg Stress Score)
 
-*Computed.* The session's total training stress, integrated over time:
+*Estimated.* The session's total training stress, integrated over time:
 
 ```
 ESS = C_ESS · ∫ I(t)² dt
@@ -204,7 +186,6 @@ Where `I(t)` is the multi-band intensity signal (see below) and `C_ESS` is a cal
 
 **Used on:** Workout page (Erg Stress Score statistic on the summary). Volume page CTL/ATL/TSB rollup (the daily ESS sum is the input to the Banister model).
 
-**Source:** `services/erg_stress.py`
 
 **Sources for the model:** Coggan & Allen's Normalized Power / TSS framework, plus Skiba's xPower / BikeScore approach. The multi-band intensity signal is described at Sander Roosendaal's [Ergometer scores, how great are you?](https://analytics.rowsandall.com/2018/01/12/ergometer-scores-how-great-are-you/) on rowsandall.
 
@@ -213,7 +194,7 @@ Where `I(t)` is the multi-band intensity signal (see below) and `C_ESS` is a cal
 <a id="intensity"></a>
 ## Intensity signal I(t)
 
-*Computed.* A continuous second-by-second intensity signal that combines six EMA bands (20s, 90s, 5min, 20min, 60min, 2h) anchored to your Reference Watts at each band.
+*Estimated.* A continuous second-by-second intensity signal that combines six EMA bands (20s, 90s, 5min, 20min, 60min, 2h) anchored to your Reference Watts at each band.
 
 For each second of the workout, for each band:
 
@@ -229,7 +210,6 @@ Per-band τ factors are physiologically motivated. Short bands (phosphocreatine,
 
 **Used on:** Feeds ESS, severity, and stimulus dose. Plotted directly on the Workout page chart in some modes.
 
-**Source:** `services/erg_stress.py`
 
 **Limits.** The cube-and-cube-root combination is a calibration knob without explicit physiological grounding. A different exponent would shift downstream metrics.
 
@@ -260,7 +240,6 @@ Before reporting dose for a band, the app gates on whether you actually spent ti
 
 **Used on:** Workout page (per-system dose bars and chips). Volume page (Training Stimulus panels: solid+ counts over rolling windows, days-since-last-stimulus per system). Filter chips on the Workouts page (Training Stimulus filter).
 
-**Source:** `services/erg_stress.py`
 
 **Limits.** The thresholds are set against the EMA-curve shape, not validated against adaptive response.
 
@@ -283,7 +262,6 @@ Read W' Remaining as a relative-to-yourself tracker. It is useful for comparing 
 
 **Used on:** Workout page (W' Remaining statistic). Severity formula (W'_strain term, see Severity).
 
-**Source:** `services/erg_stress.py`, `services/critical_power_model.py`
 
 **Sources for the model:** Skiba et al. (2012, 2014) for the W'bal mechanism.
 
@@ -313,7 +291,6 @@ Gross efficiency is fixed at 0.25 (the literature range for trained rowers is 0.
 
 **Used on:** Workout page (Glycogen Used statistic). Severity formula (glycogen_used term).
 
-**Source:** `services/glycogen.py`
 
 **Sources for the model:** Brooks (1991) crossover concept; Achten & Jeukendrup (2003) CHO-fat oxidation rates.
 
@@ -338,7 +315,6 @@ EW[t] = EW[t-1] + (load[t] - EW[t-1]) · (1/τ)
 
 **Used on:** Volume page Training Load tab. The CTL chart drives the visualization of long-term fitness trajectory; ATL and TSB sit on the same axes.
 
-**Source:** `services/training_load.py`
 
 **Sources for the model:** Banister & Calvert (1980); TrainingPeaks PMC framework.
 
@@ -362,16 +338,14 @@ The cell labels (e.g. "Lactate production," "VO₂max (medium)") come from canon
 
 **Used on:** Intervals page (the entire grid view).
 
-**Source:** `components/intervals_page.py`
 
 <a id="glycogen-reserve"></a>
 ## Implied glycogen reserve
 
-*Computed.* `bodyweight (kg) × 80 kJ/kg`. The denominator in the Glycogen Used formula and the only mass-dependent input to severity that doesn't go through W'.
+*Estimated.* `bodyweight (kg) × 80 kJ/kg`. The denominator in the Glycogen Used formula and the only mass-dependent input to severity that doesn't go through W'.
 
 **Used on:** Profile page (displayed below the bodyweight input). Indirectly drives the Workout page Glycogen Used statistic.
 
-**Source:** `services/glycogen.py`
 
 <a id="hrmax-estimation"></a>
 ## HRmax estimation
@@ -386,8 +360,6 @@ What helps:
 2. A stroke-level estimator is planned: filter to long maximal sessions, pull stroke-by-stroke HR, and take the highest reading from the longest max effort.
 
 **Used on:** Profile page (the placeholder / default value for the HRmax input). Volume page HR Spread (the denominator for the % HRmax classification). HR Zone filter chips.
-
-**Source:** `services/heartrate_utils.py`
 
 <a id="sources"></a>
 ## Sources

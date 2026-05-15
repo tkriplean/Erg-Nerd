@@ -620,19 +620,31 @@ def _rl_profile_notice() -> None:
 
 
 def _compute_sim_timeline(
-    excluded_seasons, all_seasons: list, timeline_day: int | None
+    excluded_seasons,
+    all_seasons: list,
+    timeline_day: int | None,
+    season_start_month: int = 5,
 ) -> tuple:
     """
     Derive the simulation timeline from the included seasons.
-    Returns (sim_start, total_days, timeline_date, at_today, included_seasons).
+    Returns (sim_start, sim_end, total_days, timeline_date, at_today, included_seasons).
     timeline_day=None means "end of timeline / show all data".
+
+    ``season_start_month`` lets the user override the May-1 default. The
+    season-string format (``"YYYY-YY"``) stays Concept2's May-Apr convention;
+    only the displayed window shifts.
     """
     included_seasons = [s for s in all_seasons if s not in set(excluded_seasons)]
     if included_seasons:
         ey = int(min(included_seasons)[:4])
-        sim_start = date(ey, 5, 1)
+        sim_start = date(ey, season_start_month, 1)
         max_end_year = int(max(included_seasons)[:4]) + 1
-        sim_end = min(date.today(), date(max_end_year, 4, 30))
+        # Last day of the month before the start month, one year out.
+        if season_start_month == 1:
+            sim_end_cap = date(max_end_year, 12, 31)
+        else:
+            sim_end_cap = date(max_end_year, season_start_month, 1) - timedelta(days=1)
+        sim_end = min(date.today(), sim_end_cap)
     else:
         sim_start = date.today() - timedelta(days=365)
         sim_end = date.today()
@@ -643,7 +655,7 @@ def _compute_sim_timeline(
         sim_day_idx = max(0, min(timeline_day, total_days - 1))
     timeline_date = sim_start + timedelta(days=sim_day_idx)
     at_today = sim_day_idx >= total_days - 1
-    return sim_start, total_days, timeline_date, at_today, included_seasons
+    return sim_start, sim_end, total_days, timeline_date, at_today, included_seasons
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -719,6 +731,8 @@ def compute_axis_bounds(
 def _page_header(
     *,
     timeline_date: date,
+    sim_start: date,
+    sim_end: date,
 ) -> None:
     """
     Renders the page title bar: best_filter dropdown, events dropdown, date label.
@@ -726,6 +740,9 @@ def _page_header(
     state = PowerCurveState()
 
     _date_label = timeline_date.strftime("%b %d, %Y")
+    _window_label = (
+        f"{sim_start.strftime('%b %-d, %Y')} – {sim_end.strftime('%b %-d, %Y')}"
+    )
     _best_long = {
         "All": "All Great Efforts",
         "PBs": "Personal Bests",
@@ -879,6 +896,17 @@ def _page_header(
 
         global_filter_ui()
 
+        # with hd.tooltip(
+        #     "Date range of workouts shown on the chart. Set the start "
+        #     "month of your competitive season in Profile to shift this "
+        #     "window."
+        # ):
+        #     hd.text(
+        #         f"Season window: {_window_label}",
+        #         font_size="small",
+        #         font_color="neutral-500",
+        #     )
+
 
 # ---------------------------------------------------------------------------
 # Orchestrator
@@ -1024,13 +1052,25 @@ def power_curve_page() -> None:
     }
 
     # ── Simulation timeline ───────────────────────────────────────────────────
+    try:
+        _season_start_month = int(profile.get("season_start_month") or 5)
+        if not (1 <= _season_start_month <= 12):
+            _season_start_month = 5
+    except (TypeError, ValueError):
+        _season_start_month = 5
     (
         sim_start,
+        sim_end,
         total_days,
         timeline_date,
         at_today,
         included_seasons,
-    ) = _compute_sim_timeline(excluded_seasons, all_seasons, state.timeline_day)
+    ) = _compute_sim_timeline(
+        excluded_seasons,
+        all_seasons,
+        state.timeline_day,
+        season_start_month=_season_start_month,
+    )
     show_watts = state.chart_y_metric == "watts"
 
     # Slider annotations — stable across animation ticks; only recompute when
@@ -1127,6 +1167,8 @@ def power_curve_page() -> None:
         with hd.box(width="100%", align="center"):
             _page_header(
                 timeline_date=timeline_date,
+                sim_start=sim_start,
+                sim_end=sim_end,
             )
 
             _chart_section(

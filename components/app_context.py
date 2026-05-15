@@ -70,6 +70,11 @@ _PROFILE_DEFAULTS: dict = {
     "weight_unit": "kg",  # "kg" | "lbs"
     "weight_class": "",  # "" = not set; "Heavyweight" | "Lightweight"
     "max_heart_rate": None,  # None = not set
+    # The Concept2 user-profile HRmax preserved from /users/me; mirrored at
+    # OAuth time so the profile page can flag a mismatch when the user has
+    # overridden ``max_heart_rate``.  Read-only in the app.
+    "concept2_max_heart_rate": None,
+    "season_start_month": 5,  # 1–12; Power Curve uses this for "Season Best" framing
     "public": False,  # True = profile + workouts published at /u/{user_id}
     "display_name": "",  # Concept2 first_name (read-only in app)
     "profile_image": "",  # Concept2 avatar URL (read-only in app)
@@ -86,6 +91,7 @@ _USER_EDITABLE_FIELDS = (
     "weight_unit",
     "weight_class",
     "max_heart_rate",
+    "season_start_month",
 )
 
 

@@ -89,22 +89,28 @@ from components.workout_table import always_white
 # Top-of-dropdown header — one sentence describing what each filter does.
 _HEADER_DESC = {
     "severity": (
-        "Filter by session severity. Severity is calculated by combining peak "
-        "rolling intensity in different power zones, a measure of anaerobic depletion (W'), "
-        "and an estimate of glycogen depletion."
+        "Filter by overall severity — how hard each session was on "
+        "your body, combining peak intensity, anaerobic strain, and fuel "
+        "cost. The Low / Moderate / High / Maximal buckets are rough "
+        "guides, so calibrate to them based on how you feel the day after."
     ),
     "engaged": (
-        "Filter to sessions that engaged these power zones. "
-        "Zones are estimated based on your performances. "
-        "The zones used for a workout you did 5 years ago will be different than "
-        "for one today."
+        "Filter to sessions that spent meaningful time in these power "
+        "zones. Zones are anchored to your reference watts on the workout's "
+        "own date, so a row from five years ago is graded against your "
+        "fitness then, not today's."
     ),
     "trained": (
-        "Filter to sessions that stimulated these systems. Which systems are "
-        "stimulated and the dose is from a combination of severity and time in the corresponding "
-        "power zone (or faster)."
+        "Filter to sessions that delivered a training stimulus to these "
+        "systems. A stimulus is recorded when sustained time near the "
+        "corresponding reference power would saturate that system."
     ),
-    "hr": ("Filter to sessions with meaningful time in these heart-rate zones."),
+    "hr": (
+        "Filter to sessions with meaningful time in these heart-rate zones. "
+        "Zones are based on a percentage of your max HR derived from population "
+        "averages, so your aerobic / lactate thresholds may fall higher or "
+        "lower than the boundaries suggest."
+    ),
 }
 
 # Brief per-option descriptions shown inline next to the swatch + name.

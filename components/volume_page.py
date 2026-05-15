@@ -859,19 +859,44 @@ def _training_load_tab(workouts: list, is_dark: bool) -> None:
                 font_size="small",
                 font_color="neutral-600",
             )
-            with hd.details("Learn more"):
-                hd.text(
-                    "This is the Banister Performance Management Chart "
-                    "(PMC) model. CTL (fitness, blue) is a 42-day "
-                    "exponentially-weighted average of your daily ESS "
-                    "(Erg Stress Score). ATL (fatigue, red) is the same "
-                    "thing with a 7-day window. TSB (form, filled area) "
-                    "= CTL − ATL, plotted against the right axis. The "
-                    "faint background bands mark TrainingPeaks PMC zones "
-                    "— high-risk fatigue through fresh/peak.",
-                    font_size="x-small",
-                    font_color="neutral-500",
-                )
+            with hd.details("Learn more", font_size="small"):
+                with hd.box(gap=0.5):
+                    hd.text(
+                        "Fitness (CTL) — a 42-day rolling average of your "
+                        "daily training stress. Rises with consistent "
+                        "training, falls with rest. Standard endurance-sport "
+                        "model; the 42-day timescale was originally "
+                        "validated for cycling and is used here as a "
+                        "reasonable default.",
+                        font_size="small",
+                        font_color="neutral-500",
+                    )
+                    hd.text(
+                        "Fatigue (ATL) — a 7-day rolling average of "
+                        "training stress. Reflects recent loading and "
+                        "short-term fatigue.",
+                        font_size="small",
+                        font_color="neutral-500",
+                    )
+                    hd.text(
+                        "Form (TSB) — fitness minus fatigue. Positive = "
+                        "fresh; negative = carrying fatigue. Rough ranges: "
+                        "above +10 (tapered), −10 to +5 (productive), "
+                        "below −25 (overreached).",
+                        font_size="small",
+                        font_color="neutral-500",
+                    )
+                    hd.text(
+                        "This is the Banister Performance Management "
+                        "Chart (PMC) model. Daily stress is your ESS "
+                        "(Erg Stress Score) — volume × intensity², "
+                        "calibrated so 60 minutes at your 60-min power "
+                        "≈ 100; the cycling equivalent is TSS. The faint "
+                        "background bands mark TrainingPeaks PMC zones — "
+                        "high-risk fatigue through fresh/peak.",
+                        font_size="small",
+                        font_color="neutral-500",
+                    )
 
         # Pass the full history; the plugin's navigator strip handles
         # windowing client-side without rerunning Python.

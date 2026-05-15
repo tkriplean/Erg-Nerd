@@ -151,40 +151,57 @@ def _extract_hr(hr_dict) -> Optional[int]:
 # ---------------------------------------------------------------------------
 
 
-def estimate_max_hr(workouts: list) -> Optional[int]:
+def estimate_max_hr_with_count(workouts: list) -> tuple[Optional[int], int]:
     """
     Estimate max HR as the 98th-percentile of valid HR readings across all
     workouts.  Considers top-level workout HR, per-split HR, and per-interval
-    HR.  Returns None if fewer than 10 valid readings are found.
+    HR.  Returns (estimated_bpm, count_of_contributing_workouts).
+
+    The count is the number of workouts that contributed at least one valid
+    HR reading; it's what the profile page surfaces in the "Estimated from
+    N workouts" badge.  Returns (None, count) if fewer than 10 valid
+    readings are found.
     """
     vals: list[int] = []
+    contributing_workouts = 0
 
     for w in workouts:
-        # Top-level
+        contributed = False
+
         top = _extract_hr(w.get("heart_rate"))
         if top and is_valid_hr(top):
             vals.append(top)
+            contributed = True
 
         workout_data = w.get("workout") or {}
 
-        # Per-split
         for sp in workout_data.get("splits") or []:
             v = _extract_hr(sp.get("heart_rate"))
             if v and is_valid_hr(v):
                 vals.append(v)
+                contributed = True
 
-        # Per-interval
         for iv in workout_data.get("intervals") or []:
             v = _extract_hr(iv.get("heart_rate"))
             if v and is_valid_hr(v):
                 vals.append(v)
+                contributed = True
+
+        if contributed:
+            contributing_workouts += 1
 
     if len(vals) < 10:
-        return None
+        return None, contributing_workouts
 
     vals.sort()
     idx = max(0, int(len(vals) * 0.98) - 1)
-    return vals[idx]
+    return vals[idx], contributing_workouts
+
+
+def estimate_max_hr(workouts: list) -> Optional[int]:
+    """Back-compat wrapper around :func:`estimate_max_hr_with_count`."""
+    value, _ = estimate_max_hr_with_count(workouts)
+    return value
 
 
 def resolve_max_hr(

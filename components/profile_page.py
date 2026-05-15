@@ -33,6 +33,7 @@ import hyperdiv as hd
 
 from services.rowing_utils import age_from_dob
 from services.glycogen import RESERVE_KJ_PER_KG, mass_kg_from_profile
+from services.heartrate_utils import estimate_max_hr_with_count, is_valid_hr
 from services import public_profiles
 from components.app_context import (
     AppContext,
@@ -40,6 +41,27 @@ from components.app_context import (
     write_profile_ls,
     _PROFILE_DEFAULTS,
     _USER_EDITABLE_FIELDS,
+)
+
+
+# Threshold (bpm) for flagging a noticeable HRmax disagreement between the
+# user's entered value and the Concept2-profile value.
+_HRMAX_MISMATCH_BPM = 5
+
+
+_MONTH_OPTIONS: tuple[tuple[int, str], ...] = (
+    (1, "January"),
+    (2, "February"),
+    (3, "March"),
+    (4, "April"),
+    (5, "May"),
+    (6, "June"),
+    (7, "July"),
+    (8, "August"),
+    (9, "September"),
+    (10, "October"),
+    (11, "November"),
+    (12, "December"),
 )
 
 
@@ -93,6 +115,7 @@ def profile_page() -> None:
         weight_unit="kg",
         weight_class="",
         max_heart_rate="",
+        season_start_month="5",
         public=False,
         # Dirty flag — True when text fields have unsaved changes
         dirty=False,
@@ -115,6 +138,7 @@ def profile_page() -> None:
         state.max_heart_rate = (
             str(p["max_heart_rate"]) if p.get("max_heart_rate") else ""
         )
+        state.season_start_month = str(p.get("season_start_month") or 5)
         state.public = bool(p.get("public", False))
         state.loaded = True
 
@@ -134,6 +158,12 @@ def profile_page() -> None:
                 mhr = None
         except ValueError:
             mhr = None
+        try:
+            ssm = int(state.season_start_month) if state.season_start_month else 5
+            if not (1 <= ssm <= 12):
+                ssm = 5
+        except ValueError:
+            ssm = 5
         return {
             "gender": state.gender,
             "dob": state.dob,
@@ -141,6 +171,7 @@ def profile_page() -> None:
             "weight_unit": state.weight_unit,
             "weight_class": state.weight_class,
             "max_heart_rate": mhr,
+            "season_start_month": ssm,
             "public": bool(state.public),
         }
 
@@ -292,6 +323,30 @@ def profile_page() -> None:
                 state.max_heart_rate = mhr_input.value
                 state.dirty = True
 
+            _max_hr_provenance(state, profile, ctx)
+
+        with hd.box():
+            # Season start month — saves immediately (select; no keyboard focus).
+            hd.text("Season starts", font_weight="semibold", font_size="small")
+            season_sel = hd.select(
+                value=str(state.season_start_month), size="small", max_width=15
+            )
+            with season_sel:
+                for _m, _name in _MONTH_OPTIONS:
+                    with hd.scope(f"season_month_{_m}"):
+                        hd.option(_name, value=str(_m))
+            if season_sel.changed:
+                state.season_start_month = season_sel.value
+                _save()
+            hd.text(
+                "Month your competitive season starts. Used to define "
+                '"Season Best" framings on the Power Curve. Defaults to '
+                "May (northern-hemisphere summer racing).",
+                font_size="x-small",
+                font_color="neutral-500",
+                max_width=24,
+            )
+
         # Update button — only visible when text fields have unsaved changes
         if state.dirty:
             with hd.box(padding=(1, 0, 0, 0)):
@@ -307,6 +362,81 @@ def profile_page() -> None:
         hd.divider()
 
         _public_profile_section(state, publish_action, display_name)
+
+
+def _max_hr_provenance(state, profile: dict, ctx) -> None:
+    """Render the HRmax provenance hint below the Max Heart Rate input.
+
+    Three cases:
+
+    1. User has typed a valid value → if a Concept2-profile HRmax exists and
+       the two disagree by ≥``_HRMAX_MISMATCH_BPM``, surface a side-by-side
+       "Review HRmax" prompt so the user can confirm which is correct.
+    2. User has typed nothing → resolve to the estimator and show
+       "Estimated from N workouts — for better accuracy, enter manually
+       after a max test."  N is the count of workouts that contributed at
+       least one valid HR reading.
+    3. No estimate possible (too little HR data) → silent.
+    """
+    try:
+        user_val = int(state.max_heart_rate) if state.max_heart_rate else None
+        if user_val is not None and not (50 <= user_val <= 220):
+            user_val = None
+    except ValueError:
+        user_val = None
+
+    c2_val = profile.get("concept2_max_heart_rate")
+    try:
+        c2_val = int(c2_val) if c2_val else None
+    except (TypeError, ValueError):
+        c2_val = None
+    if c2_val is not None and not is_valid_hr(c2_val):
+        c2_val = None
+
+    if user_val is not None:
+        if c2_val is not None and abs(user_val - c2_val) >= _HRMAX_MISMATCH_BPM:
+            with hd.box(
+                gap=0.4,
+                padding=(0.6, 0.8),
+                border="1px solid warning-200",
+                border_radius="medium",
+                background_color="warning-50",
+                margin_top=0.4,
+                max_width=24,
+            ):
+                hd.text(
+                    "Review HRmax",
+                    font_size="small",
+                    font_weight="semibold",
+                    font_color="warning-800",
+                )
+                hd.text(
+                    f"You entered {user_val} bpm. Your Concept2 profile "
+                    f"says {c2_val} bpm. Take a look — one of the two is "
+                    "probably stale.",
+                    font_size="x-small",
+                    font_color="warning-800",
+                )
+        return
+
+    workouts = list((ctx.sorted_workouts or [])) if ctx else []
+    if not workouts and ctx and ctx.workouts_dict:
+        workouts = list(ctx.workouts_dict.values())
+    if not workouts:
+        return
+
+    est_val, n_workouts = estimate_max_hr_with_count(workouts)
+    if est_val is None:
+        return
+
+    hd.text(
+        f"Estimated {est_val} bpm from {n_workouts} workouts — for better "
+        "accuracy, enter manually after a max test (e.g. all-out 2k or "
+        "6×500m, then read the highest value you saw).",
+        font_size="x-small",
+        font_color="neutral-500",
+        max_width=24,
+    )
 
 
 def _public_profile_section(state, publish_action, display_name: str) -> None:
@@ -438,6 +568,12 @@ def _save_via_state(state) -> None:
             mhr = None
     except ValueError:
         mhr = None
+    try:
+        ssm = int(state.season_start_month) if state.season_start_month else 5
+        if not (1 <= ssm <= 12):
+            ssm = 5
+    except ValueError:
+        ssm = 5
     _persist_profile(
         {
             "gender": state.gender,
@@ -446,6 +582,7 @@ def _save_via_state(state) -> None:
             "weight_unit": state.weight_unit,
             "weight_class": state.weight_class,
             "max_heart_rate": mhr,
+            "season_start_month": ssm,
             "public": bool(state.public),
         }
     )

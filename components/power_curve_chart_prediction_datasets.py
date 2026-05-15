@@ -553,7 +553,7 @@ def _cp_datasets(
                     "_anchor": "bottom",
                     "lines": [
                         f"Crossover at {xo['t_label']}",
-                        "fast-twitch = aerobic contribution",
+                        "short-duration = long-duration contribution",
                         "← shorter: sprint dominates  ·  longer: aerobic dominates →",
                     ],
                     "color": xo_text_color,

@@ -431,7 +431,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
           if (!items.length) return "";
           const raw = items[0].raw;
           // Crossover point gets its own header.
-          if (raw && raw._cp_crossover) return "Critical Power — Sprint/Endurance Crossover";
+          if (raw && raw._cp_crossover) return "Power-Duration — Sprint/Endurance Crossover";
           // All other prediction points get a "Predicted" header instead of a date.
           if (items[0].dataset.isPrediction) return "Predicted";
           return (raw && raw.date) ? raw.date : "";
@@ -459,7 +459,7 @@ window.hyperdiv.registerPlugin("PowerCurveChart", (ctx) => {
           if (raw && raw._cp_crossover && raw._t_label) {
             return [
               `At ${raw._t_label} effort duration`,
-              "Fast-twitch and aerobic contributions are equal here.",
+              "Short-duration and long-duration components are equal here.",
               "Shorter efforts → sprint-dominant",
               "Longer efforts → endurance-dominant",
             ];

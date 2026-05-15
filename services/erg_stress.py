@@ -499,20 +499,17 @@ SEVERITY_STYLE: dict[str, dict] = {
 #: 4×4 VO2 reaches High via peak intensity + W' debt).
 SEVERITY_DEFINITION_TEXT: dict[str, str] = {
     "Low": (
-        "Severity < 0.70 — peak rolling intensity stays below tempo and "
-        "the W' / glycogen reservoirs are largely intact."
+        "Light load on your body — peak intensity stays gentle (or high for very short duration) and the "
+        "W' and glycogen reservoirs are largely intact."
     ),
     "Moderate": (
-        "Severity 0.70–1.00 — meaningful peak intensity, W' depletion, "
-        "or glycogen drain, but none reaches threshold-grade."
+        "Meaningful peak intensity, W' depletion, or glycogen drain, but "
+        "not reaching threshold-grade."
     ),
-    "High": (
-        "Severity 1.00–1.40 — threshold-grade peak intensity, deep W' "
-        "debt, or significant glycogen drain (any one or in combination)."
-    ),
+    "High": ("High peak intensity, W' debt, and/or significant " "glycogen drain."),
     "Maximal": (
-        "Severity ≥ 1.40 — race-pace or PB-territory load: peak intensity, "
-        "W' debt, and glycogen drain stack into very high recovery demand."
+        "Peak intensity, W' debt, and/or "
+        "glycogen drain stack into very high recovery demand."
     ),
 }
 

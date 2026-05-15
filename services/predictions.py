@@ -81,15 +81,19 @@ class Predictor:
 PREDICTORS: tuple = (
     Predictor(
         key="critical_power",
-        name="Critical Power",
+        name="Power-Duration",
         extended_description=(
-            "Two-component power-duration model (veloclinic). "
-            "Requires 5 or more PBs spanning a 10:1 duration ratio. "
-            "Method from rowsandall.com."
+            "Veloclinic two-component fit — a short-duration curve plus a "
+            "long-duration curve, summed. Captures how sustainable power falls "
+            "off as duration grows. Requires 5+ PBs spanning a 10:1 duration ratio. "
         ),
         computed_from_components=True,
-        component_label="Show fast-twitch & slow-twitch components",
-        component_desc="Shows the fast-twitch and slow-twitch power components separately.",
+        component_label="Show short-duration and long-duration components",
+        component_desc=(
+            "Shows the two pieces of the fit separately. They describe the "
+            "shape of your PB curve; they don't track fast-twitch vs slow-twitch "
+            "fibers."
+        ),
     ),
     Predictor(
         key="loglog",
@@ -120,8 +124,10 @@ PREDICTORS: tuple = (
         name="RowingLevel (average)",
         extended_description=(
             "Predictions from rowinglevel.com based on your profile "
-            "(gender, age, bodyweight). Distance-weighted average across all "
-            "anchor PBs. Distance events only."
+            "(gender, age, bodyweight) rather than your PBs. Distance-weighted "
+            "average across all anchor PBs. Useful as a sanity check — if "
+            "RowingLevel and your other predictors disagree by a lot, one of "
+            "them is off. Distance events only."
         ),
         computed_from_components=True,
         component_label="Show one RL curve per anchor",
@@ -130,7 +136,12 @@ PREDICTORS: tuple = (
     Predictor(
         key="average",
         name="Average of all techniques",
-        extended_description="Mean of all available predictions for this event.",
+        extended_description=(
+            "Mean of the available predictors. A reasonable middle estimate "
+            "when no single model dominates. RowingLevel is a demographics-"
+            "based prior, so for atypical athletes it can pull the average "
+            "toward the population mean."
+        ),
         computed_from_components=True,
         component_label="Show individual model curves",
         component_desc="Shows all individual model curves that were averaged.",

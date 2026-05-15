@@ -103,8 +103,19 @@ from services.workout_enrichment import enrich_for_storage
 # ---------------------------------------------------------------------------
 
 
-def _stat(label: str, value: str) -> None:
-    """One stat cell: small muted label above bold value."""
+def _stat(label: str, value: str, tooltip: str | None = None) -> None:
+    """One stat cell: small muted label above bold value, optional tooltip."""
+    if tooltip:
+        with hd.tooltip(tooltip):
+            with hd.box(padding=(0.5, 1.25, 0.5, 1.25)):
+                hd.text(
+                    label,
+                    font_size="small",
+                    font_color="neutral-500",
+                    font_weight="semibold",
+                )
+                hd.text(value, font_weight="bold", font_size="large")
+        return
     with hd.box(padding=(0.5, 1.25, 0.5, 1.25)):
         hd.text(
             label,
@@ -273,7 +284,17 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
 
             if has_ess:
                 if workout.get("_severity"):
-                    _stat("Severity", workout["_severity"])
+                    _stat(
+                        "Severity",
+                        workout["_severity"],
+                        tooltip=(
+                            "How hard this workout was on your body, "
+                            "combining peak intensity, anaerobic strain, "
+                            "and fuel cost. The Low / Moderate / High / "
+                            "Maximal buckets are rough guides — calibrate "
+                            "them against how your legs feel the day after."
+                        ),
+                    )
                 # if workout.get("_anaerobic_strain") is not None:
                 #     _stat(
                 #         "W' Used",
@@ -293,7 +314,18 @@ def _summary_section(workout: dict, strokes: Optional[list]) -> None:
                         label = stimulus_category_label(dose)
                         if label is not None:
                             parts.append(f"{BIN_NAMES[BAND_TO_BIN[d]]}")
-                    _stat("Stimulated", ", ".join(parts) if parts else "—")
+                    _stat(
+                        "Stimulated",
+                        ", ".join(parts) if parts else "—",
+                        tooltip=(
+                            "Estimates whether you spent enough time near "
+                            "your reference power for this duration to "
+                            "count as a real training stimulus for that "
+                            "system. The threshold for each band is set "
+                            "where a sustained effort at that target "
+                            "power would saturate the curve."
+                        ),
+                    )
 
         with hd.hbox(wrap="wrap", gap=0):
             if workout.get("distance"):
